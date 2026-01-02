@@ -26,6 +26,7 @@ from core.serializers import (
 
 from datetime import datetime
 import pytz
+import logging
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -123,25 +124,34 @@ class GetTeamsByLDC(APIView):
 # ---------------------------------------------------
 class GetTeamMembers(APIView):
     def get(self, request, team_id):
-        members = TeamMember.objects.filter(team_id=team_id).select_related("ir")
+        try:
+            team = get_object_or_404(Team, id=team_id)
 
-        role_map = {"LDC": 2, "LS": 3, "GC": 4, "IR": 5}
-        result = []
+            members = TeamMember.objects.filter(team_id=team_id).select_related("ir")
 
-        for member in members:
-            ir = member.ir
-            result.append({
-                **TeamMemberSerializer(member).data,
-                "role_num": role_map.get(member.role),
-                "weekly_info_target": ir.weekly_info_target,
-                "weekly_plan_target": ir.weekly_plan_target,
-                "info_count": ir.info_count,
-                "plan_count": ir.plan_count,
-                "weekly_uv_target": ir.weekly_uv_target if ir.ir_access_level in [2, 3] else None,
-                "uv_count": ir.weekly_uv_target if ir.ir_access_level in [2, 3] else None,
-            })
+            role_map = {"LDC": 2, "LS": 3, "GC": 4, "IR": 5}
+            result = []
 
-        return Response(result)
+            for member in members:
+                ir = member.ir
+                result.append({
+                    **TeamMemberSerializer(member).data,
+                    "ir_name": ir.ir_name,
+                    "role_num": role_map.get(member.role),
+                    "weekly_info_target": ir.weekly_info_target,
+                    "weekly_plan_target": ir.weekly_plan_target,
+                    "info_count": ir.info_count,
+                    "plan_count": ir.plan_count,
+                    "weekly_uv_target": ir.weekly_uv_target if ir.ir_access_level in [2, 3] else None,
+                    "uv_count": ir.weekly_uv_target if ir.ir_access_level in [2, 3] else None,
+                })
+
+            return Response(result)
+        except Team.DoesNotExist:
+            return Response({"detail": "Team not found"}, status=status.HTTP_404_NOT_FOUND)
+        except Exception:
+            logging.exception("Error fetching team members for team_id=%s", team_id)
+            return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # ---------------------------------------------------

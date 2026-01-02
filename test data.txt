@@ -1,16 +1,18 @@
 IR IDs 
 
-IM098123
-IM123984
-IM445984
-IM001245
-IM064623
-IM123945
-IM581245
-IM512399
-IM021485
-IM213120
-IM213140
+[
+    {"ir_id" : "IM098123"},
+    {"ir_id" : "IM123984"},
+    {"ir_id" : "IM445984"},
+    {"ir_id" : "IM001245"},
+    {"ir_id" : "IM064623"},
+    {"ir_id" : "IM123945"},
+    {"ir_id" : "IM581245"},
+    {"ir_id" : "IM512399"},
+    {"ir_id" : "IM021485"},
+    {"ir_id" : "IM213120"},
+    {"ir_id" : "IM213140"},
+]
 
 IM124512
 IM124951
@@ -38,8 +40,8 @@ Registration Data
   {
     "ir_id": "IM098123",
     "ir_name": "Jeevan",
-    "ir_email": "snehti@gmail.com",
-    "ir_password": "snehith",
+    "ir_email": "snehith@gmail.com",
+    "ir_password": "secret",
     "ir_access_level": 1
   },
   {
@@ -111,6 +113,6 @@ Registration Data
     "ir_email": "alex@example.com",
     "ir_password": "secret",
     "ir_access_level": 4
-  },
+  }
 ]
 
