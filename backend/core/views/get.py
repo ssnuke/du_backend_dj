@@ -165,7 +165,7 @@ class GetInfoDetails(APIView):
 # ---------------------------------------------------
 # DASHBOARD TARGETS
 # ---------------------------------------------------
-class TargetsDashboard(APIView):
+class GetTargetsDashboard(APIView):
     def get(self, request, ir_id):
         ir = get_object_or_404(Ir, ir_id=ir_id)
 
@@ -216,19 +216,21 @@ class GetTeamsByIR(APIView):
 # ---------------------------------------------------
 # TEAM INFO TOTAL CHECK
 # ---------------------------------------------------
-class TeamInfoTotal(APIView):
+class GetTeamInfoTotal(APIView):
     def get(self, request, team_id):
         team = get_object_or_404(Team, id=team_id)
 
         links = TeamMember.objects.filter(team=team)
         member_ids = links.values_list("ir_id", flat=True)
 
-        recomputed = Ir.objects.filter(
-            ir_id__in=member_ids
-        ).aggregate(total=Sum("info_count"))["total"] or 0
+        # Total number of InfoDetail and PlanDetail records for current members
+        members_info_total = InfoDetail.objects.filter(ir_id__in=member_ids).count()
+        members_plan_total = PlanDetail.objects.filter(ir_id__in=member_ids).count()
 
         return Response({
             "team_id": team.id,
             "running_weekly_info_done": team.weekly_info_done,
-            "recomputed_members_info_total": recomputed,
+            "running_weekly_plan_done": team.weekly_plan_done,
+            "members_info_total": members_info_total,
+            "members_plan_total": members_plan_total,
         })
