@@ -26,6 +26,9 @@ from core.serializers import (
     PlanDetailSerializer,
 )
 
+import logging
+from django.db import IntegrityError
+
 from datetime import datetime, timedelta
 import pytz
 
@@ -48,20 +51,55 @@ class AddIrId(APIView):
 # ---------------------------------------------------
 class RegisterIR(APIView):
     def post(self, request):
-        ir_id = request.data.get("ir_id")
+        payload = request.data
 
-        if not IrId.objects.filter(ir_id=ir_id).exists():
-            return Response(
-                {"detail": "IR ID Not Found"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        # Basic payload validation
+        if payload is None:
+            return Response({"detail": "Empty payload"}, status=status.HTTP_400_BAD_REQUEST)
 
-        serializer = IrRegisterSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
+        items = payload if isinstance(payload, list) else [payload]
+
+        if not items:
+            return Response({"detail": "Empty list provided"}, status=status.HTTP_400_BAD_REQUEST)
+
+        for idx, itm in enumerate(items):
+            if not isinstance(itm, dict):
+                return Response({"detail": "Invalid payload format, expected object or list of objects", "index": idx}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Pre-check whitelist and existing registrations
+        errors = []
+        for idx, item in enumerate(items):
+            ir_id = item.get("ir_id")
+            if not ir_id:
+                errors.append({"index": idx, "error": "ir_id missing"})
+                continue
+            if not IrId.objects.filter(ir_id=ir_id).exists():
+                errors.append({"index": idx, "ir_id": ir_id, "error": "IR ID Not Found"})
+            if Ir.objects.filter(ir_id=ir_id).exists():
+                errors.append({"index": idx, "ir_id": ir_id, "error": "Already registered"})
+
+        if errors:
+            return Response({"errors": errors}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = IrRegisterSerializer(data=items, many=True)
+        # Collect serializer errors without raising to format per-item errors
+        if not serializer.is_valid():
+            return Response({"errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with transaction.atomic():
+                created = serializer.save()
+        except IntegrityError as e:
+            logging.exception("IntegrityError while bulk registering IRs")
+            return Response({"detail": "Database integrity error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception as e:
+            logging.exception("Unexpected error while bulk registering IRs")
+            return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        created_ids = [obj.ir_id for obj in created]
 
         return Response(
-            {"message": "IR registered successfully", "ir_id": ir_id},
+            {"message": "IR(s) registered successfully", "ir_ids": created_ids},
             status=status.HTTP_201_CREATED,
         )
 
