@@ -11,6 +11,7 @@ from core.views.get import (
     GetLDCs,
     GetTeamsByLDC,
     GetTeamsByIR,
+        GetTargets,
 )
 from core.views.post import (
     AddIrId,
@@ -50,6 +51,7 @@ urlpatterns = [
     path("team_members/<int:team_id>/", GetTeamMembers.as_view()),
     path("info_details/<str:ir_id>/", GetInfoDetails.as_view()),
     path("targets_dashboard/<str:ir_id>/", GetTargetsDashboard.as_view()),
+    path("get_targets/", GetTargets.as_view()),
     path("teams_by_ir/<str:ir_id>/", GetTeamsByIR.as_view()),
     path("team_info_total/<int:team_id>/", GetTeamInfoTotal.as_view()),
     #POST endpoints

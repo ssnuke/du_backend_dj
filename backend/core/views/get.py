@@ -214,6 +214,41 @@ class GetTargetsDashboard(APIView):
         return Response({"personal": personal, "teams": teams_progress})
 
 
+class GetTargets(APIView):
+    def get(self, request):
+        ir_id = request.GET.get("ir_id")
+        team_id = request.GET.get("team_id")
+
+        if not ir_id and not team_id:
+            return Response({"detail": "Provide `ir_id` or `team_id` as query parameter"}, status=status.HTTP_400_BAD_REQUEST)
+
+        data = {}
+        try:
+            if ir_id:
+                ir = get_object_or_404(Ir, ir_id=ir_id)
+                data["ir"] = {
+                    "ir_id": ir.ir_id,
+                    "ir_name": ir.ir_name,
+                    "weekly_info_target": ir.weekly_info_target,
+                    "weekly_plan_target": ir.weekly_plan_target,
+                    "weekly_uv_target": ir.weekly_uv_target if ir.ir_access_level in [2, 3] else None,
+                }
+
+            if team_id:
+                team = get_object_or_404(Team, id=team_id)
+                data["team"] = {
+                    "team_id": team.id,
+                    "team_name": team.name,
+                    "weekly_info_target": team.weekly_info_target,
+                    "weekly_plan_target": team.weekly_plan_target,
+                }
+
+            return Response(data)
+        except Exception:
+            logging.exception("Error fetching targets for ir_id=%s team_id=%s", ir_id, team_id)
+            return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 # ---------------------------------------------------
 # GET TEAMS BY IR
 # ---------------------------------------------------
