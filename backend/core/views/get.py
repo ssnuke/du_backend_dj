@@ -186,7 +186,7 @@ class GetTargetsDashboard(APIView):
         for link in TeamMember.objects.filter(ir=ir):
             team = link.team
             members = Ir.objects.filter(
-                teams__team=team
+                teammember__team=team
             ).distinct()
 
             teams_progress.append({
