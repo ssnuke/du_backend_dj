@@ -40,10 +40,55 @@ IST = pytz.timezone("Asia/Kolkata")
 # ---------------------------------------------------
 class AddIrId(APIView):
     def post(self, request):
-        serializer = IrIdSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        payload = request.data
+
+        if payload is None:
+            return Response({"detail": "Empty payload"}, status=status.HTTP_400_BAD_REQUEST)
+
+        items = payload if isinstance(payload, list) else [payload]
+
+        if not items:
+            return Response({"detail": "Empty list provided"}, status=status.HTTP_400_BAD_REQUEST)
+
+        errors = []
+        seen = set()
+        for idx, item in enumerate(items):
+            if not isinstance(item, dict):
+                errors.append({"index": idx, "error": "Invalid item format, expected object"})
+                continue
+
+            ir_id = item.get("ir_id")
+            if not ir_id:
+                errors.append({"index": idx, "error": "ir_id missing"})
+                continue
+
+            if ir_id in seen:
+                errors.append({"index": idx, "ir_id": ir_id, "error": "Duplicate in payload"})
+                continue
+            seen.add(ir_id)
+
+            if IrId.objects.filter(ir_id=ir_id).exists():
+                errors.append({"index": idx, "ir_id": ir_id, "error": "IR ID already exists"})
+
+        if errors:
+            return Response({"errors": errors}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = IrIdSerializer(data=items, many=True)
+        if not serializer.is_valid():
+            return Response({"errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with transaction.atomic():
+                created = serializer.save()
+        except IntegrityError:
+            logging.exception("IntegrityError while bulk adding IrId entries")
+            return Response({"detail": "Database integrity error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception:
+            logging.exception("Unexpected error while bulk adding IrId entries")
+            return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        created_ids = [obj.ir_id for obj in created]
+        return Response({"message": "IrId(s) added", "ir_ids": created_ids}, status=status.HTTP_201_CREATED)
 
 
 # ---------------------------------------------------

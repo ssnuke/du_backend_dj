@@ -1,0 +1,116 @@
+IR IDs 
+
+IM098123
+IM123984
+IM445984
+IM001245
+IM064623
+IM123945
+IM581245
+IM512399
+IM021485
+IM213120
+IM213140
+
+IM124512
+IM124951
+IM124512
+IM124971
+IM214581
+IM491385
+IM217758
+IM214781
+IM234054
+IM129049
+IM214857
+IM021485
+IM124013
+IM305868
+IM748234
+IM123595
+IM214959
+IM683921
+IM585912
+
+Registration Data
+
+[
+  {
+    "ir_id": "IM098123",
+    "ir_name": "Jeevan",
+    "ir_email": "snehti@gmail.com",
+    "ir_password": "snehith",
+    "ir_access_level": 1
+  },
+  {
+    "ir_id": "IM123984",
+    "ir_name": "Varsha",
+    "ir_email": "alex@example.com",
+    "ir_password": "secret",
+    "ir_access_level": 2
+  },
+    {
+    "ir_id": "IM445984",
+    "ir_name": "Snehith",
+    "ir_email": "alex@example.com",
+    "ir_password": "secret",
+    "ir_access_level": 3
+  },
+    {
+    "ir_id": "IM001245",
+    "ir_name": "Suchethan",
+    "ir_email": "alex@example.com",
+    "ir_password": "secret",
+    "ir_access_level": 2
+  },
+    {
+    "ir_id": "IM064623",
+    "ir_name": "Sunayana",
+    "ir_email": "alex@example.com",
+    "ir_password": "secret",
+    "ir_access_level": 4
+  },
+    {
+    "ir_id": "IM123945",
+    "ir_name": "Pranav",
+    "ir_email": "alex@example.com",
+    "ir_password": "secret",
+    "ir_access_level": 4
+  },
+    {
+    "ir_id": "IM581245",
+    "ir_name": "Ronald",
+    "ir_email": "alex@example.com",
+    "ir_password": "secret",
+    "ir_access_level": 3
+  },
+    {
+    "ir_id": "IM512399",
+    "ir_name": "Prakhar",
+    "ir_email": "alex@example.com",
+    "ir_password": "secret",
+    "ir_access_level": 3
+  },
+      {
+    "ir_id": "IM213140",
+    "ir_name": "Sunil",
+    "ir_email": "alex@example.com",
+    "ir_password": "secret",
+    "ir_access_level": 4
+  },
+      {
+    "ir_id": "IM021485",
+    "ir_name": "Sheryl",
+    "ir_email": "alex@example.com",
+    "ir_password": "secret",
+    "ir_access_level": 4
+  },
+      {
+    "ir_id": "IM213120",
+    "ir_name": "Pushpa",
+    "ir_email": "alex@example.com",
+    "ir_password": "secret",
+    "ir_access_level": 4
+  },
+]
+
