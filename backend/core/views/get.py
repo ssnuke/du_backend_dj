@@ -1,0 +1,234 @@
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+
+from django.db.models import Sum
+from django.utils.dateparse import parse_date
+from django.shortcuts import get_object_or_404
+
+from core.models import (
+    IrId,
+    Ir,
+    Team,
+    TeamMember,
+    InfoDetail,
+    PlanDetail,
+    TeamWeek,
+    TeamRole,
+)
+from core.serializers import (
+    IrIdSerializer,
+    IrSerializer,
+    TeamSerializer,
+    TeamMemberSerializer,
+    InfoDetailSerializer,
+)
+
+from datetime import datetime
+import pytz
+
+IST = pytz.timezone("Asia/Kolkata")
+
+
+# ---------------------------------------------------
+# GET ALL IR IDs
+# ---------------------------------------------------
+class GetAllIR(APIView):
+    def get(self, request):
+        irs = IrId.objects.all()
+        return Response(IrIdSerializer(irs, many=True).data)
+
+
+# ---------------------------------------------------
+# GET SINGLE IR BY ID
+# ---------------------------------------------------
+class GetSingleIR(APIView):
+    def get(self, request, ir_id):
+        ir = get_object_or_404(Ir, ir_id=ir_id)
+        return Response(IrSerializer(ir).data)
+
+
+# ---------------------------------------------------
+# GET ALL REGISTERED IRs
+# ---------------------------------------------------
+class GetAllRegisteredIR(APIView):
+    def get(self, request):
+        irs = Ir.objects.all()
+        data = IrSerializer(irs, many=True).data
+        return Response({"data": data, "count": len(data)})
+
+
+# ---------------------------------------------------
+# GET ALL TEAMS (WITH AGGREGATES)
+# ---------------------------------------------------
+class GetAllTeams(APIView):
+    def get(self, request):
+        teams = Team.objects.all()
+        result = []
+
+        for team in teams:
+            members = TeamMember.objects.filter(team=team).select_related("ir")
+
+            info_total = 0
+            plan_total = 0
+            uv_total = 0
+
+            for member in members:
+                ir = member.ir
+                info_total += ir.info_count or 0
+                plan_total += ir.plan_count or 0
+                if ir.ir_access_level in [2, 3]:
+                    uv_total += ir.weekly_uv_target or 0
+
+            result.append({
+                **TeamSerializer(team).data,
+                "weekly_info_achieved": info_total,
+                "weekly_plan_achieved": plan_total,
+                "weekly_uv_achieved": uv_total,
+            })
+
+        return Response(result)
+
+
+# ---------------------------------------------------
+# GET ALL LDCs
+# ---------------------------------------------------
+class GetLDCs(APIView):
+    def get(self, request):
+        ldc_ids = TeamMember.objects.filter(
+            role=TeamRole.LDC
+        ).values_list("ir_id", flat=True).distinct()
+
+        ldcs = Ir.objects.filter(ir_id__in=ldc_ids)
+
+        data = [{"ir_id": i.ir_id, "ir_name": i.ir_name, "id": i.ir_id} for i in ldcs]
+        return Response(data)
+
+
+# ---------------------------------------------------
+# GET TEAMS BY LDC
+# ---------------------------------------------------
+class GetTeamsByLDC(APIView):
+    def get(self, request, ldc_id):
+        teams = Team.objects.filter(
+            teammember__ir_id=ldc_id,
+            teammember__role=TeamRole.LDC
+        ).distinct()
+
+        return Response(TeamSerializer(teams, many=True).data)
+
+
+# ---------------------------------------------------
+# GET TEAM MEMBERS WITH TARGETS
+# ---------------------------------------------------
+class GetTeamMembers(APIView):
+    def get(self, request, team_id):
+        members = TeamMember.objects.filter(team_id=team_id).select_related("ir")
+
+        role_map = {"LDC": 2, "LS": 3, "GC": 4, "IR": 5}
+        result = []
+
+        for member in members:
+            ir = member.ir
+            result.append({
+                **TeamMemberSerializer(member).data,
+                "role_num": role_map.get(member.role),
+                "weekly_info_target": ir.weekly_info_target,
+                "weekly_plan_target": ir.weekly_plan_target,
+                "info_count": ir.info_count,
+                "plan_count": ir.plan_count,
+                "weekly_uv_target": ir.weekly_uv_target if ir.ir_access_level in [2, 3] else None,
+                "uv_count": ir.weekly_uv_target if ir.ir_access_level in [2, 3] else None,
+            })
+
+        return Response(result)
+
+
+# ---------------------------------------------------
+# GET INFO DETAILS (OPTIONAL DATE FILTER)
+# ---------------------------------------------------
+class GetInfoDetails(APIView):
+    def get(self, request, ir_id):
+        from_date = request.GET.get("from_date")
+        to_date = request.GET.get("to_date")
+
+        qs = InfoDetail.objects.filter(ir_id=ir_id)
+
+        if from_date:
+            qs = qs.filter(info_date__date__gte=parse_date(from_date))
+        if to_date:
+            qs = qs.filter(info_date__date__lte=parse_date(to_date))
+
+        return Response(InfoDetailSerializer(qs, many=True).data)
+
+
+# ---------------------------------------------------
+# DASHBOARD TARGETS
+# ---------------------------------------------------
+class TargetsDashboard(APIView):
+    def get(self, request, ir_id):
+        ir = get_object_or_404(Ir, ir_id=ir_id)
+
+        personal = {
+            "weekly_info_target": ir.weekly_info_target,
+            "weekly_plan_target": ir.weekly_plan_target,
+            "weekly_uv_target": ir.weekly_uv_target if ir.ir_access_level in [2, 3] else None,
+            "info_count": ir.info_count,
+            "plan_count": ir.plan_count,
+            "uv_count": ir.weekly_uv_target if ir.ir_access_level in [2, 3] else None,
+        }
+
+        if ir.ir_access_level not in [2, 3]:
+            return Response({"personal": personal, "teams": "NA"})
+
+        teams_progress = []
+
+        for link in TeamMember.objects.filter(ir=ir):
+            team = link.team
+            members = Ir.objects.filter(
+                teams__team=team
+            ).distinct()
+
+            teams_progress.append({
+                "team_id": team.id,
+                "team_name": team.name,
+                "weekly_info_target": team.weekly_info_target,
+                "weekly_plan_target": team.weekly_plan_target,
+                "info_progress": sum(m.info_count or 0 for m in members),
+                "plan_progress": sum(m.plan_count or 0 for m in members),
+                "uv_progress": sum(
+                    m.weekly_uv_target or 0 for m in members if m.ir_access_level in [2, 3]
+                ),
+            })
+
+        return Response({"personal": personal, "teams": teams_progress})
+
+
+# ---------------------------------------------------
+# GET TEAMS BY IR
+# ---------------------------------------------------
+class GetTeamsByIR(APIView):
+    def get(self, request, ir_id):
+        teams = Team.objects.filter(teammember__ir_id=ir_id).distinct()
+        return Response(TeamSerializer(teams, many=True).data)
+
+
+# ---------------------------------------------------
+# TEAM INFO TOTAL CHECK
+# ---------------------------------------------------
+class TeamInfoTotal(APIView):
+    def get(self, request, team_id):
+        team = get_object_or_404(Team, id=team_id)
+
+        links = TeamMember.objects.filter(team=team)
+        member_ids = links.values_list("ir_id", flat=True)
+
+        recomputed = Ir.objects.filter(
+            ir_id__in=member_ids
+        ).aggregate(total=Sum("info_count"))["total"] or 0
+
+        return Response({
+            "team_id": team.id,
+            "running_weekly_info_done": team.weekly_info_done,
+            "recomputed_members_info_total": recomputed,
+        })
