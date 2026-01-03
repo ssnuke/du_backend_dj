@@ -22,6 +22,7 @@ from core.serializers import (
     TeamSerializer,
     TeamMemberSerializer,
     InfoDetailSerializer,
+    PlanDetailSerializer,
 )
 
 from datetime import datetime
@@ -170,6 +171,30 @@ class GetInfoDetails(APIView):
             qs = qs.filter(info_date__date__lte=parse_date(to_date))
 
         return Response(InfoDetailSerializer(qs, many=True).data)
+
+
+# ---------------------------------------------------
+# GET PLAN DETAILS (OPTIONAL DATE FILTER)
+# ---------------------------------------------------
+class GetPlanDetails(APIView):
+    def get(self, request, ir_id):
+        try:
+            from_date = request.GET.get("from_date")
+            to_date = request.GET.get("to_date")
+
+            qs = PlanDetail.objects.filter(ir_id=ir_id)
+
+            if from_date:
+                qs = qs.filter(plan_date__date__gte=parse_date(from_date))
+            if to_date:
+                qs = qs.filter(plan_date__date__lte=parse_date(to_date))
+
+            return Response(PlanDetailSerializer(qs, many=True).data)
+        except Ir.DoesNotExist:
+            return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
+        except Exception:
+            logging.exception("Error fetching plan details for ir_id=%s", ir_id)
+            return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # ---------------------------------------------------
