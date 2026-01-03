@@ -5,6 +5,8 @@ from rest_framework import status
 from django.shortcuts import get_object_or_404
 from django.db import transaction
 
+import logging
+
 from core.models import (
     IrId,
     Ir,
@@ -103,3 +105,26 @@ class DeleteInfoDetail(APIView):
             {"message": f"Info detail with ID {info_id} has been deleted"},
             status=status.HTTP_200_OK
         )
+
+
+# ---------------------------------------------------
+# DELETE PLAN DETAIL
+# ---------------------------------------------------
+class DeletePlanDetail(APIView):
+    """
+    Mirrors DELETE /delete_plan_detail/{plan_id}
+    """
+    def delete(self, request, plan_id):
+        try:
+            plan = get_object_or_404(PlanDetail, id=plan_id)
+            plan.delete()
+
+            return Response(
+                {"message": f"Plan detail with ID {plan_id} has been deleted"},
+                status=status.HTTP_200_OK
+            )
+        except PlanDetail.DoesNotExist:
+            return Response({"detail": "Plan detail not found"}, status=status.HTTP_404_NOT_FOUND)
+        except Exception:
+            logging.exception("Error deleting plan detail with id=%s", plan_id)
+            return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

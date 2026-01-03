@@ -11,11 +11,15 @@ from core.models import (
     Team,
     TeamMember,
     InfoDetail,
+    PlanDetail,
 )
 from core.serializers import (
     InfoDetailSerializer,
+    PlanDetailSerializer,
     TeamSerializer,
 )
+
+import logging
 
 # ---------------------------------------------------
 # UPDATE IR DETAILS (PLACEHOLDER – SAME AS FASTAPI)
@@ -58,6 +62,39 @@ class UpdateInfoDetail(APIView):
             },
             status=status.HTTP_200_OK
         )
+
+
+# ---------------------------------------------------
+# UPDATE PLAN DETAIL
+# ---------------------------------------------------
+class UpdatePlanDetail(APIView):
+    """
+    Mirrors PUT /update_plan_detail/{plan_id}
+    """
+    def put(self, request, plan_id):
+        try:
+            plan = get_object_or_404(PlanDetail, id=plan_id)
+
+            serializer = PlanDetailSerializer(
+                plan,
+                data=request.data,
+                partial=False
+            )
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+
+            return Response(
+                {
+                    "message": "Plan detail updated",
+                    "plan_id": plan.id
+                },
+                status=status.HTTP_200_OK
+            )
+        except PlanDetail.DoesNotExist:
+            return Response({"detail": "Plan detail not found"}, status=status.HTTP_404_NOT_FOUND)
+        except Exception:
+            logging.exception("Error updating plan detail with id=%s", plan_id)
+            return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # ---------------------------------------------------

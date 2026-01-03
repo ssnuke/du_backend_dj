@@ -30,6 +30,7 @@ from core.views.health import health_check
 from core.views.put import (
     UpdateIrDetails,
     UpdateInfoDetail,
+    UpdatePlanDetail,
     SetTargetsPut,
     UpdateTeamName,
 )
@@ -38,6 +39,7 @@ from core.views.delete import (
     DeleteTeam,
     RemoveIrFromTeam,
     DeleteInfoDetail,
+    DeletePlanDetail,
 )
 
 
@@ -69,11 +71,13 @@ urlpatterns = [
     #PUT endpoints
     path("update_ir/<str:update_ir>/", UpdateIrDetails.as_view()),
     path("update_info_detail/<int:info_id>/", UpdateInfoDetail.as_view()),
+    path("update_plan_detail/<int:plan_id>/", UpdatePlanDetail.as_view()),
     path("update_team_name/<int:team_id>/", UpdateTeamName.as_view()),
     #DELETE endpoints
     path("delete_team/<int:team_id>/", DeleteTeam.as_view()),
     path("remove_ir_from_team/<int:team_id>/<str:ir_id>/", RemoveIrFromTeam.as_view()),
     path("delete_info_detail/<int:info_id>/", DeleteInfoDetail.as_view()),
+    path("delete_plan_detail/<int:plan_id>/", DeletePlanDetail.as_view()),
     # Health Check endpoint
     path("health/", health_check)
 ]
