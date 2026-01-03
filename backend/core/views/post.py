@@ -352,8 +352,13 @@ class AddPlanDetail(APIView):
 # ---------------------------------------------------
 class SetTargets(APIView):
     def _process(self, request):
-        payload = request.data
-        acting_ir_id = payload.get("acting_ir_id")
+        raw = request.data or {}
+
+        # Support nested payloads: either {"payload": {...}, "acting_ir_id": "..."}
+        # or flat payload with keys at top-level.
+        payload = raw.get("payload") if isinstance(raw, dict) and isinstance(raw.get("payload"), dict) else raw
+
+        acting_ir_id = raw.get("acting_ir_id") or (payload.get("acting_ir_id") if isinstance(payload, dict) else None)
 
         if not acting_ir_id:
             return Response({"detail": "acting_ir_id is required"}, status=status.HTTP_400_BAD_REQUEST)
@@ -372,21 +377,43 @@ class SetTargets(APIView):
                 if payload.get("ir_id"):
                     ir = get_object_or_404(Ir, ir_id=payload["ir_id"])
                     if payload.get("weekly_info_target") is not None:
-                        ir.weekly_info_target = payload["weekly_info_target"]
+                        try:
+                            ir.weekly_info_target = int(payload["weekly_info_target"])
+                        except Exception:
+                            ir.weekly_info_target = payload["weekly_info_target"]
                     if payload.get("weekly_plan_target") is not None:
-                        ir.weekly_plan_target = payload["weekly_plan_target"]
+                        try:
+                            ir.weekly_plan_target = int(payload["weekly_plan_target"])
+                        except Exception:
+                            ir.weekly_plan_target = payload["weekly_plan_target"]
                     if payload.get("weekly_uv_target") is not None and ir.ir_access_level in [2, 3]:
-                        ir.weekly_uv_target = payload["weekly_uv_target"]
+                        try:
+                            ir.weekly_uv_target = int(payload["weekly_uv_target"])
+                        except Exception:
+                            ir.weekly_uv_target = payload["weekly_uv_target"]
                     ir.save()
                     updated["ir_id"] = ir.ir_id
 
                 # Update Team targets
                 if payload.get("team_id"):
-                    team = get_object_or_404(Team, id=payload["team_id"])
+                    # accept numeric or string team_id
+                    team_id_raw = payload.get("team_id")
+                    try:
+                        team_id_val = int(team_id_raw)
+                    except Exception:
+                        team_id_val = team_id_raw
+
+                    team = get_object_or_404(Team, id=team_id_val)
                     if payload.get("team_weekly_info_target") is not None:
-                        team.weekly_info_target = payload["team_weekly_info_target"]
+                        try:
+                            team.weekly_info_target = int(payload["team_weekly_info_target"])
+                        except Exception:
+                            team.weekly_info_target = payload["team_weekly_info_target"]
                     if payload.get("team_weekly_plan_target") is not None:
-                        team.weekly_plan_target = payload["team_weekly_plan_target"]
+                        try:
+                            team.weekly_plan_target = int(payload["team_weekly_plan_target"])
+                        except Exception:
+                            team.weekly_plan_target = payload["team_weekly_plan_target"]
                     team.save()
                     updated["team_id"] = team.id
 
