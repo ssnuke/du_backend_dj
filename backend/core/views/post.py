@@ -351,34 +351,56 @@ class AddPlanDetail(APIView):
 # SET TARGETS (IR + TEAM)
 # ---------------------------------------------------
 class SetTargets(APIView):
-    def post(self, request):
-        acting_ir_id = request.data.get("acting_ir_id")
+    def _process(self, request):
         payload = request.data
+        acting_ir_id = payload.get("acting_ir_id")
+
+        if not acting_ir_id:
+            return Response({"detail": "acting_ir_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
         acting_ir = get_object_or_404(Ir, ir_id=acting_ir_id)
 
         if acting_ir.ir_access_level not in [1, 2, 3]:
-            return Response({"detail": "Not authorized"}, status=403)
+            return Response({"detail": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
 
         updated = {}
 
-        if payload.get("ir_id"):
-            ir = get_object_or_404(Ir, ir_id=payload["ir_id"])
-            ir.weekly_info_target = payload.get("weekly_info_target", ir.weekly_info_target)
-            ir.weekly_plan_target = payload.get("weekly_plan_target", ir.weekly_plan_target)
-            if ir.ir_access_level in [2, 3]:
-                ir.weekly_uv_target = payload.get("weekly_uv_target", ir.weekly_uv_target)
-            ir.save()
-            updated["ir_id"] = ir.ir_id
+        # Use atomic transaction for consistency
+        try:
+            with transaction.atomic():
+                # Update IR targets
+                if payload.get("ir_id"):
+                    ir = get_object_or_404(Ir, ir_id=payload["ir_id"])
+                    if payload.get("weekly_info_target") is not None:
+                        ir.weekly_info_target = payload["weekly_info_target"]
+                    if payload.get("weekly_plan_target") is not None:
+                        ir.weekly_plan_target = payload["weekly_plan_target"]
+                    if payload.get("weekly_uv_target") is not None and ir.ir_access_level in [2, 3]:
+                        ir.weekly_uv_target = payload["weekly_uv_target"]
+                    ir.save()
+                    updated["ir_id"] = ir.ir_id
 
-        if payload.get("team_id"):
-            team = get_object_or_404(Team, id=payload["team_id"])
-            team.weekly_info_target = payload.get("team_weekly_info_target", team.weekly_info_target)
-            team.weekly_plan_target = payload.get("team_weekly_plan_target", team.weekly_plan_target)
-            team.save()
-            updated["team_id"] = team.id
+                # Update Team targets
+                if payload.get("team_id"):
+                    team = get_object_or_404(Team, id=payload["team_id"])
+                    if payload.get("team_weekly_info_target") is not None:
+                        team.weekly_info_target = payload["team_weekly_info_target"]
+                    if payload.get("team_weekly_plan_target") is not None:
+                        team.weekly_plan_target = payload["team_weekly_plan_target"]
+                    team.save()
+                    updated["team_id"] = team.id
 
-        return Response({"message": "Targets updated", "updated": updated})
+        except Exception as e:
+            logging.exception("Error updating targets")
+            return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({"message": "Targets updated", "updated": updated}, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        return self._process(request)
+
+    def put(self, request):
+        return self._process(request)
 
 
 # ---------------------------------------------------

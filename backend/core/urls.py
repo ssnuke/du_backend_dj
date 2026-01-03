@@ -67,7 +67,6 @@ urlpatterns = [
     #PUT endpoints
     path("update_ir/<str:update_ir>/", UpdateIrDetails.as_view()),
     path("update_info_detail/<int:info_id>/", UpdateInfoDetail.as_view()),
-    path("set_targets/", SetTargetsPut.as_view()),
     path("update_team_name/<int:team_id>/", UpdateTeamName.as_view()),
     #DELETE endpoints
     path("delete_team/<int:team_id>/", DeleteTeam.as_view()),
