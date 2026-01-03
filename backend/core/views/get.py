@@ -2,7 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
-from django.db.models import Sum
+from django.db.models import Sum, Count
 from django.utils.dateparse import parse_date
 from django.shortcuts import get_object_or_404
 
@@ -267,15 +267,45 @@ class GetTeamInfoTotal(APIView):
 
         links = TeamMember.objects.filter(team=team)
         member_ids = links.values_list("ir_id", flat=True)
+        from_date = request.GET.get("from_date")
+        to_date = request.GET.get("to_date")
 
-        # Total number of InfoDetail and PlanDetail records for current members
-        members_info_total = InfoDetail.objects.filter(ir_id__in=member_ids).count()
-        members_plan_total = PlanDetail.objects.filter(ir_id__in=member_ids).count()
+        info_qs = InfoDetail.objects.filter(ir_id__in=member_ids)
+        plan_qs = PlanDetail.objects.filter(ir_id__in=member_ids)
+
+        if from_date:
+            info_qs = info_qs.filter(info_date__date__gte=parse_date(from_date))
+            plan_qs = plan_qs.filter(plan_date__date__gte=parse_date(from_date))
+        if to_date:
+            info_qs = info_qs.filter(info_date__date__lte=parse_date(to_date))
+            plan_qs = plan_qs.filter(plan_date__date__lte=parse_date(to_date))
+
+        members_info_total = info_qs.count()
+        members_plan_total = plan_qs.count()
+
+        # per-member breakdown
+        info_counts = {i["ir_id"]: i["total"] for i in info_qs.values("ir_id").annotate(total=Count("id"))}
+        plan_counts = {p["ir_id"]: p["total"] for p in plan_qs.values("ir_id").annotate(total=Count("id"))}
+
+        # fetch ir names for members
+        irs = Ir.objects.filter(ir_id__in=member_ids)
+        ir_name_map = {ir.ir_id: ir.ir_name for ir in irs}
+
+        members = []
+        for ir_id in member_ids:
+            members.append({
+                "ir_id": ir_id,
+                "ir_name": ir_name_map.get(ir_id),
+                "info_total": info_counts.get(ir_id, 0),
+                "plan_total": plan_counts.get(ir_id, 0),
+            })
 
         return Response({
             "team_id": team.id,
+            "team_name": team.name,
             "running_weekly_info_done": team.weekly_info_done,
             "running_weekly_plan_done": team.weekly_plan_done,
             "members_info_total": members_info_total,
             "members_plan_total": members_plan_total,
+            "members": members,
         })
