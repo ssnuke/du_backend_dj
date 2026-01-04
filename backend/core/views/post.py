@@ -521,6 +521,12 @@ class SetTargets(APIView):
                         except Exception:
                             weekly_target.team_weekly_plan_target = payload["team_weekly_plan_target"]
                     
+                    if payload.get("team_weekly_uv_target") is not None:
+                        try:
+                            weekly_target.team_weekly_uv_target = int(payload["team_weekly_uv_target"])
+                        except Exception:
+                            weekly_target.team_weekly_uv_target = payload["team_weekly_uv_target"]
+                    
                     weekly_target.save()
                     updated["team_id"] = team.id
 

@@ -111,6 +111,7 @@ class WeeklyTarget(models.Model):
     team = models.ForeignKey(Team, on_delete=models.CASCADE, null=True, blank=True)
     team_weekly_info_target = models.IntegerField(null=True, blank=True)
     team_weekly_plan_target = models.IntegerField(null=True, blank=True)
+    team_weekly_uv_target = models.IntegerField(null=True, blank=True)
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
