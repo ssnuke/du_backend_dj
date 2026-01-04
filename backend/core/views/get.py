@@ -334,3 +334,82 @@ class GetTeamInfoTotal(APIView):
             "members_plan_total": members_plan_total,
             "members": members,
         })
+
+
+# ---------------------------------------------------
+# GET UV COUNT FOR IR
+# ---------------------------------------------------
+class GetUVCount(APIView):
+    def get(self, request, ir_id):
+        try:
+            ir = get_object_or_404(Ir, ir_id=ir_id)
+            
+            return Response({
+                "ir_id": ir.ir_id,
+                "ir_name": ir.ir_name,
+                "uv_count": ir.uv_count,
+                "weekly_uv_target": ir.weekly_uv_target if ir.ir_access_level in [2, 3] else None,
+            })
+        except Ir.DoesNotExist:
+            return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
+        except Exception:
+            logging.exception("Error fetching UV count for ir_id=%s", ir_id)
+            return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ---------------------------------------------------
+# GET TEAM UV TOTAL
+# ---------------------------------------------------
+class GetTeamUVTotal(APIView):
+    def get(self, request, team_id):
+        try:
+            team = get_object_or_404(Team, id=team_id)
+            
+            links = TeamMember.objects.filter(team=team)
+            member_ids = links.values_list("ir_id", flat=True)
+            
+            # Note: UV counts are stored as counters in Ir model, not as detailed records with dates
+            # So date filtering is not applicable for UV counts unlike Info/Plan details
+            from_date = request.GET.get("from_date")
+            to_date = request.GET.get("to_date")
+            
+            # Get UV counts for all team members
+            irs = Ir.objects.filter(ir_id__in=member_ids)
+            
+            team_uv_total = 0
+            members = []
+            
+            for ir in irs:
+                uv_count = ir.uv_count or 0
+                team_uv_total += uv_count
+                
+                # Get member role
+                member_link = links.filter(ir_id=ir.ir_id).first()
+                role = member_link.role if member_link else None
+                
+                members.append({
+                    "ir_id": ir.ir_id,
+                    "ir_name": ir.ir_name,
+                    "uv_count": uv_count,
+                    "weekly_uv_target": ir.weekly_uv_target if ir.ir_access_level in [2, 3] else None,
+                    "role": role
+                })
+            
+            response_data = {
+                "team_id": team.id,
+                "team_name": team.name,
+                "team_uv_total": team_uv_total,
+                "member_count": len(members),
+                "members": members,
+            }
+            
+            # Add note about date filtering if dates were provided
+            if from_date or to_date:
+                response_data["note"] = "Date filtering is not applicable for UV counts as they are stored as counters, not detailed records"
+            
+            return Response(response_data)
+        except Team.DoesNotExist:
+            return Response({"detail": "Team not found"}, status=status.HTTP_404_NOT_FOUND)
+        except Exception:
+            logging.exception("Error fetching team UV total for team_id=%s", team_id)
+            return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

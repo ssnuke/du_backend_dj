@@ -13,6 +13,8 @@ from core.views.get import (
     GetTeamsByLDC,
     GetTeamsByIR,
     GetTargets,
+    GetUVCount,
+    GetTeamUVTotal,
 )
 from core.views.post import (
     AddIrId,
@@ -22,6 +24,7 @@ from core.views.post import (
     AddIrToTeam,
     AddInfoDetail,
     AddPlanDetail,
+    AddUV,
     SetTargets,
     ResetDatabase,
 )
@@ -54,10 +57,12 @@ urlpatterns = [
     path("team_members/<int:team_id>/", GetTeamMembers.as_view()),
     path("info_details/<str:ir_id>/", GetInfoDetails.as_view()),
     path("plan_details/<str:ir_id>/", GetPlanDetails.as_view()),
+    path("uv_count/<str:ir_id>/", GetUVCount.as_view()),
     path("targets_dashboard/<str:ir_id>/", GetTargetsDashboard.as_view()),
     path("get_targets/", GetTargets.as_view()),
     path("teams_by_ir/<str:ir_id>/", GetTeamsByIR.as_view()),
     path("team_info_total/<int:team_id>/", GetTeamInfoTotal.as_view()),
+    path("team_uv_total/<int:team_id>/", GetTeamUVTotal.as_view()),
     #POST endpoints
     path("add_ir_id/", AddIrId.as_view()),
     path("register_new_ir/", RegisterIR.as_view()),
@@ -66,6 +71,7 @@ urlpatterns = [
     path("add_ir_to_team/", AddIrToTeam.as_view()),
     path("add_info_detail/<str:ir_id>/", AddInfoDetail.as_view()),
     path("add_plan_detail/<str:ir_id>/", AddPlanDetail.as_view()),
+    path("add_uv/<str:ir_id>/", AddUV.as_view()),
     path("set_targets/", SetTargets.as_view()),
     path("reset_database/", ResetDatabase.as_view()),
     #PUT endpoints

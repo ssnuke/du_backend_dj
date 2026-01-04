@@ -348,6 +348,73 @@ class AddPlanDetail(APIView):
 
 
 # ---------------------------------------------------
+# ADD UV (UV Counter Update)
+# ---------------------------------------------------
+class AddUV(APIView):
+    def post(self, request, ir_id):
+        try:
+            with transaction.atomic():
+                ir = Ir.objects.select_for_update().get(ir_id=ir_id)
+                
+                # Validate IR access level for UV operations
+                if ir.ir_access_level not in [2, 3]:
+                    return Response(
+                        {"detail": "IR access level must be 2 or 3 for UV operations"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+                
+                payload = request.data
+                if not isinstance(payload, list):
+                    payload = [payload]
+                
+                total_uvs_added = 0
+                
+                for item in payload:
+                    uv_count = item.get("uv_count", 1)  # Default to 1 UV if not specified
+                    try:
+                        uv_count = int(uv_count)
+                        if uv_count <= 0:
+                            return Response(
+                                {"detail": "UV count must be a positive integer"},
+                                status=status.HTTP_400_BAD_REQUEST
+                            )
+                    except (ValueError, TypeError):
+                        return Response(
+                            {"detail": "Invalid UV count format"},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    
+                    total_uvs_added += uv_count
+                
+                # ✅ Atomic IR UV counter update
+                Ir.objects.filter(ir_id=ir_id).update(
+                    uv_count=F("uv_count") + total_uvs_added
+                )
+                
+                return Response(
+                    {
+                        "message": "UV count updated successfully",
+                        "ir_id": ir_id,
+                        "uvs_added": total_uvs_added,
+                        "new_uv_count": ir.uv_count + total_uvs_added
+                    },
+                    status=status.HTTP_201_CREATED,
+                )
+                
+        except Ir.DoesNotExist:
+            return Response(
+                {"detail": "IR not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception:
+            logging.exception("Error adding UV count for ir_id=%s", ir_id)
+            return Response(
+                {"detail": "Internal server error"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+# ---------------------------------------------------
 # SET TARGETS (IR + TEAM)
 # ---------------------------------------------------
 class SetTargets(APIView):
@@ -428,6 +495,7 @@ class SetTargets(APIView):
 
     def put(self, request):
         return self._process(request)
+
 
 
 # ---------------------------------------------------
