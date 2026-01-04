@@ -256,7 +256,7 @@ class GetTargetsDashboard(APIView):
                 "info_progress": sum(m.info_count or 0 for m in members),
                 "plan_progress": sum(m.plan_count or 0 for m in members),
                 "uv_progress": sum(
-                    m.uv_count or 0 for m in members if m.ir_access_level in [2, 3]
+                    m.uv_count or 0 for m in members
                 ),
             })
 
