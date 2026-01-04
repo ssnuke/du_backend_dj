@@ -343,6 +343,9 @@ class GetTeamInfoTotal(APIView):
     def get(self, request, team_id):
         team = get_object_or_404(Team, id=team_id)
 
+        # Get current week info (Saturday-Friday cycle)
+        week_number, year, week_start, week_end = get_saturday_friday_week_info()
+
         links = TeamMember.objects.filter(team=team)
         member_ids = links.values_list("ir_id", flat=True)
         from_date = request.GET.get("from_date")
@@ -365,26 +368,38 @@ class GetTeamInfoTotal(APIView):
         info_counts = {i["ir_id"]: i["total"] for i in info_qs.values("ir_id").annotate(total=Count("id"))}
         plan_counts = {p["ir_id"]: p["total"] for p in plan_qs.values("ir_id").annotate(total=Count("id"))}
 
-        # fetch ir names for members
+        # fetch ir data for members (including UV counts)
         irs = Ir.objects.filter(ir_id__in=member_ids)
-        ir_name_map = {ir.ir_id: ir.ir_name for ir in irs}
+        ir_data_map = {ir.ir_id: ir for ir in irs}
 
         members = []
+        total_uv_count = 0
+        
         for ir_id in member_ids:
+            ir = ir_data_map.get(ir_id)
+            uv_count = ir.uv_count or 0 if ir else 0
+            total_uv_count += uv_count
+            
             members.append({
                 "ir_id": ir_id,
-                "ir_name": ir_name_map.get(ir_id),
+                "ir_name": ir.ir_name if ir else None,
                 "info_total": info_counts.get(ir_id, 0),
                 "plan_total": plan_counts.get(ir_id, 0),
+                "uv_count": uv_count,
+                "week_number": week_number,
+                "year": year,
             })
 
         return Response({
             "team_id": team.id,
             "team_name": team.name,
+            "week_number": week_number,
+            "year": year,
             "running_weekly_info_done": team.weekly_info_done,
             "running_weekly_plan_done": team.weekly_plan_done,
             "members_info_total": members_info_total,
             "members_plan_total": members_plan_total,
+            "members_uv_total": total_uv_count,
             "members": members,
         })
 
