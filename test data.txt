@@ -1,7 +1,7 @@
 IR IDs 
 
 [
-    {"ir_id" : "IM098123"},
+    {"ir_id" : "IM111222"},
     {"ir_id" : "IM123984"},
     {"ir_id" : "IM445984"},
     {"ir_id" : "IM001245"},
@@ -38,8 +38,8 @@ Registration Data
 
 [
   {
-    "ir_id": "IM098123",
-    "ir_name": "Jeevan",
+    "ir_id": "IM111222",
+    "ir_name": "UJL",
     "ir_email": "snehith@gmail.com",
     "ir_password": "secret",
     "ir_access_level": 1
