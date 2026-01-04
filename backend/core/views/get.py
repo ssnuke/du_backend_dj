@@ -207,13 +207,25 @@ class GetTargetsDashboard(APIView):
     def get(self, request, ir_id):
         ir = get_object_or_404(Ir, ir_id=ir_id)
 
+        # Get current week info (Saturday-Friday cycle)
+        week_number, year, week_start, week_end = get_saturday_friday_week_info()
+        
+        # Get weekly targets for current week
+        ir_weekly_target = WeeklyTarget.objects.filter(
+            ir=ir,
+            week_number=week_number,
+            year=year
+        ).first()
+
         personal = {
-            "weekly_info_target": ir.weekly_info_target,
-            "weekly_plan_target": ir.weekly_plan_target,
-            "weekly_uv_target": ir.weekly_uv_target if ir.ir_access_level in [2, 3] else None,
+            "weekly_info_target": ir_weekly_target.ir_weekly_info_target if ir_weekly_target else 0,
+            "weekly_plan_target": ir_weekly_target.ir_weekly_plan_target if ir_weekly_target else 0,
+            "weekly_uv_target": ir_weekly_target.ir_weekly_uv_target if (ir_weekly_target and ir.ir_access_level in [2, 3]) else None,
             "info_count": ir.info_count,
             "plan_count": ir.plan_count,
-            "uv_count": ir.weekly_uv_target if ir.ir_access_level in [2, 3] else None,
+            "week_number": week_number,
+            "year": year,
+            "uv_count": ir.uv_count if ir.ir_access_level in [2, 3] else None,
         }
 
         if ir.ir_access_level not in [2, 3]:
@@ -227,15 +239,24 @@ class GetTargetsDashboard(APIView):
                 teammember__team=team
             ).distinct()
 
+            # Get weekly targets for this team
+            team_weekly_target = WeeklyTarget.objects.filter(
+                team=team,
+                week_number=week_number,
+                year=year
+            ).first()
+
             teams_progress.append({
                 "team_id": team.id,
+                "week_number": week_number,
+                "year": year,
                 "team_name": team.name,
-                "weekly_info_target": team.weekly_info_target,
-                "weekly_plan_target": team.weekly_plan_target,
+                "weekly_info_target": team_weekly_target.team_weekly_info_target if team_weekly_target else 0,
+                "weekly_plan_target": team_weekly_target.team_weekly_plan_target if team_weekly_target else 0,
                 "info_progress": sum(m.info_count or 0 for m in members),
                 "plan_progress": sum(m.plan_count or 0 for m in members),
                 "uv_progress": sum(
-                    m.weekly_uv_target or 0 for m in members if m.ir_access_level in [2, 3]
+                    m.uv_count or 0 for m in members if m.ir_access_level in [2, 3]
                 ),
             })
 
