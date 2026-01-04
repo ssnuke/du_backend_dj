@@ -15,6 +15,7 @@ from core.models import (
     PlanDetail,
     TeamWeek,
     TeamRole,
+    WeeklyTarget,
 )
 from core.serializers import (
     IrIdSerializer,
@@ -28,6 +29,8 @@ from core.serializers import (
 from datetime import datetime
 import pytz
 import logging
+
+from core.utils.dates import get_current_week_start, get_saturday_friday_week_info
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -247,30 +250,59 @@ class GetTargets(APIView):
         if not ir_id and not team_id:
             return Response({"detail": "Provide `ir_id` or `team_id` as query parameter"}, status=status.HTTP_400_BAD_REQUEST)
 
-        data = {}
+        # Get current week info (Saturday-Friday cycle)
+        week_number, year, week_start, week_end = get_saturday_friday_week_info()
+        
+        data = {
+            "week_info": {
+                "week_number": week_number,
+                "year": year,
+                "week_start": week_start.isoformat(),
+                "week_end": week_end.isoformat()
+            }
+        }
+        
         try:
             if ir_id:
                 ir = get_object_or_404(Ir, ir_id=ir_id)
+                
+                # Get weekly targets for current week
+                weekly_target = WeeklyTarget.objects.filter(
+                    ir=ir,
+                    week_number=week_number,
+                    year=year
+                ).first()
+                
                 data["ir"] = {
                     "ir_id": ir.ir_id,
                     "ir_name": ir.ir_name,
-                    "weekly_info_target": ir.weekly_info_target,
-                    "weekly_plan_target": ir.weekly_plan_target,
-                    "weekly_uv_target": ir.weekly_uv_target if ir.ir_access_level in [2, 3] else None,
+                    "weekly_info_target": weekly_target.ir_weekly_info_target if weekly_target else 0,
+                    "weekly_plan_target": weekly_target.ir_weekly_plan_target if weekly_target else 0,
+                    "weekly_uv_target": weekly_target.ir_weekly_uv_target if (weekly_target and ir.ir_access_level in [2, 3]) else None,
+                    "has_weekly_targets_set": weekly_target is not None
                 }
 
             if team_id:
                 team = get_object_or_404(Team, id=team_id)
+                
+                # Get weekly targets for current week
+                weekly_target = WeeklyTarget.objects.filter(
+                    team=team,
+                    week_number=week_number,
+                    year=year
+                ).first()
+                
                 data["team"] = {
                     "team_id": team.id,
                     "team_name": team.name,
-                    "weekly_info_target": team.weekly_info_target,
-                    "weekly_plan_target": team.weekly_plan_target,
+                    "weekly_info_target": weekly_target.team_weekly_info_target if weekly_target else 0,
+                    "weekly_plan_target": weekly_target.team_weekly_plan_target if weekly_target else 0,
+                    "has_weekly_targets_set": weekly_target is not None
                 }
 
             return Response(data)
         except Exception:
-            logging.exception("Error fetching targets for ir_id=%s team_id=%s", ir_id, team_id)
+            logging.exception("Error fetching weekly targets for ir_id=%s team_id=%s", ir_id, team_id)
             return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 

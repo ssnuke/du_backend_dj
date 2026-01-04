@@ -93,3 +93,35 @@ class TeamWeek(models.Model):
     weekly_info_done = models.IntegerField(default=0)
     weekly_plan_done = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class WeeklyTarget(models.Model):
+    week_number = models.PositiveSmallIntegerField()  # 1-52
+    year = models.PositiveIntegerField()
+    week_start = models.DateTimeField()
+    week_end = models.DateTimeField()
+    
+    # IR targets (optional - only set if IR target is being set)
+    ir = models.ForeignKey(Ir, on_delete=models.CASCADE, null=True, blank=True)
+    ir_weekly_info_target = models.IntegerField(null=True, blank=True)
+    ir_weekly_plan_target = models.IntegerField(null=True, blank=True)
+    ir_weekly_uv_target = models.IntegerField(null=True, blank=True)
+    
+    # Team targets (optional - only set if team target is being set)
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, null=True, blank=True)
+    team_weekly_info_target = models.IntegerField(null=True, blank=True)
+    team_weekly_plan_target = models.IntegerField(null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = [
+            ('week_number', 'year', 'ir'),
+            ('week_number', 'year', 'team')
+        ]
+        indexes = [
+            models.Index(fields=['week_number', 'year']),
+            models.Index(fields=['ir', 'week_number', 'year']),
+            models.Index(fields=['team', 'week_number', 'year']),
+        ]

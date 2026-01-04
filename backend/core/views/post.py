@@ -5,7 +5,7 @@ from rest_framework import status
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from core.utils.dates import get_current_week_start
+from core.utils.dates import get_current_week_start, get_saturday_friday_week_info
 from django.db.models import F
 
 from core.models import (
@@ -17,6 +17,7 @@ from core.models import (
     PlanDetail,
     TeamWeek,
     TeamRole,
+    WeeklyTarget,
 )
 from core.serializers import (
     IrIdSerializer,
@@ -435,33 +436,57 @@ class SetTargets(APIView):
         if acting_ir.ir_access_level not in [1, 2, 3]:
             return Response({"detail": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
 
-        updated = {}
+        # Get current week info (Saturday-Friday cycle)
+        week_number, year, week_start, week_end = get_saturday_friday_week_info()
+        
+        updated = {
+            "week_number": week_number,
+            "year": year,
+            "week_start": week_start.isoformat(),
+            "week_end": week_end.isoformat()
+        }
 
         # Use atomic transaction for consistency
         try:
             with transaction.atomic():
-                # Update IR targets
+                # Update IR targets for current week
                 if payload.get("ir_id"):
                     ir = get_object_or_404(Ir, ir_id=payload["ir_id"])
+                    
+                    # Get or create weekly target for this IR
+                    weekly_target, created = WeeklyTarget.objects.get_or_create(
+                        ir=ir,
+                        week_number=week_number,
+                        year=year,
+                        defaults={
+                            'week_start': week_start,
+                            'week_end': week_end
+                        }
+                    )
+                    
+                    # Update weekly targets
                     if payload.get("weekly_info_target") is not None:
                         try:
-                            ir.weekly_info_target = int(payload["weekly_info_target"])
+                            weekly_target.ir_weekly_info_target = int(payload["weekly_info_target"])
                         except Exception:
-                            ir.weekly_info_target = payload["weekly_info_target"]
+                            weekly_target.ir_weekly_info_target = payload["weekly_info_target"]
+                    
                     if payload.get("weekly_plan_target") is not None:
                         try:
-                            ir.weekly_plan_target = int(payload["weekly_plan_target"])
+                            weekly_target.ir_weekly_plan_target = int(payload["weekly_plan_target"])
                         except Exception:
-                            ir.weekly_plan_target = payload["weekly_plan_target"]
+                            weekly_target.ir_weekly_plan_target = payload["weekly_plan_target"]
+                    
                     if payload.get("weekly_uv_target") is not None and ir.ir_access_level in [2, 3]:
                         try:
-                            ir.weekly_uv_target = int(payload["weekly_uv_target"])
+                            weekly_target.ir_weekly_uv_target = int(payload["weekly_uv_target"])
                         except Exception:
-                            ir.weekly_uv_target = payload["weekly_uv_target"]
-                    ir.save()
+                            weekly_target.ir_weekly_uv_target = payload["weekly_uv_target"]
+                    
+                    weekly_target.save()
                     updated["ir_id"] = ir.ir_id
 
-                # Update Team targets
+                # Update Team targets for current week
                 if payload.get("team_id"):
                     # accept numeric or string team_id
                     team_id_raw = payload.get("team_id")
@@ -471,24 +496,39 @@ class SetTargets(APIView):
                         team_id_val = team_id_raw
 
                     team = get_object_or_404(Team, id=team_id_val)
+                    
+                    # Get or create weekly target for this team
+                    weekly_target, created = WeeklyTarget.objects.get_or_create(
+                        team=team,
+                        week_number=week_number,
+                        year=year,
+                        defaults={
+                            'week_start': week_start,
+                            'week_end': week_end
+                        }
+                    )
+                    
+                    # Update team weekly targets
                     if payload.get("team_weekly_info_target") is not None:
                         try:
-                            team.weekly_info_target = int(payload["team_weekly_info_target"])
+                            weekly_target.team_weekly_info_target = int(payload["team_weekly_info_target"])
                         except Exception:
-                            team.weekly_info_target = payload["team_weekly_info_target"]
+                            weekly_target.team_weekly_info_target = payload["team_weekly_info_target"]
+                    
                     if payload.get("team_weekly_plan_target") is not None:
                         try:
-                            team.weekly_plan_target = int(payload["team_weekly_plan_target"])
+                            weekly_target.team_weekly_plan_target = int(payload["team_weekly_plan_target"])
                         except Exception:
-                            team.weekly_plan_target = payload["team_weekly_plan_target"]
-                    team.save()
+                            weekly_target.team_weekly_plan_target = payload["team_weekly_plan_target"]
+                    
+                    weekly_target.save()
                     updated["team_id"] = team.id
 
         except Exception as e:
-            logging.exception("Error updating targets")
+            logging.exception("Error updating weekly targets")
             return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        return Response({"message": "Targets updated", "updated": updated}, status=status.HTTP_200_OK)
+        return Response({"message": "Weekly targets updated", "updated": updated}, status=status.HTTP_200_OK)
 
     def post(self, request):
         return self._process(request)
