@@ -358,11 +358,11 @@ class AddUV(APIView):
                 ir = Ir.objects.select_for_update().get(ir_id=ir_id)
                 
                 # Validate IR access level for UV operations
-                if ir.ir_access_level not in [2, 3]:
-                    return Response(
-                        {"detail": "IR access level must be 2 or 3 for UV operations"},
-                        status=status.HTTP_403_FORBIDDEN
-                    )
+                # if ir.ir_access_level not in [2, 3]:
+                #     return Response(
+                #         {"detail": "IR access level must be 2 or 3 for UV operations"},
+                #         status=status.HTTP_403_FORBIDDEN
+                #     )
                 
                 payload = request.data
                 if not isinstance(payload, list):
