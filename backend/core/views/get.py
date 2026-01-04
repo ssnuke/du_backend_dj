@@ -220,7 +220,6 @@ class GetTargetsDashboard(APIView):
         personal = {
             "weekly_info_target": ir_weekly_target.ir_weekly_info_target if ir_weekly_target else 0,
             "weekly_plan_target": ir_weekly_target.ir_weekly_plan_target if ir_weekly_target else 0,
-            "weekly_uv_target": ir_weekly_target.ir_weekly_uv_target if (ir_weekly_target and ir.ir_access_level in [2, 3]) else None,
             "info_count": ir.info_count,
             "plan_count": ir.plan_count,
             "week_number": week_number,
@@ -253,6 +252,7 @@ class GetTargetsDashboard(APIView):
                 "team_name": team.name,
                 "weekly_info_target": team_weekly_target.team_weekly_info_target if team_weekly_target else 0,
                 "weekly_plan_target": team_weekly_target.team_weekly_plan_target if team_weekly_target else 0,
+                "weekly_uv_target": team_weekly_target.team_weekly_uv_target if team_weekly_target else 0,
                 "info_progress": sum(m.info_count or 0 for m in members),
                 "plan_progress": sum(m.plan_count or 0 for m in members),
                 "uv_progress": sum(
