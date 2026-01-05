@@ -39,11 +39,9 @@ class Ir(models.Model):
     info_count = models.IntegerField(default=0)
     name_list = models.IntegerField(default=0)
     uv_count = models.IntegerField(default=0)
-
     weekly_info_target = models.IntegerField(default=0)
     weekly_plan_target = models.IntegerField(default=0)
     weekly_uv_target = models.IntegerField(null=True, blank=True)
-
     started_date = models.DateField(auto_now_add=True)
 
     def set_password(self, raw_password):

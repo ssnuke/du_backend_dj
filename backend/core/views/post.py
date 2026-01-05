@@ -151,6 +151,164 @@ class RegisterIR(APIView):
 
 
 # ---------------------------------------------------
+# BULK REGISTER IR FROM EXCEL
+# ---------------------------------------------------
+class BulkRegisterIRFromExcel(APIView):
+    def post(self, request):
+        if 'file' not in request.FILES:
+            return Response(
+                {"detail": "No file uploaded. Please provide an Excel file."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        excel_file = request.FILES['file']
+        
+        # Validate file extension
+        if not excel_file.name.endswith(('.xlsx', '.xls')):
+            return Response(
+                {"detail": "Invalid file format. Please upload an Excel file (.xlsx or .xls)"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            import pandas as pd
+            
+            # Read Excel file
+            df = pd.read_excel(excel_file)
+            
+            # Validate required columns
+            required_columns = ['ir_name', 'ir_id', 'ir_email', 'ir_access_level']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            
+            if missing_columns:
+                return Response(
+                    {"detail": f"Missing required columns: {', '.join(missing_columns)}"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Remove rows with any missing values
+            df = df.dropna(subset=required_columns)
+            
+            if df.empty:
+                return Response(
+                    {"detail": "No valid data found in the Excel file"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Prepare data for registration
+            errors = []
+            ir_ids_to_add = []
+            irs_to_register = []
+            
+            for idx, row in df.iterrows():
+                ir_id = str(row['ir_id']).strip()
+                ir_name = str(row['ir_name']).strip()
+                ir_email = str(row['ir_email']).strip()
+                
+                try:
+                    ir_access_level = int(row['ir_access_level'])
+                except (ValueError, TypeError):
+                    errors.append({
+                        "row": idx + 2,  # Excel row (accounting for header)
+                        "ir_id": ir_id,
+                        "error": "Invalid access level (must be a number)"
+                    })
+                    continue
+                
+                # Validate email format (basic check)
+                if '@' not in ir_email:
+                    errors.append({
+                        "row": idx + 2,
+                        "ir_id": ir_id,
+                        "error": "Invalid email format"
+                    })
+                    continue
+                
+                # Check if IR already exists
+                if Ir.objects.filter(ir_id=ir_id).exists():
+                    errors.append({
+                        "row": idx + 2,
+                        "ir_id": ir_id,
+                        "error": "Already registered"
+                    })
+                    continue
+                
+                # Prepare data for batch creation
+                ir_ids_to_add.append(ir_id)
+                irs_to_register.append({
+                    'ir_id': ir_id,
+                    'ir_name': ir_name,
+                    'ir_email': ir_email,
+                    'ir_access_level': ir_access_level,
+                    'ir_password': 'secret'  # Default password
+                })
+            
+            if not irs_to_register:
+                return Response({
+                    "detail": "No valid IRs to register",
+                    "errors": errors
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Register IRs in database
+            try:
+                with transaction.atomic():
+                    # First, add IR IDs to whitelist if they don't exist
+                    for ir_id in ir_ids_to_add:
+                        IrId.objects.get_or_create(ir_id=ir_id)
+                    
+                    # Create IR records with default password
+                    created_irs = []
+                    for ir_data in irs_to_register:
+                        ir = Ir(
+                            ir_id=ir_data['ir_id'],
+                            ir_name=ir_data['ir_name'],
+                            ir_email=ir_data['ir_email'],
+                            ir_access_level=ir_data['ir_access_level']
+                        )
+                        ir.set_password('secret')  # Set default password
+                        ir.save()
+                        created_irs.append(ir.ir_id)
+                    
+                    response_data = {
+                        "message": f"Successfully registered {len(created_irs)} IR(s) from Excel",
+                        "registered_count": len(created_irs),
+                        "ir_ids": created_irs,
+                        "default_password": "secret"
+                    }
+                    
+                    if errors:
+                        response_data["skipped_count"] = len(errors)
+                        response_data["errors"] = errors
+                    
+                    return Response(response_data, status=status.HTTP_201_CREATED)
+                    
+            except IntegrityError:
+                logging.exception("IntegrityError while bulk registering IRs from Excel")
+                return Response(
+                    {"detail": "Database integrity error"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            except Exception as e:
+                logging.exception("Error bulk registering IRs from Excel")
+                return Response(
+                    {"detail": f"Internal server error: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+                
+        except ImportError:
+            return Response(
+                {"detail": "pandas library not installed. Please install it: pip install pandas openpyxl"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        except Exception as e:
+            logging.exception("Error reading Excel file")
+            return Response(
+                {"detail": f"Error reading Excel file: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+
+# ---------------------------------------------------
 # IR LOGIN
 # ---------------------------------------------------
 class IRLogin(APIView):
@@ -543,6 +701,122 @@ class SetTargets(APIView):
         return self._process(request)
 
 
+
+# ---------------------------------------------------
+# CHANGE IR ACCESS LEVEL (PROMOTE/DEMOTE)
+# ---------------------------------------------------
+class ChangeIRAccessLevel(APIView):
+    def post(self, request):
+        acting_ir_id = request.data.get("acting_ir_id")
+        target_ir_id = request.data.get("target_ir_id")
+        new_access_level = request.data.get("new_access_level")
+        
+        # Validate required fields
+        if not acting_ir_id:
+            return Response(
+                {"detail": "acting_ir_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not target_ir_id:
+            return Response(
+                {"detail": "target_ir_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if new_access_level is None:
+            return Response(
+                {"detail": "new_access_level is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validate new_access_level is an integer
+        try:
+            new_access_level = int(new_access_level)
+        except (ValueError, TypeError):
+            return Response(
+                {"detail": "new_access_level must be a valid integer"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validate access level range (typically 1-5)
+        if new_access_level not in [1, 2, 3, 4, 5]:
+            return Response(
+                {"detail": "new_access_level must be between 1 and 5"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            # Get acting IR
+            acting_ir = Ir.objects.get(ir_id=acting_ir_id)
+        except Ir.DoesNotExist:
+            return Response(
+                {"detail": "Acting IR not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Check if acting IR has permission (only access level 1 or 2)
+        if acting_ir.ir_access_level not in [1, 2]:
+            return Response(
+                {"detail": "Unauthorized. Only IRs with access level 1 or 2 can change access levels"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        try:
+            # Get target IR
+            target_ir = Ir.objects.get(ir_id=target_ir_id)
+        except Ir.DoesNotExist:
+            return Response(
+                {"detail": "Target IR not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Prevent self-modification
+        if acting_ir_id == target_ir_id:
+            return Response(
+                {"detail": "Cannot modify your own access level"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Store old access level for response
+        old_access_level = target_ir.ir_access_level
+        
+        # Prevent access level 2 from promoting to access level 1
+        if acting_ir.ir_access_level == 2 and new_access_level == 1:
+            return Response(
+                {"detail": "Access level 2 users cannot promote to access level 1"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Prevent access level 2 from modifying access level 1 users
+        if acting_ir.ir_access_level == 2 and target_ir.ir_access_level == 1:
+            return Response(
+                {"detail": "Access level 2 users cannot modify access level 1 users"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        try:
+            # Update access level
+            target_ir.ir_access_level = new_access_level
+            target_ir.save()
+            
+            action = "promoted" if new_access_level < old_access_level else "demoted" if new_access_level > old_access_level else "updated"
+            
+            return Response({
+                "message": f"IR access level {action} successfully",
+                "target_ir_id": target_ir.ir_id,
+                "target_ir_name": target_ir.ir_name,
+                "old_access_level": old_access_level,
+                "new_access_level": new_access_level,
+                "changed_by": acting_ir.ir_id
+            }, status=status.HTTP_200_OK)
+            
+        except Exception:
+            logging.exception("Error changing access level for ir_id=%s", target_ir_id)
+            return Response(
+                {"detail": "Internal server error"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 # ---------------------------------------------------
 # PASSWORD RESET

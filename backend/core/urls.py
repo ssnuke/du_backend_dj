@@ -19,6 +19,7 @@ from core.views.get import (
 from core.views.post import (
     AddIrId,
     RegisterIR,
+    BulkRegisterIRFromExcel,
     IRLogin,
     CreateTeam,
     AddIrToTeam,
@@ -28,6 +29,7 @@ from core.views.post import (
     SetTargets,
     ResetDatabase,
     PasswordReset,
+    ChangeIRAccessLevel,
 )
 
 from core.views.health import health_check
@@ -67,6 +69,7 @@ urlpatterns = [
     #POST endpoints
     path("add_ir_id/", AddIrId.as_view()),
     path("register_new_ir/", RegisterIR.as_view()),
+    path("bulk_register_from_excel/", BulkRegisterIRFromExcel.as_view()),
     path("login/", IRLogin.as_view()),
     path("create_team/", CreateTeam.as_view()),
     path("add_ir_to_team/", AddIrToTeam.as_view()),
@@ -75,6 +78,7 @@ urlpatterns = [
     path("add_uv/<str:ir_id>/", AddUV.as_view()),
     path("set_targets/", SetTargets.as_view()),
     path("password_reset/", PasswordReset.as_view()),
+    path("change_access_level/", ChangeIRAccessLevel.as_view()),
     path("reset_database/", ResetDatabase.as_view()),
     #PUT endpoints
     path("update_ir/<str:update_ir>/", UpdateIrDetails.as_view()),

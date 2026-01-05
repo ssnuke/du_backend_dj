@@ -36,6 +36,10 @@ IM585912
 
 Registration Data
 
+LDC - 2 
+LS - 3
+IR - 4
+
 [
   {
     "ir_id": "IM111222",
