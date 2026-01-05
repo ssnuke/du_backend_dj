@@ -27,6 +27,7 @@ from core.views.post import (
     AddUV,
     SetTargets,
     ResetDatabase,
+    PasswordReset,
 )
 
 from core.views.health import health_check
@@ -73,6 +74,7 @@ urlpatterns = [
     path("add_plan_detail/<str:ir_id>/", AddPlanDetail.as_view()),
     path("add_uv/<str:ir_id>/", AddUV.as_view()),
     path("set_targets/", SetTargets.as_view()),
+    path("password_reset/", PasswordReset.as_view()),
     path("reset_database/", ResetDatabase.as_view()),
     #PUT endpoints
     path("update_ir/<str:update_ir>/", UpdateIrDetails.as_view()),

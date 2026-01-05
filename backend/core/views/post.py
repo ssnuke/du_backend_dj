@@ -545,6 +545,58 @@ class SetTargets(APIView):
 
 
 # ---------------------------------------------------
+# PASSWORD RESET
+# ---------------------------------------------------
+class PasswordReset(APIView):
+    def post(self, request):
+        ir_id = request.data.get("ir_id")
+        new_password = request.data.get("new_password")
+        
+        if not ir_id:
+            return Response(
+                {"detail": "ir_id is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not new_password:
+            return Response(
+                {"detail": "new_password is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if len(new_password) < 6:
+            return Response(
+                {"detail": "Password must be at least 6 characters long"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            ir = Ir.objects.get(ir_id=ir_id)
+        except Ir.DoesNotExist:
+            return Response(
+                {"detail": "IR ID not found"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        try:
+            # Update password
+            ir.set_password(new_password)
+            ir.save()
+            
+            return Response({
+                "message": "Password reset successfully",
+                "ir_id": ir.ir_id
+            }, status=status.HTTP_200_OK)
+            
+        except Exception:
+            logging.exception("Error resetting password for ir_id=%s", ir_id)
+            return Response(
+                {"detail": "Internal server error"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+# ---------------------------------------------------
 # RESET DATABASE
 # ---------------------------------------------------
 class ResetDatabase(APIView):
