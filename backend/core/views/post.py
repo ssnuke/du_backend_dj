@@ -348,14 +348,58 @@ class IRLogin(APIView):
 # ---------------------------------------------------
 class CreateTeam(APIView):
     def post(self, request):
+        ir_id = request.data.get("ir_id")
+        
+        if not ir_id:
+            return Response(
+                {"detail": "ir_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validate that the IR exists
+        try:
+            ir = Ir.objects.get(ir_id=ir_id)
+        except Ir.DoesNotExist:
+            return Response(
+                {"detail": "IR not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
         serializer = TeamSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        team = serializer.save()
-
-        return Response(
-            {"message": "Team created", "team_id": team.id, "team_name": team.name},
-            status=201,
-        )
+        
+        try:
+            with transaction.atomic():
+                # Create the team
+                team = serializer.save()
+                
+                # Automatically add the creating IR as LDC
+                TeamMember.objects.create(
+                    ir=ir,
+                    team=team,
+                    role=TeamRole.LDC
+                )
+                
+                return Response({
+                    "message": "Team created successfully",
+                    "team_id": team.id,
+                    "team_name": team.name,
+                    "ldc_id": ir.ir_id,
+                    "ldc_name": ir.ir_name
+                }, status=status.HTTP_201_CREATED)
+                
+        except IntegrityError:
+            logging.exception("IntegrityError while creating team")
+            return Response(
+                {"detail": "Database integrity error"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        except Exception:
+            logging.exception("Error creating team")
+            return Response(
+                {"detail": "Internal server error"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 # ---------------------------------------------------
