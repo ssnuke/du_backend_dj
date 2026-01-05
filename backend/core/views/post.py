@@ -263,7 +263,8 @@ class BulkRegisterIRFromExcel(APIView):
                             ir_id=ir_data['ir_id'],
                             ir_name=ir_data['ir_name'],
                             ir_email=ir_data['ir_email'],
-                            ir_access_level=ir_data['ir_access_level']
+                            ir_access_level=ir_data['ir_access_level'],
+                            started_date=timezone.now()    
                         )
                         ir.set_password('secret')  # Set default password
                         ir.save()
