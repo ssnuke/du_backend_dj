@@ -5,6 +5,7 @@ from rest_framework import status
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.contrib.auth.hashers import make_password
 from core.utils.dates import get_current_week_start, get_saturday_friday_week_info
 from django.db.models import F
 
@@ -256,19 +257,25 @@ class BulkRegisterIRFromExcel(APIView):
                     for ir_id in ir_ids_to_add:
                         IrId.objects.get_or_create(ir_id=ir_id)
                     
-                    # Create IR records with default password
-                    created_irs = []
+                    # Pre-hash the default password once for efficiency
+                    hashed_password = make_password('secret')
+                    
+                    # Prepare IR objects for bulk creation
+                    ir_objects = []
                     for ir_data in irs_to_register:
                         ir = Ir(
                             ir_id=ir_data['ir_id'],
                             ir_name=ir_data['ir_name'],
                             ir_email=ir_data['ir_email'],
                             ir_access_level=ir_data['ir_access_level'],
-                            started_date=timezone.now()    
+                            ir_password=hashed_password,  # Use pre-hashed password
+                            started_date=timezone.now()
                         )
-                        ir.set_password('secret')  # Set default password
-                        ir.save()
-                        created_irs.append(ir.ir_id)
+                        ir_objects.append(ir)
+                    
+                    # Bulk create all IRs at once
+                    Ir.objects.bulk_create(ir_objects)
+                    created_irs = [ir.ir_id for ir in ir_objects]
                     
                     response_data = {
                         "message": f"Successfully registered {len(created_irs)} IR(s) from Excel",
