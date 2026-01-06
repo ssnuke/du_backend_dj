@@ -257,7 +257,9 @@ class GetTeamMembers(APIView):
 
             members = TeamMember.objects.filter(team_id=team_id).select_related("ir")
 
-            role_map = {"LDC": 2, "LS": 3, "GC": 4, "IR": 5}
+            # Map team roles to access level numbers (matching AccessLevel class)
+            # Admin=1, CTC=2, LDC=3, LS=4, GC=5, IR=6
+            role_map = {"ADMIN": 1, "CTC": 2, "LDC": 3, "LS": 4, "GC": 5, "IR": 6}
             result = []
 
             for member in members:
@@ -265,7 +267,8 @@ class GetTeamMembers(APIView):
                 result.append({
                     **TeamMemberSerializer(member).data,
                     "ir_name": ir.ir_name,
-                    "role_num": role_map.get(member.role),
+                    "role_num": role_map.get(member.role, 6),  # Team role (deprecated, use ir_access_level)
+                    "ir_access_level": ir.ir_access_level,  # Actual access level from IR model
                     "weekly_info_target": ir.weekly_info_target,
                     "weekly_plan_target": ir.weekly_plan_target,
                     "info_count": ir.info_count,
