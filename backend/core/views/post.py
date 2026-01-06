@@ -220,7 +220,9 @@ class BulkRegisterIRFromExcel(APIView):
             errors = []
             ir_ids_to_add = []
             irs_to_register = []
+            pending_irs = {}  # Store IRs that will be registered in this batch (for parent lookup)
             
+            # First pass: Parse all rows and collect valid entries
             for idx, row in df.iterrows():
                 ir_id = str(row['ir_id']).strip()
                 ir_name = str(row['ir_name']).strip()
@@ -261,24 +263,89 @@ class BulkRegisterIRFromExcel(APIView):
                     })
                     continue
                 
-                # Validate parent exists if provided
-                if parent_ir_id and not Ir.objects.filter(ir_id=parent_ir_id).exists():
-                    errors.append({
-                        "row": idx + 2,
-                        "ir_id": ir_id,
-                        "error": f"Parent IR '{parent_ir_id}' not found"
-                    })
-                    continue
-                
-                # Prepare data for creation
-                ir_ids_to_add.append(ir_id)
-                irs_to_register.append({
+                # Store in pending_irs for this batch
+                pending_irs[ir_id] = {
                     'ir_id': ir_id,
                     'ir_name': ir_name,
                     'ir_email': ir_email,
                     'ir_access_level': ir_access_level,
                     'parent_ir_id': parent_ir_id,
-                    'ir_password': 'secret'  # Default password
+                    'ir_password': 'secret',  # Default password
+                    'row': idx + 2
+                }
+            
+            # Second pass: Validate parent references (check DB and pending batch)
+            for ir_id, ir_data in list(pending_irs.items()):
+                parent_ir_id = ir_data['parent_ir_id']
+                if parent_ir_id:
+                    # Check if parent exists in DB OR will be registered in this batch
+                    parent_in_db = Ir.objects.filter(ir_id=parent_ir_id).exists()
+                    parent_in_batch = parent_ir_id in pending_irs
+                    
+                    if not parent_in_db and not parent_in_batch:
+                        errors.append({
+                            "row": ir_data['row'],
+                            "ir_id": ir_id,
+                            "error": f"Parent IR '{parent_ir_id}' not found"
+                        })
+                        del pending_irs[ir_id]
+            
+            # Third pass: Sort IRs by hierarchy (parents before children)
+            # Build dependency graph and sort topologically
+            def get_hierarchy_order(pending_irs):
+                """Sort IRs so parents are registered before children"""
+                sorted_irs = []
+                remaining = dict(pending_irs)
+                registered_in_batch = set()
+                existing_irs = set(Ir.objects.values_list('ir_id', flat=True))
+                
+                max_iterations = len(remaining) + 1
+                iteration = 0
+                
+                while remaining and iteration < max_iterations:
+                    iteration += 1
+                    progress_made = False
+                    
+                    for ir_id, ir_data in list(remaining.items()):
+                        parent_ir_id = ir_data['parent_ir_id']
+                        
+                        # Can register if: no parent, parent exists in DB, or parent already in sorted list
+                        can_register = (
+                            parent_ir_id is None or 
+                            parent_ir_id in existing_irs or 
+                            parent_ir_id in registered_in_batch
+                        )
+                        
+                        if can_register:
+                            sorted_irs.append(ir_data)
+                            registered_in_batch.add(ir_id)
+                            del remaining[ir_id]
+                            progress_made = True
+                    
+                    if not progress_made and remaining:
+                        # Circular dependency or missing parent - add remaining with errors
+                        for ir_id, ir_data in remaining.items():
+                            errors.append({
+                                "row": ir_data['row'],
+                                "ir_id": ir_id,
+                                "error": f"Cannot resolve parent hierarchy for '{ir_data['parent_ir_id']}'"
+                            })
+                        break
+                
+                return sorted_irs
+            
+            sorted_irs = get_hierarchy_order(pending_irs)
+            
+            # Prepare final lists
+            for ir_data in sorted_irs:
+                ir_ids_to_add.append(ir_data['ir_id'])
+                irs_to_register.append({
+                    'ir_id': ir_data['ir_id'],
+                    'ir_name': ir_data['ir_name'],
+                    'ir_email': ir_data['ir_email'],
+                    'ir_access_level': ir_data['ir_access_level'],
+                    'parent_ir_id': ir_data['parent_ir_id'],
+                    'ir_password': ir_data['ir_password']
                 })
             
             if not irs_to_register:
