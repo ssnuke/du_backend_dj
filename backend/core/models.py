@@ -388,7 +388,7 @@ class Team(models.Model):
     weekly_info_target = models.IntegerField(default=0)
     weekly_plan_target = models.IntegerField(default=0)
     
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
 
 class TeamMember(models.Model):
