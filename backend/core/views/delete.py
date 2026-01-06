@@ -43,7 +43,7 @@ class ResetDatabase(APIView):
 
 
 # ---------------------------------------------------
-# DELETE TEAM (AND MEMBERS)
+# DELETE TEAM (AND MEMBERS) (with role-based check)
 # ---------------------------------------------------
 class DeleteTeam(APIView):
     """
@@ -51,6 +51,23 @@ class DeleteTeam(APIView):
     """
     def delete(self, request, team_id):
         team = get_object_or_404(Team, id=team_id)
+        
+        # Role-based check if requester provided
+        requester_ir_id = request.query_params.get("requester_ir_id")
+        if requester_ir_id:
+            try:
+                requester = Ir.objects.get(ir_id=requester_ir_id)
+                # Requester must be able to edit team
+                if not requester.can_edit_team(team):
+                    return Response(
+                        {"detail": "Not authorized to delete this team"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            except Ir.DoesNotExist:
+                return Response(
+                    {"detail": "Requester IR not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
 
         with transaction.atomic():
             TeamMember.objects.filter(team=team).delete()
@@ -63,13 +80,32 @@ class DeleteTeam(APIView):
 
 
 # ---------------------------------------------------
-# REMOVE IR FROM TEAM
+# REMOVE IR FROM TEAM (with role-based check)
 # ---------------------------------------------------
 class RemoveIrFromTeam(APIView):
     """
     Mirrors DELETE /remove_ir_from_team/{team_id}/{ir_id}
     """
     def delete(self, request, team_id, ir_id):
+        team = get_object_or_404(Team, id=team_id)
+        
+        # Role-based check if requester provided
+        requester_ir_id = request.query_params.get("requester_ir_id")
+        if requester_ir_id:
+            try:
+                requester = Ir.objects.get(ir_id=requester_ir_id)
+                # Requester must be able to edit team
+                if not requester.can_edit_team(team):
+                    return Response(
+                        {"detail": "Not authorized to modify this team"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            except Ir.DoesNotExist:
+                return Response(
+                    {"detail": "Requester IR not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        
         link = TeamMember.objects.filter(
             team_id=team_id,
             ir_id=ir_id
@@ -90,7 +126,7 @@ class RemoveIrFromTeam(APIView):
 
 
 # ---------------------------------------------------
-# DELETE INFO DETAIL
+# DELETE INFO DETAIL (with role-based check)
 # ---------------------------------------------------
 class DeleteInfoDetail(APIView):
     """
@@ -98,6 +134,23 @@ class DeleteInfoDetail(APIView):
     """
     def delete(self, request, info_id):
         info = get_object_or_404(InfoDetail, id=info_id)
+        
+        # Role-based check if requester provided
+        requester_ir_id = request.query_params.get("requester_ir_id")
+        if requester_ir_id:
+            try:
+                requester = Ir.objects.get(ir_id=requester_ir_id)
+                # Requester must be able to add data for this IR (same permissions for delete)
+                if not requester.can_add_data_for_ir(info.ir):
+                    return Response(
+                        {"detail": "Not authorized to delete this info detail"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            except Ir.DoesNotExist:
+                return Response(
+                    {"detail": "Requester IR not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
 
         info.delete()
 
@@ -108,7 +161,7 @@ class DeleteInfoDetail(APIView):
 
 
 # ---------------------------------------------------
-# DELETE PLAN DETAIL
+# DELETE PLAN DETAIL (with role-based check)
 # ---------------------------------------------------
 class DeletePlanDetail(APIView):
     """
@@ -117,6 +170,24 @@ class DeletePlanDetail(APIView):
     def delete(self, request, plan_id):
         try:
             plan = get_object_or_404(PlanDetail, id=plan_id)
+            
+            # Role-based check if requester provided
+            requester_ir_id = request.query_params.get("requester_ir_id")
+            if requester_ir_id:
+                try:
+                    requester = Ir.objects.get(ir_id=requester_ir_id)
+                    # Requester must be able to add data for this IR (same permissions for delete)
+                    if not requester.can_add_data_for_ir(plan.ir):
+                        return Response(
+                            {"detail": "Not authorized to delete this plan detail"},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                except Ir.DoesNotExist:
+                    return Response(
+                        {"detail": "Requester IR not found"},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+            
             plan.delete()
 
             return Response(

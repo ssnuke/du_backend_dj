@@ -113,40 +113,57 @@ class RegisterIR(APIView):
             if not isinstance(itm, dict):
                 return Response({"detail": "Invalid payload format, expected object or list of objects", "index": idx}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Pre-check whitelist and existing registrations
+        # Pre-check whitelist, existing registrations, and parent validation
         errors = []
         for idx, item in enumerate(items):
             ir_id = item.get("ir_id")
+            parent_ir_id = item.get("parent_ir_id")
+            
             if not ir_id:
                 errors.append({"index": idx, "error": "ir_id missing"})
                 continue
             if not IrId.objects.filter(ir_id=ir_id).exists():
-                errors.append({"index": idx, "ir_id": ir_id, "error": "IR ID Not Found"})
+                errors.append({"index": idx, "ir_id": ir_id, "error": "IR ID Not Found in whitelist"})
             if Ir.objects.filter(ir_id=ir_id).exists():
                 errors.append({"index": idx, "ir_id": ir_id, "error": "Already registered"})
+            # Validate parent exists if provided
+            if parent_ir_id and not Ir.objects.filter(ir_id=parent_ir_id).exists():
+                errors.append({"index": idx, "ir_id": ir_id, "error": f"Parent IR '{parent_ir_id}' not found"})
 
         if errors:
             return Response({"errors": errors}, status=status.HTTP_400_BAD_REQUEST)
 
-        serializer = IrRegisterSerializer(data=items, many=True)
-        # Collect serializer errors without raising to format per-item errors
-        if not serializer.is_valid():
-            return Response({"errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
-
         try:
             with transaction.atomic():
-                created = serializer.save()
-        except IntegrityError as e:
+                created_irs = []
+                for item in items:
+                    parent_ir_id = item.get("parent_ir_id")
+                    parent_ir = Ir.objects.get(ir_id=parent_ir_id) if parent_ir_id else None
+                    
+                    ir = Ir(
+                        ir_id=item["ir_id"],
+                        ir_name=item["ir_name"],
+                        ir_email=item["ir_email"],
+                        ir_access_level=item.get("ir_access_level", 5),
+                        parent_ir=parent_ir,
+                    )
+                    ir.set_password(item.get("ir_password", "secret"))
+                    ir.save()  # save() auto-calculates hierarchy_path and level
+                    created_irs.append({
+                        "ir_id": ir.ir_id,
+                        "hierarchy_level": ir.hierarchy_level,
+                        "parent_ir_id": parent_ir_id
+                    })
+                    
+        except IntegrityError:
             logging.exception("IntegrityError while bulk registering IRs")
             return Response({"detail": "Database integrity error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        except Exception as e:
+        except Exception:
             logging.exception("Unexpected error while bulk registering IRs")
             return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        created_ids = [obj.ir_id for obj in created]
-
         return Response(
-            {"message": "IR(s) registered successfully", "ir_ids": created_ids},
+            {"message": "IR(s) registered successfully", "ir_ids": created_irs},
             status=status.HTTP_201_CREATED,
         )
 
@@ -187,7 +204,10 @@ class BulkRegisterIRFromExcel(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Remove rows with any missing values
+            # Check if parent_ir_id column exists (optional)
+            has_parent_column = 'parent_ir_id' in df.columns
+            
+            # Remove rows with any missing values in required columns
             df = df.dropna(subset=required_columns)
             
             if df.empty:
@@ -205,6 +225,13 @@ class BulkRegisterIRFromExcel(APIView):
                 ir_id = str(row['ir_id']).strip()
                 ir_name = str(row['ir_name']).strip()
                 ir_email = str(row['ir_email']).strip()
+                parent_ir_id = None
+                
+                # Get parent_ir_id if column exists and value is not NaN
+                if has_parent_column and pd.notna(row.get('parent_ir_id')):
+                    parent_ir_id = str(row['parent_ir_id']).strip()
+                    if parent_ir_id == '':
+                        parent_ir_id = None
                 
                 try:
                     ir_access_level = int(row['ir_access_level'])
@@ -234,13 +261,23 @@ class BulkRegisterIRFromExcel(APIView):
                     })
                     continue
                 
-                # Prepare data for batch creation
+                # Validate parent exists if provided
+                if parent_ir_id and not Ir.objects.filter(ir_id=parent_ir_id).exists():
+                    errors.append({
+                        "row": idx + 2,
+                        "ir_id": ir_id,
+                        "error": f"Parent IR '{parent_ir_id}' not found"
+                    })
+                    continue
+                
+                # Prepare data for creation
                 ir_ids_to_add.append(ir_id)
                 irs_to_register.append({
                     'ir_id': ir_id,
                     'ir_name': ir_name,
                     'ir_email': ir_email,
                     'ir_access_level': ir_access_level,
+                    'parent_ir_id': parent_ir_id,
                     'ir_password': 'secret'  # Default password
                 })
             
@@ -260,22 +297,27 @@ class BulkRegisterIRFromExcel(APIView):
                     # Pre-hash the default password once for efficiency
                     hashed_password = make_password('secret')
                     
-                    # Prepare IR objects for bulk creation
-                    ir_objects = []
+                    # Create IRs one by one (needed for hierarchy calculation in save())
+                    created_irs = []
                     for ir_data in irs_to_register:
+                        parent_ir = None
+                        if ir_data['parent_ir_id']:
+                            parent_ir = Ir.objects.get(ir_id=ir_data['parent_ir_id'])
+                        
                         ir = Ir(
                             ir_id=ir_data['ir_id'],
                             ir_name=ir_data['ir_name'],
                             ir_email=ir_data['ir_email'],
                             ir_access_level=ir_data['ir_access_level'],
-                            ir_password=hashed_password,  # Use pre-hashed password
-                            started_date=timezone.now()
+                            ir_password=hashed_password,
+                            parent_ir=parent_ir,
                         )
-                        ir_objects.append(ir)
-                    
-                    # Bulk create all IRs at once
-                    Ir.objects.bulk_create(ir_objects)
-                    created_irs = [ir.ir_id for ir in ir_objects]
+                        ir.save()  # save() auto-calculates hierarchy_path and level
+                        created_irs.append({
+                            "ir_id": ir.ir_id,
+                            "hierarchy_level": ir.hierarchy_level,
+                            "parent_ir_id": ir_data['parent_ir_id']
+                        })
                     
                     response_data = {
                         "message": f"Successfully registered {len(created_irs)} IR(s) from Excel",
@@ -344,7 +386,7 @@ class IRLogin(APIView):
 
 
 # ---------------------------------------------------
-# CREATE TEAM
+# CREATE TEAM (with role-based check)
 # ---------------------------------------------------
 class CreateTeam(APIView):
     def post(self, request):
@@ -365,13 +407,28 @@ class CreateTeam(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        serializer = TeamSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        # Check if IR can create teams (ADMIN, CTC, LDC only)
+        if not ir.can_create_team():
+            return Response(
+                {"detail": "Not authorized to create teams. Only ADMIN, CTC, and LDC can create teams."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Get team name from request
+        team_name = request.data.get("name")
+        if not team_name:
+            return Response(
+                {"detail": "Team name is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         
         try:
             with transaction.atomic():
-                # Create the team
-                team = serializer.save()
+                # Create the team with created_by set
+                team = Team.objects.create(
+                    name=team_name,
+                    created_by=ir
+                )
                 
                 # Automatically add the creating IR as LDC
                 TeamMember.objects.create(
@@ -384,6 +441,7 @@ class CreateTeam(APIView):
                     "message": "Team created successfully",
                     "team_id": team.id,
                     "team_name": team.name,
+                    "created_by": ir.ir_id,
                     "ldc_id": ir.ir_id,
                     "ldc_name": ir.ir_name
                 }, status=status.HTTP_201_CREATED)
@@ -403,16 +461,35 @@ class CreateTeam(APIView):
 
 
 # ---------------------------------------------------
-# ADD IR TO TEAM
+# ADD IR TO TEAM (with role-based check)
 # ---------------------------------------------------
 class AddIrToTeam(APIView):
     def post(self, request):
+        requester_ir_id = request.data.get("requester_ir_id")
         ir_id = request.data.get("ir_id")
         team_id = request.data.get("team_id")
         role = request.data.get("role")
 
         ir = get_object_or_404(Ir, ir_id=ir_id)
         team = get_object_or_404(Team, id=team_id)
+        
+        # Role-based permission check if requester provided
+        if requester_ir_id:
+            try:
+                requester = Ir.objects.get(ir_id=requester_ir_id)
+                
+                # Requester must be able to edit the team
+                if not requester.can_edit_team(team):
+                    return Response(
+                        {"detail": "Not authorized to add members to this team"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+                
+            except Ir.DoesNotExist:
+                return Response(
+                    {"detail": "Requester IR not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
 
         if TeamMember.objects.filter(ir=ir, team=team).exists():
             return Response(
@@ -433,16 +510,46 @@ class AddIrToTeam(APIView):
 
 
 # ---------------------------------------------------
-# ADD INFO DETAIL (WITH WEEKLY ROLLOVER)
+# ADD INFO DETAIL (WITH WEEKLY ROLLOVER + role-based check)
 # ---------------------------------------------------
 class AddInfoDetail(APIView):
     def post(self, request, ir_id):
+        requester_ir_id = request.data.get("requester_ir_id") if isinstance(request.data, dict) else None
+        
+        # Role-based permission check if requester provided
+        if requester_ir_id:
+            try:
+                requester = Ir.objects.get(ir_id=requester_ir_id)
+                target_ir = Ir.objects.get(ir_id=ir_id)
+                
+                # Requester must be able to add data for this IR
+                if not requester.can_add_data_for_ir(target_ir):
+                    return Response(
+                        {"detail": "Not authorized to add info details for this IR"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            except Ir.DoesNotExist:
+                return Response(
+                    {"detail": "IR not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        
         with transaction.atomic():
             ir = Ir.objects.select_for_update().get(ir_id=ir_id)
             payload = request.data
+            
+            # Handle both list and dict payloads
+            if isinstance(payload, dict):
+                items = payload.get("items", [payload])
+            else:
+                items = payload
+            
             created_ids = []
 
-            for item in payload:
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                    
                 info = InfoDetail.objects.create(
                     ir=ir,
                     info_date=item.get("info_date", timezone.now()),
@@ -497,16 +604,46 @@ class AddInfoDetail(APIView):
         )
 
 # ---------------------------------------------------
-# ADD PLAN DETAIL
+# ADD PLAN DETAIL (with role-based check)
 # ---------------------------------------------------
 class AddPlanDetail(APIView):
     def post(self, request, ir_id):
+        requester_ir_id = request.data.get("requester_ir_id") if isinstance(request.data, dict) else None
+        
+        # Role-based permission check if requester provided
+        if requester_ir_id:
+            try:
+                requester = Ir.objects.get(ir_id=requester_ir_id)
+                target_ir = Ir.objects.get(ir_id=ir_id)
+                
+                # Requester must be able to add data for this IR
+                if not requester.can_add_data_for_ir(target_ir):
+                    return Response(
+                        {"detail": "Not authorized to add plan details for this IR"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            except Ir.DoesNotExist:
+                return Response(
+                    {"detail": "IR not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        
         with transaction.atomic():
             ir = Ir.objects.select_for_update().get(ir_id=ir_id)
             payload = request.data
+            
+            # Handle both list and dict payloads
+            if isinstance(payload, dict):
+                items = payload.get("items", [payload])
+            else:
+                items = payload
+            
             created_ids = []
 
-            for item in payload:
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                    
                 plan = PlanDetail.objects.create(
                     ir=ir,
                     plan_date=item.get("plan_date", timezone.now()),
@@ -559,10 +696,30 @@ class AddPlanDetail(APIView):
 
 
 # ---------------------------------------------------
-# ADD UV (UV Counter Update)
+# ADD UV (UV Counter Update + role-based check)
 # ---------------------------------------------------
 class AddUV(APIView):
     def post(self, request, ir_id):
+        requester_ir_id = request.data.get("requester_ir_id") if isinstance(request.data, dict) else None
+        
+        # Role-based permission check if requester provided
+        if requester_ir_id:
+            try:
+                requester = Ir.objects.get(ir_id=requester_ir_id)
+                target_ir = Ir.objects.get(ir_id=ir_id)
+                
+                # Requester must be able to add data for this IR
+                if not requester.can_add_data_for_ir(target_ir):
+                    return Response(
+                        {"detail": "Not authorized to add UV for this IR"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            except Ir.DoesNotExist:
+                return Response(
+                    {"detail": "IR not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        
         try:
             with transaction.atomic():
                 ir = Ir.objects.select_for_update().get(ir_id=ir_id)
@@ -643,8 +800,9 @@ class SetTargets(APIView):
 
         acting_ir = get_object_or_404(Ir, ir_id=acting_ir_id)
 
+        # Only ADMIN, CTC, LDC can set targets
         if acting_ir.ir_access_level not in [1, 2, 3]:
-            return Response({"detail": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
+            return Response({"detail": "Not authorized. Only ADMIN, CTC, and LDC can set targets"}, status=status.HTTP_403_FORBIDDEN)
 
         # Get current week info (Saturday-Friday cycle)
         week_number, year, week_start, week_end = get_saturday_friday_week_info()
@@ -662,6 +820,13 @@ class SetTargets(APIView):
                 # Update IR targets for current week
                 if payload.get("ir_id"):
                     ir = get_object_or_404(Ir, ir_id=payload["ir_id"])
+                    
+                    # Role-based check: acting IR must be able to add data for target IR
+                    if not acting_ir.can_add_data_for_ir(ir):
+                        return Response(
+                            {"detail": "Not authorized to set targets for this IR"},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
                     
                     # Get or create weekly target for this IR
                     weekly_target, created = WeeklyTarget.objects.get_or_create(
@@ -706,6 +871,13 @@ class SetTargets(APIView):
                         team_id_val = team_id_raw
 
                     team = get_object_or_404(Team, id=team_id_val)
+                    
+                    # Role-based check: acting IR must be able to edit team
+                    if not acting_ir.can_edit_team(team):
+                        return Response(
+                            {"detail": "Not authorized to set targets for this team"},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
                     
                     # Get or create weekly target for this team
                     weekly_target, created = WeeklyTarget.objects.get_or_create(
@@ -755,7 +927,7 @@ class SetTargets(APIView):
 
 
 # ---------------------------------------------------
-# CHANGE IR ACCESS LEVEL (PROMOTE/DEMOTE)
+# CHANGE IR ACCESS LEVEL (PROMOTE/DEMOTE) - role-based
 # ---------------------------------------------------
 class ChangeIRAccessLevel(APIView):
     def post(self, request):
@@ -791,10 +963,10 @@ class ChangeIRAccessLevel(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Validate access level range (typically 1-5)
-        if new_access_level not in [1, 2, 3, 4, 5]:
+        # Validate access level range (1-6)
+        if new_access_level not in [1, 2, 3, 4, 5, 6]:
             return Response(
-                {"detail": "new_access_level must be between 1 and 5"},
+                {"detail": "new_access_level must be between 1 and 6"},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -807,10 +979,10 @@ class ChangeIRAccessLevel(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # Check if acting IR has permission (only access level 1 or 2)
-        if acting_ir.ir_access_level not in [1, 2]:
+        # Only ADMIN (1) and CTC (2) can promote/demote
+        if not acting_ir.can_promote_demote():
             return Response(
-                {"detail": "Unauthorized. Only IRs with access level 1 or 2 can change access levels"},
+                {"detail": "Unauthorized. Only ADMIN and CTC can change access levels"},
                 status=status.HTTP_403_FORBIDDEN
             )
         
@@ -833,17 +1005,17 @@ class ChangeIRAccessLevel(APIView):
         # Store old access level for response
         old_access_level = target_ir.ir_access_level
         
-        # Prevent access level 2 from promoting to access level 1
+        # CTC (2) cannot promote to ADMIN (1)
         if acting_ir.ir_access_level == 2 and new_access_level == 1:
             return Response(
-                {"detail": "Access level 2 users cannot promote to access level 1"},
+                {"detail": "CTC cannot promote to ADMIN level"},
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        # Prevent access level 2 from modifying access level 1 users
+        # CTC (2) cannot modify ADMIN (1) users
         if acting_ir.ir_access_level == 2 and target_ir.ir_access_level == 1:
             return Response(
-                {"detail": "Access level 2 users cannot modify access level 1 users"},
+                {"detail": "CTC cannot modify ADMIN users"},
                 status=status.HTTP_403_FORBIDDEN
             )
         

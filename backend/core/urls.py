@@ -15,6 +15,11 @@ from core.views.get import (
     GetTargets,
     GetUVCount,
     GetTeamUVTotal,
+    # New hierarchy-based endpoints
+    GetVisibleTeams,
+    GetDownlineData,
+    GetDirectDownlines,
+    GetHierarchyTree,
 )
 from core.views.post import (
     AddIrId,
@@ -66,6 +71,11 @@ urlpatterns = [
     path("teams_by_ir/<str:ir_id>/", GetTeamsByIR.as_view()),
     path("team_info_total/<int:team_id>/", GetTeamInfoTotal.as_view()),
     path("team_uv_total/<int:team_id>/", GetTeamUVTotal.as_view()),
+    # New hierarchy-based endpoints
+    path("visible_teams/<str:ir_id>/", GetVisibleTeams.as_view()),
+    path("downline_data/<str:ir_id>/", GetDownlineData.as_view()),
+    path("direct_downlines/<str:ir_id>/", GetDirectDownlines.as_view()),
+    path("hierarchy_tree/<str:ir_id>/", GetHierarchyTree.as_view()),
     #POST endpoints
     path("add_ir_id/", AddIrId.as_view()),
     path("register_new_ir/", RegisterIR.as_view()),

@@ -2,7 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
-from django.db.models import Sum, Count
+from django.db.models import Sum, Count, Q
 from django.utils.dateparse import parse_date
 from django.shortcuts import get_object_or_404
 
@@ -16,6 +16,7 @@ from core.models import (
     TeamWeek,
     TeamRole,
     WeeklyTarget,
+    AccessLevel,
 )
 from core.serializers import (
     IrIdSerializer,
@@ -35,6 +36,17 @@ from core.utils.dates import get_current_week_start, get_saturday_friday_week_in
 IST = pytz.timezone("Asia/Kolkata")
 
 
+# ===================================================
+# HELPER: Get viewable teams for an IR (role-based)
+# ===================================================
+def get_viewable_teams_for_ir(ir):
+    """
+    Get all teams visible to an IR based on role.
+    Uses the role-based get_teams_can_view() method.
+    """
+    return ir.get_teams_can_view()
+
+
 # ---------------------------------------------------
 # GET ALL IR IDs
 # ---------------------------------------------------
@@ -45,30 +57,91 @@ class GetAllIR(APIView):
 
 
 # ---------------------------------------------------
-# GET SINGLE IR BY ID
+# GET SINGLE IR BY ID (with role-based check)
 # ---------------------------------------------------
 class GetSingleIR(APIView):
-    def get(self, request, ir_id):
-        ir = get_object_or_404(Ir, ir_id=ir_id)
-        return Response(IrSerializer(ir).data)
+    def get(self, request, fetch_ir_id):
+        requester_ir_id = request.GET.get("requester_ir_id")
+        
+        ir = get_object_or_404(Ir, ir_id=fetch_ir_id)
+        
+        # If requester_ir_id provided, check role-based permission
+        if requester_ir_id:
+            try:
+                requester = Ir.objects.get(ir_id=requester_ir_id)
+                if not requester.can_view_ir(ir):
+                    return Response(
+                        {"detail": "Not authorized to view this IR"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            except Ir.DoesNotExist:
+                return Response(
+                    {"detail": "Requester IR not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        
+        data = IrSerializer(ir).data
+        # Add hierarchy info
+        data["hierarchy_level"] = ir.hierarchy_level
+        data["parent_ir_id"] = ir.parent_ir.ir_id if ir.parent_ir else None
+        
+        return Response(data)
 
 
 # ---------------------------------------------------
-# GET ALL REGISTERED IRs
+# GET ALL REGISTERED IRs (with role-based filter)
 # ---------------------------------------------------
 class GetAllRegisteredIR(APIView):
     def get(self, request):
-        irs = Ir.objects.all()
+        requester_ir_id = request.GET.get("requester_ir_id")
+        
+        if requester_ir_id:
+            try:
+                requester = Ir.objects.get(ir_id=requester_ir_id)
+                # Use role-based viewable IRs
+                irs = requester.get_viewable_irs()
+            except Ir.DoesNotExist:
+                return Response(
+                    {"detail": "Requester IR not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        else:
+            # No filter - return all (backward compatible)
+            irs = Ir.objects.all()
+        
         data = IrSerializer(irs, many=True).data
+        
+        # Add hierarchy info to each IR
+        ir_map = {ir.ir_id: ir for ir in irs}
+        for item in data:
+            ir = ir_map.get(item['ir_id'])
+            if ir:
+                item["hierarchy_level"] = ir.hierarchy_level
+                item["parent_ir_id"] = ir.parent_ir.ir_id if ir.parent_ir else None
+        
         return Response({"data": data, "count": len(data)})
 
 
 # ---------------------------------------------------
-# GET ALL TEAMS (WITH AGGREGATES)
+# GET ALL TEAMS (WITH AGGREGATES & ROLE-BASED FILTER)
 # ---------------------------------------------------
 class GetAllTeams(APIView):
     def get(self, request):
-        teams = Team.objects.all()
+        requester_ir_id = request.GET.get("requester_ir_id")
+        
+        if requester_ir_id:
+            try:
+                requester = Ir.objects.get(ir_id=requester_ir_id)
+                teams = requester.get_teams_can_view()
+            except Ir.DoesNotExist:
+                return Response(
+                    {"detail": "Requester IR not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        else:
+            # No filter - return all (backward compatible)
+            teams = Team.objects.all()
+        
         result = []
 
         for team in teams:
@@ -87,6 +160,8 @@ class GetAllTeams(APIView):
 
             result.append({
                 **TeamSerializer(team).data,
+                "created_by_id": team.created_by.ir_id if team.created_by else None,
+                "created_by_name": team.created_by.ir_name if team.created_by else None,
                 "weekly_info_achieved": info_total,
                 "weekly_plan_achieved": plan_total,
                 "weekly_uv_achieved": uv_total,
@@ -96,25 +171,57 @@ class GetAllTeams(APIView):
 
 
 # ---------------------------------------------------
-# GET ALL LDCs
+# GET ALL LDCs (with hierarchy filter)
 # ---------------------------------------------------
 class GetLDCs(APIView):
     def get(self, request):
+        requester_ir_id = request.GET.get("requester_ir_id")
+        
         ldc_ids = TeamMember.objects.filter(
             role=TeamRole.LDC
         ).values_list("ir_id", flat=True).distinct()
 
         ldcs = Ir.objects.filter(ir_id__in=ldc_ids)
+        
+        # Filter by hierarchy if requester provided
+        if requester_ir_id:
+            try:
+                requester = Ir.objects.get(ir_id=requester_ir_id)
+                viewable_irs = requester.get_viewable_irs()
+                ldcs = ldcs.filter(ir_id__in=viewable_irs.values_list('ir_id', flat=True))
+            except Ir.DoesNotExist:
+                return Response(
+                    {"detail": "Requester IR not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
 
         data = [{"ir_id": i.ir_id, "ir_name": i.ir_name, "id": i.ir_id} for i in ldcs]
         return Response(data)
 
 
 # ---------------------------------------------------
-# GET TEAMS BY LDC
+# GET TEAMS BY LDC (with hierarchy check)
 # ---------------------------------------------------
 class GetTeamsByLDC(APIView):
     def get(self, request, ldc_id):
+        requester_ir_id = request.GET.get("requester_ir_id")
+        
+        # If requester provided, verify they can view this LDC
+        if requester_ir_id:
+            try:
+                requester = Ir.objects.get(ir_id=requester_ir_id)
+                ldc = Ir.objects.get(ir_id=ldc_id)
+                if not requester.can_view_ir(ldc):
+                    return Response(
+                        {"detail": "Not authorized to view this LDC's teams"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            except Ir.DoesNotExist:
+                return Response(
+                    {"detail": "IR not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        
         teams = Team.objects.filter(
             teammember__ir_id=ldc_id,
             teammember__role=TeamRole.LDC
@@ -124,12 +231,29 @@ class GetTeamsByLDC(APIView):
 
 
 # ---------------------------------------------------
-# GET TEAM MEMBERS WITH TARGETS
+# GET TEAM MEMBERS WITH TARGETS (with role-based check)
 # ---------------------------------------------------
 class GetTeamMembers(APIView):
     def get(self, request, team_id):
+        requester_ir_id = request.GET.get("requester_ir_id")
+        
         try:
             team = get_object_or_404(Team, id=team_id)
+            
+            # If requester provided, verify they can view this team
+            if requester_ir_id:
+                try:
+                    requester = Ir.objects.get(ir_id=requester_ir_id)
+                    if not requester.can_view_team(team):
+                        return Response(
+                            {"detail": "Not authorized to view this team"},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                except Ir.DoesNotExist:
+                    return Response(
+                        {"detail": "Requester IR not found"},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
 
             members = TeamMember.objects.filter(team_id=team_id).select_related("ir")
 
@@ -159,10 +283,28 @@ class GetTeamMembers(APIView):
 
 
 # ---------------------------------------------------
-# GET INFO DETAILS (OPTIONAL DATE FILTER)
+# GET INFO DETAILS (OPTIONAL DATE FILTER + hierarchy check)
 # ---------------------------------------------------
 class GetInfoDetails(APIView):
     def get(self, request, ir_id):
+        requester_ir_id = request.GET.get("requester_ir_id")
+        
+        # If requester provided, verify they can view this IR
+        if requester_ir_id:
+            try:
+                requester = Ir.objects.get(ir_id=requester_ir_id)
+                target_ir = Ir.objects.get(ir_id=ir_id)
+                if not requester.can_view_ir(target_ir):
+                    return Response(
+                        {"detail": "Not authorized to view this IR's info details"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            except Ir.DoesNotExist:
+                return Response(
+                    {"detail": "IR not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        
         from_date = request.GET.get("from_date")
         to_date = request.GET.get("to_date")
 
@@ -177,10 +319,28 @@ class GetInfoDetails(APIView):
 
 
 # ---------------------------------------------------
-# GET PLAN DETAILS (OPTIONAL DATE FILTER)
+# GET PLAN DETAILS (OPTIONAL DATE FILTER + hierarchy check)
 # ---------------------------------------------------
 class GetPlanDetails(APIView):
     def get(self, request, ir_id):
+        requester_ir_id = request.GET.get("requester_ir_id")
+        
+        # If requester provided, verify they can view this IR
+        if requester_ir_id:
+            try:
+                requester = Ir.objects.get(ir_id=requester_ir_id)
+                target_ir = Ir.objects.get(ir_id=ir_id)
+                if not requester.can_view_ir(target_ir):
+                    return Response(
+                        {"detail": "Not authorized to view this IR's plan details"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            except Ir.DoesNotExist:
+                return Response(
+                    {"detail": "IR not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        
         try:
             from_date = request.GET.get("from_date")
             to_date = request.GET.get("to_date")
@@ -201,7 +361,7 @@ class GetPlanDetails(APIView):
 
 
 # ---------------------------------------------------
-# DASHBOARD TARGETS
+# DASHBOARD TARGETS (with hierarchy-based team filtering)
 # ---------------------------------------------------
 class GetTargetsDashboard(APIView):
     def get(self, request, ir_id):
@@ -225,15 +385,19 @@ class GetTargetsDashboard(APIView):
             "week_number": week_number,
             "year": year,
             "uv_count": ir.uv_count if ir.ir_access_level in [2, 3] else None,
+            "hierarchy_level": ir.hierarchy_level,
+            "parent_ir_id": ir.parent_ir.ir_id if ir.parent_ir else None,
         }
 
         if ir.ir_access_level not in [2, 3]:
             return Response({"personal": personal, "teams": "NA"})
 
+        # Get teams visible to this IR (hierarchy-based)
+        viewable_teams = get_viewable_teams_for_ir(ir)
+        
         teams_progress = []
 
-        for link in TeamMember.objects.filter(ir=ir):
-            team = link.team
+        for team in viewable_teams:
             members = Ir.objects.filter(
                 teammember__team=team
             ).distinct()
@@ -245,11 +409,19 @@ class GetTargetsDashboard(APIView):
                 year=year
             ).first()
 
+            # Check if requester can edit this team (created by someone in their subtree)
+            can_edit = False
+            if team.created_by:
+                can_edit = ir.can_view_ir(team.created_by)
+
             teams_progress.append({
                 "team_id": team.id,
                 "week_number": week_number,
                 "year": year,
                 "team_name": team.name,
+                "created_by_id": team.created_by.ir_id if team.created_by else None,
+                "created_by_name": team.created_by.ir_name if team.created_by else None,
+                "can_edit": can_edit,
                 "weekly_info_target": team_weekly_target.team_weekly_info_target if team_weekly_target else 0,
                 "weekly_plan_target": team_weekly_target.team_weekly_plan_target if team_weekly_target else 0,
                 "weekly_uv_target": team_weekly_target.team_weekly_uv_target if team_weekly_target else 0,
@@ -267,6 +439,7 @@ class GetTargets(APIView):
     def get(self, request):
         ir_id = request.GET.get("ir_id")
         team_id = request.GET.get("team_id")
+        requester_ir_id = request.GET.get("requester_ir_id")
 
         if not ir_id and not team_id:
             return Response({"detail": "Provide `ir_id` or `team_id` as query parameter"}, status=status.HTTP_400_BAD_REQUEST)
@@ -284,8 +457,26 @@ class GetTargets(APIView):
         }
         
         try:
+            # Get requester for permission checks
+            requester = None
+            if requester_ir_id:
+                try:
+                    requester = Ir.objects.get(ir_id=requester_ir_id)
+                except Ir.DoesNotExist:
+                    return Response(
+                        {"detail": "Requester IR not found"},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+            
             if ir_id:
                 ir = get_object_or_404(Ir, ir_id=ir_id)
+                
+                # Check hierarchy permission if requester provided
+                if requester and not requester.can_view_ir(ir):
+                    return Response(
+                        {"detail": "Not authorized to view this IR's targets"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
                 
                 # Get weekly targets for current week
                 weekly_target = WeeklyTarget.objects.filter(
@@ -306,6 +497,15 @@ class GetTargets(APIView):
             if team_id:
                 team = get_object_or_404(Team, id=team_id)
                 
+                # Check hierarchy permission if requester provided
+                if requester:
+                    viewable_teams = get_viewable_teams_for_ir(requester)
+                    if team not in viewable_teams:
+                        return Response(
+                            {"detail": "Not authorized to view this team's targets"},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                
                 # Get weekly targets for current week
                 weekly_target = WeeklyTarget.objects.filter(
                     team=team,
@@ -316,6 +516,7 @@ class GetTargets(APIView):
                 data["team"] = {
                     "team_id": team.id,
                     "team_name": team.name,
+                    "created_by_id": team.created_by.ir_id if team.created_by else None,
                     "weekly_info_target": weekly_target.team_weekly_info_target if weekly_target else 0,
                     "weekly_plan_target": weekly_target.team_weekly_plan_target if weekly_target else 0,
                     "has_weekly_targets_set": weekly_target is not None
@@ -328,20 +529,65 @@ class GetTargets(APIView):
 
 
 # ---------------------------------------------------
-# GET TEAMS BY IR
+# GET TEAMS BY IR (with hierarchy check)
 # ---------------------------------------------------
 class GetTeamsByIR(APIView):
     def get(self, request, ir_id):
+        requester_ir_id = request.GET.get("requester_ir_id")
+        
+        # If requester provided, verify they can view this IR
+        if requester_ir_id:
+            try:
+                requester = Ir.objects.get(ir_id=requester_ir_id)
+                target_ir = Ir.objects.get(ir_id=ir_id)
+                if not requester.can_view_ir(target_ir):
+                    return Response(
+                        {"detail": "Not authorized to view this IR's teams"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            except Ir.DoesNotExist:
+                return Response(
+                    {"detail": "IR not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        
         teams = Team.objects.filter(teammember__ir_id=ir_id).distinct()
-        return Response(TeamSerializer(teams, many=True).data)
+        
+        result = []
+        for team in teams:
+            result.append({
+                **TeamSerializer(team).data,
+                "created_by_id": team.created_by.ir_id if team.created_by else None,
+                "created_by_name": team.created_by.ir_name if team.created_by else None,
+            })
+        
+        return Response(result)
 
 
 # ---------------------------------------------------
-# TEAM INFO TOTAL CHECK
+# TEAM INFO TOTAL CHECK (with hierarchy check)
 # ---------------------------------------------------
 class GetTeamInfoTotal(APIView):
     def get(self, request, team_id):
+        requester_ir_id = request.GET.get("requester_ir_id")
+        
         team = get_object_or_404(Team, id=team_id)
+        
+        # Check hierarchy permission if requester provided
+        if requester_ir_id:
+            try:
+                requester = Ir.objects.get(ir_id=requester_ir_id)
+                viewable_teams = get_viewable_teams_for_ir(requester)
+                if team not in viewable_teams:
+                    return Response(
+                        {"detail": "Not authorized to view this team"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            except Ir.DoesNotExist:
+                return Response(
+                    {"detail": "Requester IR not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
 
         # Get current week info (Saturday-Friday cycle)
         week_number, year, week_start, week_end = get_saturday_friday_week_info()
@@ -393,6 +639,8 @@ class GetTeamInfoTotal(APIView):
         return Response({
             "team_id": team.id,
             "team_name": team.name,
+            "created_by_id": team.created_by.ir_id if team.created_by else None,
+            "created_by_name": team.created_by.ir_name if team.created_by else None,
             "week_number": week_number,
             "year": year,
             "running_weekly_info_done": team.weekly_info_done,
@@ -405,12 +653,29 @@ class GetTeamInfoTotal(APIView):
 
 
 # ---------------------------------------------------
-# GET UV COUNT FOR IR
+# GET UV COUNT FOR IR (with hierarchy check)
 # ---------------------------------------------------
 class GetUVCount(APIView):
     def get(self, request, ir_id):
+        requester_ir_id = request.GET.get("requester_ir_id")
+        
         try:
             ir = get_object_or_404(Ir, ir_id=ir_id)
+            
+            # Check hierarchy permission if requester provided
+            if requester_ir_id:
+                try:
+                    requester = Ir.objects.get(ir_id=requester_ir_id)
+                    if not requester.can_view_ir(ir):
+                        return Response(
+                            {"detail": "Not authorized to view this IR's UV count"},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                except Ir.DoesNotExist:
+                    return Response(
+                        {"detail": "Requester IR not found"},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
             
             return Response({
                 "ir_id": ir.ir_id,
@@ -426,12 +691,30 @@ class GetUVCount(APIView):
 
 
 # ---------------------------------------------------
-# GET TEAM UV TOTAL
+# GET TEAM UV TOTAL (with hierarchy check)
 # ---------------------------------------------------
 class GetTeamUVTotal(APIView):
     def get(self, request, team_id):
+        requester_ir_id = request.GET.get("requester_ir_id")
+        
         try:
             team = get_object_or_404(Team, id=team_id)
+            
+            # Check hierarchy permission if requester provided
+            if requester_ir_id:
+                try:
+                    requester = Ir.objects.get(ir_id=requester_ir_id)
+                    viewable_teams = get_viewable_teams_for_ir(requester)
+                    if team not in viewable_teams:
+                        return Response(
+                            {"detail": "Not authorized to view this team's UV total"},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                except Ir.DoesNotExist:
+                    return Response(
+                        {"detail": "Requester IR not found"},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
             
             links = TeamMember.objects.filter(team=team)
             member_ids = links.values_list("ir_id", flat=True)
@@ -466,6 +749,8 @@ class GetTeamUVTotal(APIView):
             response_data = {
                 "team_id": team.id,
                 "team_name": team.name,
+                "created_by_id": team.created_by.ir_id if team.created_by else None,
+                "created_by_name": team.created_by.ir_name if team.created_by else None,
                 "team_uv_total": team_uv_total,
                 "member_count": len(members),
                 "members": members,
@@ -481,3 +766,226 @@ class GetTeamUVTotal(APIView):
         except Exception:
             logging.exception("Error fetching team UV total for team_id=%s", team_id)
             return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ===================================================
+# NEW HIERARCHY-BASED ENDPOINTS
+# ===================================================
+
+# ---------------------------------------------------
+# GET VISIBLE TEAMS (All teams visible to an IR)
+# ---------------------------------------------------
+class GetVisibleTeams(APIView):
+    def get(self, request, ir_id):
+        try:
+            ir = Ir.objects.get(ir_id=ir_id)
+        except Ir.DoesNotExist:
+            return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
+        
+        viewable_teams = get_viewable_teams_for_ir(ir)
+        
+        # Get current week info
+        week_number, year, week_start, week_end = get_saturday_friday_week_info()
+        
+        teams_data = []
+        for team in viewable_teams:
+            # Get team members
+            members = TeamMember.objects.filter(team=team).select_related('ir')
+            member_irs = [m.ir for m in members]
+            
+            # Calculate achieved (sum of all member counts)
+            info_achieved = sum(m.info_count or 0 for m in member_irs)
+            plan_achieved = sum(m.plan_count or 0 for m in member_irs)
+            uv_achieved = sum(m.uv_count or 0 for m in member_irs)
+            
+            # Get weekly targets
+            team_target = WeeklyTarget.objects.filter(
+                team=team, week_number=week_number, year=year
+            ).first()
+            
+            # Check if requester can edit this team
+            can_edit = False
+            if team.created_by:
+                can_edit = ir.can_view_ir(team.created_by)
+            
+            # Check if IR is a member
+            is_member = any(m.ir_id == ir.ir_id for m in members)
+            
+            teams_data.append({
+                "team_id": team.id,
+                "team_name": team.name,
+                "created_by_id": team.created_by.ir_id if team.created_by else None,
+                "created_by_name": team.created_by.ir_name if team.created_by else None,
+                "member_count": len(member_irs),
+                "is_member": is_member,
+                "can_edit": can_edit,
+                "targets": {
+                    "info_target": team_target.team_weekly_info_target if team_target else 0,
+                    "plan_target": team_target.team_weekly_plan_target if team_target else 0,
+                    "uv_target": team_target.team_weekly_uv_target if team_target else 0,
+                },
+                "achieved": {
+                    "info_achieved": info_achieved,
+                    "plan_achieved": plan_achieved,
+                    "uv_achieved": uv_achieved,
+                }
+            })
+        
+        return Response({
+            "ir_id": ir.ir_id,
+            "ir_name": ir.ir_name,
+            "hierarchy_level": ir.hierarchy_level,
+            "week_number": week_number,
+            "year": year,
+            "total_visible_teams": len(teams_data),
+            "teams": teams_data
+        })
+
+
+# ---------------------------------------------------
+# GET DOWNLINE DATA (Aggregated stats for all downlines)
+# ---------------------------------------------------
+class GetDownlineData(APIView):
+    def get(self, request, ir_id):
+        try:
+            ir = Ir.objects.get(ir_id=ir_id)
+        except Ir.DoesNotExist:
+            return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Get all IRs this user can view
+        viewable_irs = ir.get_viewable_irs()
+        downlines = ir.get_all_downlines()
+        direct_downlines = ir.get_direct_downlines()
+        
+        # Aggregate stats
+        total_info = sum(i.info_count or 0 for i in viewable_irs)
+        total_plan = sum(i.plan_count or 0 for i in viewable_irs)
+        total_uv = sum(i.uv_count or 0 for i in viewable_irs)
+        
+        # Get teams created by viewable IRs
+        viewable_teams = Team.objects.filter(created_by__in=viewable_irs)
+        
+        # Get current week info
+        week_number, year, week_start, week_end = get_saturday_friday_week_info()
+        
+        return Response({
+            "ir_id": ir.ir_id,
+            "ir_name": ir.ir_name,
+            "hierarchy_level": ir.hierarchy_level,
+            "week_number": week_number,
+            "year": year,
+            "counts": {
+                "total_viewable_irs": viewable_irs.count(),
+                "total_downlines": downlines.count(),
+                "direct_downlines": direct_downlines.count(),
+                "teams_created_by_downlines": viewable_teams.count(),
+            },
+            "aggregates": {
+                "total_info_count": total_info,
+                "total_plan_count": total_plan,
+                "total_uv_count": total_uv,
+            },
+            "personal": {
+                "info_count": ir.info_count,
+                "plan_count": ir.plan_count,
+                "uv_count": ir.uv_count,
+            }
+        })
+
+
+# ---------------------------------------------------
+# GET DIRECT DOWNLINES (List of direct children)
+# ---------------------------------------------------
+class GetDirectDownlines(APIView):
+    def get(self, request, ir_id):
+        try:
+            ir = Ir.objects.get(ir_id=ir_id)
+        except Ir.DoesNotExist:
+            return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
+        
+        direct_downlines = ir.get_direct_downlines()
+        
+        data = []
+        for downline in direct_downlines:
+            # Count how many downlines each direct downline has
+            sub_downlines_count = downline.get_all_downlines().count()
+            
+            data.append({
+                "ir_id": downline.ir_id,
+                "ir_name": downline.ir_name,
+                "ir_email": downline.ir_email,
+                "ir_access_level": downline.ir_access_level,
+                "hierarchy_level": downline.hierarchy_level,
+                "info_count": downline.info_count,
+                "plan_count": downline.plan_count,
+                "uv_count": downline.uv_count,
+                "sub_downlines_count": sub_downlines_count,
+                "status": downline.status,
+            })
+        
+        return Response({
+            "ir_id": ir.ir_id,
+            "ir_name": ir.ir_name,
+            "hierarchy_level": ir.hierarchy_level,
+            "direct_downlines_count": len(data),
+            "direct_downlines": data
+        })
+
+
+# ---------------------------------------------------
+# GET HIERARCHY TREE (Full tree structure below an IR)
+# ---------------------------------------------------
+class GetHierarchyTree(APIView):
+    def get(self, request, ir_id):
+        max_depth = request.GET.get("max_depth")
+        try:
+            max_depth = int(max_depth) if max_depth else None
+        except ValueError:
+            max_depth = None
+        
+        try:
+            ir = Ir.objects.get(ir_id=ir_id)
+        except Ir.DoesNotExist:
+            return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
+        
+        def build_tree(node, current_depth=0):
+            """Recursively build tree structure"""
+            if max_depth is not None and current_depth >= max_depth:
+                children_count = node.get_direct_downlines().count()
+                return {
+                    "ir_id": node.ir_id,
+                    "ir_name": node.ir_name,
+                    "hierarchy_level": node.hierarchy_level,
+                    "ir_access_level": node.ir_access_level,
+                    "info_count": node.info_count,
+                    "plan_count": node.plan_count,
+                    "uv_count": node.uv_count,
+                    "children_count": children_count,
+                    "children": f"... {children_count} children (max_depth reached)"
+                }
+            
+            children = node.get_direct_downlines()
+            return {
+                "ir_id": node.ir_id,
+                "ir_name": node.ir_name,
+                "hierarchy_level": node.hierarchy_level,
+                "ir_access_level": node.ir_access_level,
+                "info_count": node.info_count,
+                "plan_count": node.plan_count,
+                "uv_count": node.uv_count,
+                "children_count": children.count(),
+                "children": [build_tree(child, current_depth + 1) for child in children]
+            }
+        
+        tree = build_tree(ir)
+        
+        # Get total counts
+        all_downlines = ir.get_all_downlines()
+        
+        return Response({
+            "root_ir_id": ir.ir_id,
+            "root_ir_name": ir.ir_name,
+            "total_downlines": all_downlines.count(),
+            "max_depth_in_tree": all_downlines.aggregate(max_level=Count('hierarchy_level'))['max_level'] or 0,
+            "tree": tree
+        })
