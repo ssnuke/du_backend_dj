@@ -327,7 +327,8 @@ class Ir(models.Model):
             member_of = Team.objects.filter(teammember__ir=self)
             return (created_by_subtree | member_of).distinct()
         
-        if self.ir_access_level == AccessLevel.LS:
+        # LS, GC, IR can view teams they are members of
+        if self.ir_access_level in [AccessLevel.LS, AccessLevel.GC, AccessLevel.IR]:
             return Team.objects.filter(teammember__ir=self)
         
         return Team.objects.none()
