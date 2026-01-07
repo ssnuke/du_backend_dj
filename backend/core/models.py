@@ -363,10 +363,12 @@ class Ir(models.Model):
         """Get all teams this IR can view"""
         from core.models import Team, TeamMember
         
-        if self.has_full_access():
+        # ADMIN has full access to all teams
+        if self.ir_access_level == AccessLevel.ADMIN:
             return Team.objects.all()
         
-        if self.ir_access_level == AccessLevel.LDC:
+        # CTC and LDC can view teams in their subtree + teams they're members of
+        if self.ir_access_level in [AccessLevel.CTC, AccessLevel.LDC]:
             viewable_irs = self.get_subtree_irs()
             created_by_subtree = Team.objects.filter(created_by__in=viewable_irs)
             member_of = Team.objects.filter(teammember__ir=self)
