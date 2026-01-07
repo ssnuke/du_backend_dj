@@ -104,6 +104,41 @@ class Ir(models.Model):
             self.hierarchy_level = 0
         super().save(*args, **kwargs)
 
+    def delete(self, *args, **kwargs):
+        """
+        Override delete to reconnect children to grandparent before deletion.
+        This ensures hierarchy integrity is maintained.
+        """
+        grandparent = self.parent_ir  # Could be None if this IR is root
+        
+        # Get all direct children before deletion
+        direct_children = list(self.direct_downlines.all())
+        
+        # Reconnect each child to grandparent and update their paths
+        for child in direct_children:
+            child.parent_ir = grandparent
+            child.save()  # This triggers save() which recalculates path & level
+            
+            # Now recursively update all descendants of this child
+            # because their paths still contain the deleted IR's id
+            self._update_descendant_paths(child)
+        
+        # Now safe to delete this IR
+        super().delete(*args, **kwargs)
+
+    def _update_descendant_paths(self, parent_ir):
+        """
+        Recursively update hierarchy_path for all descendants of parent_ir.
+        Called after parent_ir's path has been updated.
+        """
+        for child in parent_ir.direct_downlines.all():
+            # Recalculate path based on updated parent
+            child.hierarchy_path = f"{parent_ir.hierarchy_path}{child.ir_id}/"
+            child.hierarchy_level = parent_ir.hierarchy_level + 1
+            child.save(update_fields=['hierarchy_path', 'hierarchy_level'])
+            # Recurse to update grandchildren
+            self._update_descendant_paths(child)
+
     # ========== HIERARCHY HELPER METHODS ==========
 
     def get_all_downlines(self):
@@ -238,16 +273,26 @@ class Ir(models.Model):
         """
         Check if this IR can edit a team (add members, update, delete)
         - ADMIN/CTC: Can edit all teams
-        - LDC: Can edit only teams they created
+        - LDC: Can edit teams they created OR teams where they are a member with LDC role
         - LS/GC/IR: Cannot edit teams
         """
+        from core.models import TeamMember
+        
         # ADMIN/CTC can edit all teams
         if self.has_full_access():
             return True
         
-        # LDC can edit only teams they created
+        # LDC can edit teams they created OR teams where they are an LDC member
         if self.ir_access_level == AccessLevel.LDC:
-            return team.created_by and team.created_by.ir_id == self.ir_id
+            # Check if they created the team
+            if team.created_by and team.created_by.ir_id == self.ir_id:
+                return True
+            # Check if they are an LDC member of the team
+            return TeamMember.objects.filter(
+                team=team, 
+                ir=self, 
+                role=TeamRole.LDC
+            ).exists()
         
         # Others cannot edit teams
         return False

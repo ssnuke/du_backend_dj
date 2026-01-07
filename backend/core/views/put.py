@@ -109,6 +109,85 @@ class UpdateIrDetails(APIView):
 
 
 # ---------------------------------------------------
+# UPDATE PARENT IR (without remapping children paths)
+# ---------------------------------------------------
+class UpdateParentIR(APIView):
+    """
+    Updates the parent_ir of an IR without remapping children's paths.
+    Only the target IR's hierarchy_path and hierarchy_level are updated.
+    Children retain their existing parent_ir (still pointing to this IR).
+    
+    Request body:
+    - acting_ir_id: The IR performing the action (required)
+    - new_parent_ir_id: The new parent IR ID (optional, null to make root)
+    """
+    def put(self, request, ir_id):
+        # Get the IR to update
+        ir = get_object_or_404(Ir, ir_id=ir_id)
+        
+        # Get the acting IR for authorization
+        acting_ir_id = request.data.get("acting_ir_id")
+        if not acting_ir_id:
+            return Response(
+                {"detail": "acting_ir_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        acting_ir = get_object_or_404(Ir, ir_id=acting_ir_id)
+        
+        # Only ADMIN/CTC can change parent relationships
+        if not acting_ir.has_full_access():
+            return Response(
+                {"detail": "Not authorized. Only ADMIN/CTC can change parent relationships."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Get the new parent IR (can be null to make this IR a root)
+        new_parent_ir_id = request.data.get("new_parent_ir_id")
+        new_parent = None
+        
+        if new_parent_ir_id:
+            new_parent = get_object_or_404(Ir, ir_id=new_parent_ir_id)
+            
+            # Prevent setting parent to self
+            if new_parent.ir_id == ir.ir_id:
+                return Response(
+                    {"detail": "Cannot set an IR as its own parent"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Prevent circular reference - new parent cannot be a descendant
+            if ir.is_in_subtree(new_parent):
+                return Response(
+                    {"detail": "Cannot set a descendant as parent (would create circular reference)"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        old_parent_id = ir.parent_ir.ir_id if ir.parent_ir else None
+        old_path = ir.hierarchy_path
+        old_level = ir.hierarchy_level
+        
+        # Update the parent (save() will recalculate path and level for this IR only)
+        ir.parent_ir = new_parent
+        ir.save()
+        
+        return Response(
+            {
+                "message": "Parent IR updated successfully",
+                "ir_id": ir.ir_id,
+                "old_parent_ir_id": old_parent_id,
+                "new_parent_ir_id": new_parent.ir_id if new_parent else None,
+                "old_hierarchy_path": old_path,
+                "new_hierarchy_path": ir.hierarchy_path,
+                "old_hierarchy_level": old_level,
+                "new_hierarchy_level": ir.hierarchy_level,
+                "note": "Children paths were NOT remapped. They still point to this IR."
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+# ---------------------------------------------------
 # UPDATE INFO DETAIL (with role-based check)
 # ---------------------------------------------------
 class UpdateInfoDetail(APIView):
