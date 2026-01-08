@@ -252,7 +252,7 @@ class Ir(models.Model):
         """
         Check if this IR can view a team's data
         - ADMIN: Can view all teams
-        - CTC: Can view teams in subtree or teams they're a member of
+        - CTC: Can view teams in subtree only
         - LDC: Can view teams in subtree or teams they're a member of
         - LS: Can view teams they're a member of
         - GC/IR: Cannot view teams
@@ -263,8 +263,14 @@ class Ir(models.Model):
         if self.ir_access_level == AccessLevel.ADMIN:
             return True
         
-        # CTC and LDC can view teams created by IRs in their subtree OR teams they're a member of
-        if self.ir_access_level in [AccessLevel.CTC, AccessLevel.LDC]:
+        # CTC can only view teams created by IRs in their subtree
+        if self.ir_access_level == AccessLevel.CTC:
+            if team.created_by and self.is_in_subtree(team.created_by):
+                return True
+            return False
+        
+        # LDC can view teams created by IRs in their subtree OR teams they're a member of
+        if self.ir_access_level == AccessLevel.LDC:
             if team.created_by and self.is_in_subtree(team.created_by):
                 return True
             return TeamMember.objects.filter(team=team, ir=self).exists()
@@ -386,8 +392,13 @@ class Ir(models.Model):
         if self.ir_access_level == AccessLevel.ADMIN:
             return Team.objects.all()
         
-        # CTC and LDC can view teams in their subtree + teams they're members of
-        if self.ir_access_level in [AccessLevel.CTC, AccessLevel.LDC]:
+        # CTC can only view teams in their subtree
+        if self.ir_access_level == AccessLevel.CTC:
+            viewable_irs = self.get_subtree_irs()
+            return Team.objects.filter(created_by__in=viewable_irs)
+        
+        # LDC can view teams in their subtree + teams they're members of
+        if self.ir_access_level == AccessLevel.LDC:
             viewable_irs = self.get_subtree_irs()
             created_by_subtree = Team.objects.filter(created_by__in=viewable_irs)
             member_of = Team.objects.filter(teammember__ir=self)
