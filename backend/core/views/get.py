@@ -195,7 +195,7 @@ class GetLDCs(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-        data = [{"ir_id": i.ir_id, "ir_name": i.ir_name, "id": i.ir_id} for i in ldcs]
+        data = [{"ir_id": i.ir_id, "ir_name": i.ir_name, "id": i.ir_id, "ir_access_level": i.ir_access_level} for i in ldcs]
         return Response(data)
 
 
