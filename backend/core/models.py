@@ -191,7 +191,8 @@ class Ir(models.Model):
     def can_view_ir(self, target_ir):
         """
         Check if this IR can view target_ir's data based on role
-        - ADMIN/CTC: Can view everyone
+        - ADMIN: Can view everyone
+        - CTC: Can view subtree
         - LDC: Can view self + subtree
         - LS: Can view self + team members
         - GC/IR: Can view only self
@@ -200,12 +201,12 @@ class Ir(models.Model):
         if self.ir_id == target_ir.ir_id:
             return True
         
-        # ADMIN/CTC can view everyone
-        if self.has_full_access():
+        # ADMIN can view everyone
+        if self.ir_access_level == AccessLevel.ADMIN:
             return True
         
-        # LDC can view their subtree
-        if self.ir_access_level == AccessLevel.LDC:
+        # CTC and LDC can view their subtree
+        if self.ir_access_level in [AccessLevel.CTC, AccessLevel.LDC]:
             return self.is_in_subtree(target_ir)
         
         # LS can view team members
@@ -218,7 +219,8 @@ class Ir(models.Model):
     def can_edit_ir(self, target_ir):
         """
         Check if this IR can edit target_ir's data
-        - ADMIN/CTC: Can edit everyone
+        - ADMIN: Can edit everyone
+        - CTC: Can edit subtree
         - LDC: Can edit team members in their own created teams
         - LS: Can add info/plan/UV for team members
         - GC/IR: Can edit only self
@@ -227,9 +229,13 @@ class Ir(models.Model):
         if self.ir_id == target_ir.ir_id:
             return True
         
-        # ADMIN/CTC can edit everyone
-        if self.has_full_access():
+        # ADMIN can edit everyone
+        if self.ir_access_level == AccessLevel.ADMIN:
             return True
+        
+        # CTC can edit members in their subtree
+        if self.ir_access_level == AccessLevel.CTC:
+            return self.is_in_subtree(target_ir)
         
         # LDC can edit members of teams they created
         if self.ir_access_level == AccessLevel.LDC:
@@ -245,19 +251,20 @@ class Ir(models.Model):
     def can_view_team(self, team):
         """
         Check if this IR can view a team's data
-        - ADMIN/CTC: Can view all teams
+        - ADMIN: Can view all teams
+        - CTC: Can view teams in subtree or teams they're a member of
         - LDC: Can view teams in subtree or teams they're a member of
         - LS: Can view teams they're a member of
         - GC/IR: Cannot view teams
         """
         from core.models import TeamMember
         
-        # ADMIN/CTC can view all teams
-        if self.has_full_access():
+        # ADMIN can view all teams
+        if self.ir_access_level == AccessLevel.ADMIN:
             return True
         
-        # LDC can view teams created by IRs in their subtree OR teams they're a member of
-        if self.ir_access_level == AccessLevel.LDC:
+        # CTC and LDC can view teams created by IRs in their subtree OR teams they're a member of
+        if self.ir_access_level in [AccessLevel.CTC, AccessLevel.LDC]:
             if team.created_by and self.is_in_subtree(team.created_by):
                 return True
             return TeamMember.objects.filter(team=team, ir=self).exists()
@@ -272,15 +279,22 @@ class Ir(models.Model):
     def can_edit_team(self, team):
         """
         Check if this IR can edit a team (add members, update, delete)
-        - ADMIN/CTC: Can edit all teams
+        - ADMIN: Can edit all teams
+        - CTC: Can edit teams in subtree
         - LDC: Can edit teams they created OR teams where they are a member with LDC role
         - LS/GC/IR: Cannot edit teams
         """
         from core.models import TeamMember
         
-        # ADMIN/CTC can edit all teams
-        if self.has_full_access():
+        # ADMIN can edit all teams
+        if self.ir_access_level == AccessLevel.ADMIN:
             return True
+        
+        # CTC can edit teams created by IRs in their subtree
+        if self.ir_access_level == AccessLevel.CTC:
+            if team.created_by and self.is_in_subtree(team.created_by):
+                return True
+            return False
         
         # LDC can edit teams they created OR teams where they are an LDC member
         if self.ir_access_level == AccessLevel.LDC:
@@ -300,7 +314,8 @@ class Ir(models.Model):
     def can_add_data_for_ir(self, target_ir):
         """
         Check if this IR can add info/plan/UV for target_ir
-        - ADMIN/CTC: Can add for everyone
+        - ADMIN: Can add for everyone
+        - CTC: Can add for subtree
         - LDC: Can add for members of teams they created
         - LS: Can add for team members (in teams they belong to)
         - GC/IR: Can add only for self
@@ -309,9 +324,13 @@ class Ir(models.Model):
         if self.ir_id == target_ir.ir_id:
             return True
         
-        # ADMIN/CTC can add for everyone
-        if self.has_full_access():
+        # ADMIN can add for everyone
+        if self.ir_access_level == AccessLevel.ADMIN:
             return True
+        
+        # CTC can add for members in their subtree
+        if self.ir_access_level == AccessLevel.CTC:
+            return self.is_in_subtree(target_ir)
         
         # LDC can add for members of teams they created
         if self.ir_access_level == AccessLevel.LDC:
@@ -340,12 +359,12 @@ class Ir(models.Model):
         """Get all IRs this user can view based on role"""
         from core.models import TeamMember
         
-        # ADMIN/CTC can view all
-        if self.has_full_access():
+        # ADMIN can view all
+        if self.ir_access_level == AccessLevel.ADMIN:
             return Ir.objects.filter(status=True)
         
-        # LDC can view subtree
-        if self.ir_access_level == AccessLevel.LDC:
+        # CTC and LDC can view subtree
+        if self.ir_access_level in [AccessLevel.CTC, AccessLevel.LDC]:
             return self.get_subtree_irs()
         
         # LS can view self + team members
@@ -384,9 +403,16 @@ class Ir(models.Model):
         """Get all teams this IR can edit"""
         from core.models import Team
         
-        if self.has_full_access():
+        # ADMIN can edit all teams
+        if self.ir_access_level == AccessLevel.ADMIN:
             return Team.objects.all()
         
+        # CTC can edit teams in their subtree
+        if self.ir_access_level == AccessLevel.CTC:
+            viewable_irs = self.get_subtree_irs()
+            return Team.objects.filter(created_by__in=viewable_irs)
+        
+        # LDC can edit teams they created
         if self.ir_access_level == AccessLevel.LDC:
             return Team.objects.filter(created_by=self)
         
@@ -398,9 +424,15 @@ class Ir(models.Model):
         
         result_ids = {self.ir_id}
         
-        if self.has_full_access():
+        # ADMIN can add for all
+        if self.ir_access_level == AccessLevel.ADMIN:
             return Ir.objects.filter(status=True)
         
+        # CTC can add for subtree
+        if self.ir_access_level == AccessLevel.CTC:
+            return self.get_subtree_irs()
+        
+        # LDC can add for members of teams they created
         if self.ir_access_level == AccessLevel.LDC:
             my_created_teams = Team.objects.filter(created_by=self)
             team_member_ids = TeamMember.objects.filter(
