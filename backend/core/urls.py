@@ -53,6 +53,7 @@ from core.views.delete import (
     DeleteInfoDetail,
     DeletePlanDetail,
 )
+from core.views.move_ir import MoveIrToTeam
 
 
 urlpatterns = [
@@ -97,6 +98,7 @@ urlpatterns = [
     path("update_plan_detail/<int:plan_id>/", UpdatePlanDetail.as_view()),
     path("update_team_name/<int:team_id>/", UpdateTeamName.as_view()),
     path("update_parent_ir/<str:ir_id>/", UpdateParentIR.as_view()),
+    path("move_ir_to_team/", MoveIrToTeam.as_view()),
     #DELETE endpoints
     path("delete_team/<int:team_id>/", DeleteTeam.as_view()),
     path("remove_ir_from_team/<int:team_id>/<str:ir_id>/", RemoveIrFromTeam.as_view()),
