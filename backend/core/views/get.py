@@ -392,11 +392,24 @@ class GetTargetsDashboard(APIView):
             year=year
         ).first()
 
+        # Calculate current week's info and plan counts
+        current_week_info_count = InfoDetail.objects.filter(
+            ir_id=ir.ir_id,
+            info_date__date__gte=week_start,
+            info_date__date__lte=week_end
+        ).count()
+        
+        current_week_plan_count = PlanDetail.objects.filter(
+            ir_id=ir.ir_id,
+            plan_date__date__gte=week_start,
+            plan_date__date__lte=week_end
+        ).count()
+
         personal = {
             "weekly_info_target": ir_weekly_target.ir_weekly_info_target if ir_weekly_target else 0,
             "weekly_plan_target": ir_weekly_target.ir_weekly_plan_target if ir_weekly_target else 0,
-            "info_count": ir.info_count,
-            "plan_count": ir.plan_count,
+            "info_count": current_week_info_count,
+            "plan_count": current_week_plan_count,
             "week_number": week_number,
             "year": year,
             "uv_count": ir.uv_count if ir.ir_access_level in [2, 3] else None,
@@ -416,6 +429,8 @@ class GetTargetsDashboard(APIView):
             members = Ir.objects.filter(
                 teammember__team=team
             ).distinct()
+            
+            member_ids = members.values_list('ir_id', flat=True)
 
             # Get weekly targets for this team
             team_weekly_target = WeeklyTarget.objects.filter(
@@ -423,6 +438,21 @@ class GetTargetsDashboard(APIView):
                 week_number=week_number,
                 year=year
             ).first()
+
+            # Calculate current week's progress for all team members
+            team_info_progress = InfoDetail.objects.filter(
+                ir_id__in=member_ids,
+                info_date__date__gte=week_start,
+                info_date__date__lte=week_end
+            ).count()
+            
+            team_plan_progress = PlanDetail.objects.filter(
+                ir_id__in=member_ids,
+                plan_date__date__gte=week_start,
+                plan_date__date__lte=week_end
+            ).count()
+            
+            team_uv_progress = sum(m.uv_count or 0 for m in members)
 
             # Check if requester can edit this team (created by someone in their subtree)
             can_edit = False
@@ -440,11 +470,9 @@ class GetTargetsDashboard(APIView):
                 "weekly_info_target": team_weekly_target.team_weekly_info_target if team_weekly_target else 0,
                 "weekly_plan_target": team_weekly_target.team_weekly_plan_target if team_weekly_target else 0,
                 "weekly_uv_target": team_weekly_target.team_weekly_uv_target if team_weekly_target else 0,
-                "info_progress": sum(m.info_count or 0 for m in members),
-                "plan_progress": sum(m.plan_count or 0 for m in members),
-                "uv_progress": sum(
-                    m.uv_count or 0 for m in members
-                ),
+                "info_progress": team_info_progress,
+                "plan_progress": team_plan_progress,
+                "uv_progress": team_uv_progress,
             })
 
         return Response({"personal": personal, "teams": teams_progress})
@@ -813,10 +841,21 @@ class GetVisibleTeams(APIView):
             # Get team members
             members = TeamMember.objects.filter(team=team).select_related('ir')
             member_irs = [m.ir for m in members]
+            member_ir_ids = [m.ir_id for m in member_irs]
             
-            # Calculate achieved (sum of all member counts)
-            info_achieved = sum(m.info_count or 0 for m in member_irs)
-            plan_achieved = sum(m.plan_count or 0 for m in member_irs)
+            # Calculate achieved for current week only
+            info_achieved = InfoDetail.objects.filter(
+                ir_id__in=member_ir_ids,
+                info_date__date__gte=week_start,
+                info_date__date__lte=week_end
+            ).count()
+            
+            plan_achieved = PlanDetail.objects.filter(
+                ir_id__in=member_ir_ids,
+                plan_date__date__gte=week_start,
+                plan_date__date__lte=week_end
+            ).count()
+            
             uv_achieved = sum(m.uv_count or 0 for m in member_irs)
             
             # Get weekly targets
