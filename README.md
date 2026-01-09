@@ -17,7 +17,7 @@
 |-------|-------------|
 | `ADMIN` | Full access |
 | `CTC` | Full access (like admin) |
-| `LDC` | Can manage own team, view subtree |
+| `LDC` | Can manage teams (created or member as LDC), view subtree |
 | `LS` | Can add data for team members |
 | `GC` | View own data only |
 | `IR` | View own data only |
@@ -1223,10 +1223,12 @@ GET /api/health/
 |------|-------|----------|------------|------------|--------------|
 | ADMIN | 1 | All | All | All | All |
 | CTC | 2 | All | All | All | All |
-| LDC | 3 | Subtree | Subtree + Member | Own Created | Own Team Members |
+| LDC | 3 | Subtree | Subtree + Member | Own Created + LDC Member Of | Own Team Members |
 | LS | 4 | Team Members | Member Of | None | Team Members |
 | GC | 5 | Self Only | None | None | Self Only |
 | IR | 6 | Self Only | None | None | Self Only |
+
+**Note:** LDCs can now edit (add members, update, delete) teams that they either created OR teams where they are added as an LDC member. This allows LDCs added to a team to manage that team collaboratively.
 
 ---
 
