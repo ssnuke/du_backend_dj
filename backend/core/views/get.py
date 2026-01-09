@@ -230,8 +230,8 @@ class GetTeamsByLDC(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
         
-        # Return teams the LDC can edit (created by them OR where they are LDC member)
-        teams = ldc.get_teams_can_edit()
+        # Return teams the LDC can view (created by them, in their subtree, OR where they are a member)
+        teams = ldc.get_teams_can_view()
 
         return Response(TeamSerializer(teams, many=True).data)
 
