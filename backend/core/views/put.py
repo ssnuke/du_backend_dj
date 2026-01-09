@@ -356,6 +356,166 @@ class SetTargetsPut(APIView):
 
 
 # ---------------------------------------------------
+# UPDATE WEEKLY TARGETS (PATCH) - Update Info/Plan/UV targets
+# ---------------------------------------------------
+class UpdateWeeklyTargets(APIView):
+    """
+    Update weekly info, plan, and UV targets for the current week.
+    Only updates existing WeeklyTarget records for IR or Team.
+    """
+    def patch(self, request):
+        from core.utils.dates import get_saturday_friday_week_info
+        from core.models import WeeklyTarget
+        import logging
+        
+        acting_ir_id = request.data.get("acting_ir_id")
+        if not acting_ir_id:
+            return Response(
+                {"detail": "acting_ir_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        acting_ir = get_object_or_404(Ir, ir_id=acting_ir_id)
+        
+        # Only ADMIN, CTC, LDC can update targets
+        if acting_ir.ir_access_level not in [1, 2, 3]:
+            return Response(
+                {"detail": "Not authorized. Only ADMIN, CTC, and LDC can update targets"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Get current week info
+        week_number, year, week_start, week_end = get_saturday_friday_week_info()
+        
+        updated = {
+            "week_number": week_number,
+            "year": year,
+            "week_start": week_start.isoformat(),
+            "week_end": week_end.isoformat()
+        }
+        
+        try:
+            # Update IR weekly targets
+            if request.data.get("ir_id"):
+                ir = get_object_or_404(Ir, ir_id=request.data["ir_id"])
+                
+                # Permission check
+                if not acting_ir.can_add_data_for_ir(ir):
+                    return Response(
+                        {"detail": "Not authorized to update targets for this IR"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+                
+                # Get existing weekly target
+                try:
+                    weekly_target = WeeklyTarget.objects.get(
+                        ir=ir,
+                        week_number=week_number,
+                        year=year
+                    )
+                except WeeklyTarget.DoesNotExist:
+                    return Response(
+                        {"detail": "No weekly target found for this IR in current week"},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+                
+                # Update only if provided
+                if request.data.get("weekly_info_target") is not None:
+                    try:
+                        weekly_target.ir_weekly_info_target = int(request.data["weekly_info_target"])
+                    except (ValueError, TypeError):
+                        weekly_target.ir_weekly_info_target = request.data["weekly_info_target"]
+                
+                if request.data.get("weekly_plan_target") is not None:
+                    try:
+                        weekly_target.ir_weekly_plan_target = int(request.data["weekly_plan_target"])
+                    except (ValueError, TypeError):
+                        weekly_target.ir_weekly_plan_target = request.data["weekly_plan_target"]
+                
+                # Update UV target (only for CTC and LDC)
+                if request.data.get("weekly_uv_target") is not None and ir.ir_access_level in [2, 3]:
+                    try:
+                        weekly_target.ir_weekly_uv_target = int(request.data["weekly_uv_target"])
+                    except (ValueError, TypeError):
+                        weekly_target.ir_weekly_uv_target = request.data["weekly_uv_target"]
+                
+                weekly_target.save()
+                updated["ir_id"] = ir.ir_id
+                updated["ir_weekly_info_target"] = weekly_target.ir_weekly_info_target
+                updated["ir_weekly_plan_target"] = weekly_target.ir_weekly_plan_target
+                if ir.ir_access_level in [2, 3]:
+                    updated["ir_weekly_uv_target"] = weekly_target.ir_weekly_uv_target
+            
+            # Update Team weekly targets
+            if request.data.get("team_id"):
+                team_id_raw = request.data.get("team_id")
+                try:
+                    team_id_val = int(team_id_raw)
+                except (ValueError, TypeError):
+                    team_id_val = team_id_raw
+                
+                team = get_object_or_404(Team, id=team_id_val)
+                
+                # Permission check
+                if not acting_ir.can_edit_team(team):
+                    return Response(
+                        {"detail": "Not authorized to update targets for this team"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+                
+                # Get existing weekly target
+                try:
+                    weekly_target = WeeklyTarget.objects.get(
+                        team=team,
+                        week_number=week_number,
+                        year=year
+                    )
+                except WeeklyTarget.DoesNotExist:
+                    return Response(
+                        {"detail": "No weekly target found for this team in current week"},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+                
+                # Update only if provided
+                if request.data.get("team_weekly_info_target") is not None:
+                    try:
+                        weekly_target.team_weekly_info_target = int(request.data["team_weekly_info_target"])
+                    except (ValueError, TypeError):
+                        weekly_target.team_weekly_info_target = request.data["team_weekly_info_target"]
+                
+                if request.data.get("team_weekly_plan_target") is not None:
+                    try:
+                        weekly_target.team_weekly_plan_target = int(request.data["team_weekly_plan_target"])
+                    except (ValueError, TypeError):
+                        weekly_target.team_weekly_plan_target = request.data["team_weekly_plan_target"]
+                
+                # Update UV target for team
+                if request.data.get("team_weekly_uv_target") is not None:
+                    try:
+                        weekly_target.team_weekly_uv_target = int(request.data["team_weekly_uv_target"])
+                    except (ValueError, TypeError):
+                        weekly_target.team_weekly_uv_target = request.data["team_weekly_uv_target"]
+                
+                weekly_target.save()
+                updated["team_id"] = team.id
+                updated["team_weekly_info_target"] = weekly_target.team_weekly_info_target
+                updated["team_weekly_plan_target"] = weekly_target.team_weekly_plan_target
+                updated["team_weekly_uv_target"] = weekly_target.team_weekly_uv_target
+            
+            return Response(
+                {"message": "Weekly targets updated successfully", "updated": updated},
+                status=status.HTTP_200_OK
+            )
+        
+        except Exception as e:
+            logging.exception("Error updating weekly targets")
+            return Response(
+                {"detail": "Internal server error"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+# ---------------------------------------------------
 # UPDATE TEAM NAME (PATCH) (with role-based check)
 # ---------------------------------------------------
 class UpdateTeamName(APIView):
