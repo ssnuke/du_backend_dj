@@ -49,7 +49,9 @@ def get_saturday_friday_week_info(now: datetime | None = None) -> tuple[int, int
 def get_current_week_start(now: datetime | None = None) -> datetime:
     """
     Compute the current week start datetime using
-    Friday 21:31 IST as the week boundary.
+    Friday 21:30 IST (9:30 PM) as the week boundary.
+    
+    Week starts at Friday 9:30 PM and ends next Friday 9:29:59 PM.
 
     Returns:
         timezone-aware datetime in IST
@@ -69,12 +71,12 @@ def get_current_week_start(now: datetime | None = None) -> datetime:
     candidate = now - timedelta(days=days_since_friday)
     candidate = candidate.replace(
         hour=21,
-        minute=31,
+        minute=30,
         second=0,
         microsecond=0,
     )
 
-    # If candidate is in the future, go back a week
+    # If we haven't reached Friday 9:30 PM yet, go back to previous Friday
     if now < candidate:
         candidate -= timedelta(days=7)
 
