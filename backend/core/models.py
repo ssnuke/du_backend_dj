@@ -412,7 +412,7 @@ class Ir(models.Model):
 
     def get_teams_can_edit(self):
         """Get all teams this IR can edit"""
-        from core.models import Team
+        from core.models import Team, TeamMember
         
         # ADMIN can edit all teams
         if self.ir_access_level == AccessLevel.ADMIN:
@@ -423,9 +423,14 @@ class Ir(models.Model):
             viewable_irs = self.get_subtree_irs()
             return Team.objects.filter(created_by__in=viewable_irs)
         
-        # LDC can edit teams they created
+        # LDC can edit teams they created OR teams where they are an LDC member
         if self.ir_access_level == AccessLevel.LDC:
-            return Team.objects.filter(created_by=self)
+            created_teams = Team.objects.filter(created_by=self)
+            ldc_member_teams = Team.objects.filter(
+                teammember__ir=self,
+                teammember__role=TeamRole.LDC
+            )
+            return (created_teams | ldc_member_teams).distinct()
         
         return Team.objects.none()
 

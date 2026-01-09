@@ -206,11 +206,19 @@ class GetTeamsByLDC(APIView):
     def get(self, request, ldc_id):
         requester_ir_id = request.GET.get("requester_ir_id")
         
+        # Get the LDC
+        try:
+            ldc = Ir.objects.get(ir_id=ldc_id)
+        except Ir.DoesNotExist:
+            return Response(
+                {"detail": "LDC not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
         # If requester provided, verify they can view this LDC
         if requester_ir_id:
             try:
                 requester = Ir.objects.get(ir_id=requester_ir_id)
-                ldc = Ir.objects.get(ir_id=ldc_id)
                 if not requester.can_view_ir(ldc):
                     return Response(
                         {"detail": "Not authorized to view this LDC's teams"},
@@ -218,14 +226,12 @@ class GetTeamsByLDC(APIView):
                     )
             except Ir.DoesNotExist:
                 return Response(
-                    {"detail": "IR not found"},
+                    {"detail": "Requester IR not found"},
                     status=status.HTTP_404_NOT_FOUND
                 )
         
-        teams = Team.objects.filter(
-            teammember__ir_id=ldc_id,
-            teammember__role=TeamRole.LDC
-        ).distinct()
+        # Return teams the LDC can edit (created by them OR where they are LDC member)
+        teams = ldc.get_teams_can_edit()
 
         return Response(TeamSerializer(teams, many=True).data)
 
