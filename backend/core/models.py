@@ -505,10 +505,18 @@ class InfoDetail(models.Model):
 
 
 class PlanDetail(models.Model):
+    STATUS_CHOICES = [
+        ('closing_pending', 'Closing Pending'),
+        ('closed', 'Closed'),
+        ('rejected', 'Rejected'),
+        ('uvs_on_counter', "UV's on Counter"),
+    ]
+    
     ir = models.ForeignKey(Ir, on_delete=models.CASCADE)
     plan_date = models.DateTimeField(default=timezone.now)
     plan_name = models.CharField(max_length=255, null=True, blank=True)
     comments = models.TextField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='closing_pending', null=True, blank=True)
 
 
 class TeamWeek(models.Model):

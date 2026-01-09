@@ -353,6 +353,7 @@ class GetPlanDetails(APIView):
         try:
             from_date = request.GET.get("from_date")
             to_date = request.GET.get("to_date")
+            status_filter = request.GET.get("status")
 
             qs = PlanDetail.objects.filter(ir_id=ir_id)
 
@@ -360,6 +361,8 @@ class GetPlanDetails(APIView):
                 qs = qs.filter(plan_date__date__gte=parse_date(from_date))
             if to_date:
                 qs = qs.filter(plan_date__date__lte=parse_date(to_date))
+            if status_filter:
+                qs = qs.filter(status=status_filter)
 
             return Response(PlanDetailSerializer(qs, many=True).data)
         except Ir.DoesNotExist:
