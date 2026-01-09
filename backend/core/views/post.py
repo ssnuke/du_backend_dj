@@ -534,10 +534,21 @@ class AddIrToTeam(APIView):
     def post(self, request):
         requester_ir_id = request.data.get("requester_ir_id")
         ir_id = request.data.get("ir_id")
+        ir_ids = request.data.get("ir_ids")  # Support bulk addition
         team_id = request.data.get("team_id")
         role = request.data.get("role")
 
-        ir = get_object_or_404(Ir, ir_id=ir_id)
+        # Determine if bulk or single addition
+        if ir_ids and isinstance(ir_ids, list):
+            ir_id_list = ir_ids
+        elif ir_id:
+            ir_id_list = [ir_id]
+        else:
+            return Response(
+                {"detail": "Either 'ir_id' or 'ir_ids' must be provided"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         team = get_object_or_404(Team, id=team_id)
         
         # Role-based permission check if requester provided
@@ -558,22 +569,56 @@ class AddIrToTeam(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-        if TeamMember.objects.filter(ir=ir, team=team).exists():
+        added_count = 0
+        skipped_count = 0
+        errors = []
+
+        for ir_id_item in ir_id_list:
+            try:
+                ir = Ir.objects.get(ir_id=ir_id_item)
+                
+                if TeamMember.objects.filter(ir=ir, team=team).exists():
+                    skipped_count += 1
+                    continue
+
+                TeamMember.objects.create(
+                    ir=ir,
+                    team=team,
+                    role=role,
+                )
+                added_count += 1
+                
+            except Ir.DoesNotExist:
+                errors.append(f"IR {ir_id_item} not found")
+
+        if len(ir_id_list) == 1:
+            # Single addition response
+            if added_count == 1:
+                return Response(
+                    {"message": f"{role} assigned to team {team.id}"},
+                    status=201,
+                )
+            elif skipped_count == 1:
+                return Response(
+                    {"detail": "IR already assigned to team"},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            else:
+                return Response(
+                    {"detail": errors[0] if errors else "Failed to add member"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            # Bulk addition response
             return Response(
-                {"detail": "IR already assigned to team"},
-                status=status.HTTP_409_CONFLICT,
+                {
+                    "message": f"Added {added_count} member(s) to team {team.id}",
+                    "added_count": added_count,
+                    "skipped_count": skipped_count,
+                    "errors": errors,
+                },
+                status=201 if added_count > 0 else status.HTTP_400_BAD_REQUEST,
             )
-
-        TeamMember.objects.create(
-            ir=ir,
-            team=team,
-            role=role,
-        )
-
-        return Response(
-            {"message": f"{role} assigned to team {team.id}"},
-            status=201,
-        )
 
 
 # ---------------------------------------------------
