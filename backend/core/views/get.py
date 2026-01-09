@@ -612,6 +612,12 @@ class GetTeamInfoTotal(APIView):
         from_date = request.GET.get("from_date")
         to_date = request.GET.get("to_date")
 
+        # Default to current week if no date filters provided
+        if not from_date:
+            from_date = week_start.strftime("%Y-%m-%d")
+        if not to_date:
+            to_date = week_end.strftime("%Y-%m-%d")
+
         info_qs = InfoDetail.objects.filter(ir_id__in=member_ids)
         plan_qs = PlanDetail.objects.filter(ir_id__in=member_ids)
 
