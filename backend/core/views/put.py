@@ -563,3 +563,54 @@ class UpdateTeamName(APIView):
             },
             status=status.HTTP_200_OK
         )
+
+
+# ---------------------------------------------------
+# UPDATE IR NAME (PATCH) (with role-based check)
+# ---------------------------------------------------
+class UpdateIrName(APIView):
+    """
+    Update IR name. Only ADMIN/CTC can update other IR's names.
+    IRs can update their own names.
+    """
+    def patch(self, request, ir_id):
+        ir = get_object_or_404(Ir, ir_id=ir_id)
+        
+        # Role-based check if requester provided
+        requester_ir_id = request.data.get("requester_ir_id")
+        if requester_ir_id:
+            try:
+                requester = Ir.objects.get(ir_id=requester_ir_id)
+                # Requester must be ADMIN/CTC or updating their own name
+                if requester.ir_id != ir.ir_id and not requester.has_full_access():
+                    return Response(
+                        {"detail": "Not authorized to update this IR's name"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            except Ir.DoesNotExist:
+                return Response(
+                    {"detail": "Requester IR not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        
+        old_name = ir.ir_name
+
+        new_name = request.data.get("name")
+        if not new_name:
+            return Response(
+                {"detail": "IR name is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        ir.ir_name = new_name
+        ir.save()
+
+        return Response(
+            {
+                "message": "IR name updated",
+                "ir_id": ir.ir_id,
+                "old_name": old_name,
+                "new_name": ir.ir_name
+            },
+            status=status.HTTP_200_OK
+        )
