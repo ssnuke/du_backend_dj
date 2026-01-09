@@ -316,6 +316,7 @@ class GetInfoDetails(APIView):
         
         from_date = request.GET.get("from_date")
         to_date = request.GET.get("to_date")
+        response_filter = request.GET.get("response")
 
         qs = InfoDetail.objects.filter(ir_id=ir_id)
 
@@ -323,6 +324,8 @@ class GetInfoDetails(APIView):
             qs = qs.filter(info_date__date__gte=parse_date(from_date))
         if to_date:
             qs = qs.filter(info_date__date__lte=parse_date(to_date))
+        if response_filter:
+            qs = qs.filter(response=response_filter)
 
         return Response(InfoDetailSerializer(qs, many=True).data)
 
