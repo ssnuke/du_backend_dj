@@ -1,0 +1,138 @@
+{
+  "info": {
+    "name": "Add Multiple IRs to Team - DU Backend",
+    "_postman_id": "multi-ir-addition-collection",
+    "description": "Collection for testing bulk IR addition to teams",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Add Single IR to Team",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"ir_id\": \"IR001\",\n    \"team_id\": \"1\",\n    \"role\": \"IR\",\n    \"requester_ir_id\": \"IR_ADMIN_001\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8000/api/add_ir_to_team/",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "add_ir_to_team",
+            ""
+          ]
+        },
+        "description": "Add a single IR to a team. This is the backward-compatible single addition API."
+      },
+      "response": []
+    },
+    {
+      "name": "Add Multiple IRs to Team",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"ir_ids\": [\"IR001\", \"IR002\", \"IR003\"],\n    \"team_id\": \"1\",\n    \"role\": \"IR\",\n    \"requester_ir_id\": \"IR_ADMIN_001\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8000/api/add_ir_to_team/",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "add_ir_to_team",
+            ""
+          ]
+        },
+        "description": "Add multiple IRs to a team in one request. Use the ir_ids array parameter to specify multiple IRs."
+      },
+      "response": []
+    },
+    {
+      "name": "Add Multiple IRs - Mixed Roles",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"ir_ids\": [\"IR004\", \"IR005\", \"IR006\", \"IR007\", \"IR008\"],\n    \"team_id\": \"2\",\n    \"role\": \"LS\",\n    \"requester_ir_id\": \"IR_LDC_001\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8000/api/add_ir_to_team/",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "add_ir_to_team",
+            ""
+          ]
+        },
+        "description": "Example of adding multiple IRs with a different role (LS) to a team."
+      },
+      "response": []
+    },
+    {
+      "name": "Add IRs - Some Already Exist",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"ir_ids\": [\"IR001\", \"IR009\", \"IR010\"],\n    \"team_id\": \"1\",\n    \"role\": \"GC\",\n    \"requester_ir_id\": \"IR_ADMIN_001\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8000/api/add_ir_to_team/",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "add_ir_to_team",
+            ""
+          ]
+        },
+        "description": "Test case where some IRs already exist in the team. The API will skip duplicates and add new ones. Response will show added_count and skipped_count."
+      },
+      "response": []
+    }
+  ]
+}

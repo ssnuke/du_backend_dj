@@ -1,10 +1,9 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-
+from core.models import Ir
 from django.shortcuts import get_object_or_404
 from django.db import transaction
-
 import logging
 
 from core.models import (
@@ -17,6 +16,15 @@ from core.models import (
     TeamWeek,
 )
 
+
+class DeleteIr(APIView):
+    """
+    Delete an IR completely from the database by IR ID.
+    """
+    def delete(self, request, ir_id):
+        ir = get_object_or_404(Ir, ir_id=ir_id)
+        ir.delete()
+        return Response({"message": f"IR {ir_id} deleted successfully."}, status=status.HTTP_200_OK)
 
 # ---------------------------------------------------
 # RESET DATABASE
@@ -40,6 +48,7 @@ class ResetDatabase(APIView):
             {"status": "success", "message": "Database has been reset successfully"},
             status=status.HTTP_200_OK
         )
+
 
 
 # ---------------------------------------------------

@@ -108,6 +108,7 @@ urlpatterns = [
     path("remove_ir_from_team/<int:team_id>/<str:ir_id>/", RemoveIrFromTeam.as_view()),
     path("delete_info_detail/<int:info_id>/", DeleteInfoDetail.as_view()),
     path("delete_plan_detail/<int:plan_id>/", DeletePlanDetail.as_view()),
+    path("delete_ir/<str:ir_id>/", DeleteIr.as_view()),
     # Health Check endpoint
     path("health/", health_check)
 ]

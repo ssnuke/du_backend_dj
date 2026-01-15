@@ -1,0 +1,110 @@
+{
+	"info": {
+		"name": "Update IR Name",
+		"description": "API endpoint to update IR name",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Update IR Name",
+			"request": {
+				"method": "PATCH",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"requester_ir_id\": \"IR001\",\n    \"name\": \"Updated IR Name\"\n}"
+				},
+				"url": {
+					"raw": "http://localhost:8000/api/update_ir_name/IR123/",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8000",
+					"path": [
+						"api",
+						"update_ir_name",
+						"IR123",
+						""
+					]
+				},
+				"description": "Update the name of an IR. Only ADMIN/CTC can update other IR names. IRs can update their own names."
+			},
+			"response": [
+				{
+					"name": "Success Response",
+					"originalRequest": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"requester_ir_id\": \"IR001\",\n    \"name\": \"John Doe\"\n}"
+						},
+						"url": {
+							"raw": "http://localhost:8000/api/update_ir_name/IR123/",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "8000",
+							"path": [
+								"api",
+								"update_ir_name",
+								"IR123",
+								""
+							]
+						}
+					},
+					"status": "OK",
+					"code": 200,
+					"_postman_previewlanguage": "json",
+					"header": [],
+					"cookie": [],
+					"body": "{\n    \"message\": \"IR name updated\",\n    \"ir_id\": \"IR123\",\n    \"old_name\": \"Old Name\",\n    \"new_name\": \"John Doe\"\n}"
+				}
+			]
+		},
+		{
+			"name": "Update Own IR Name",
+			"request": {
+				"method": "PATCH",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"requester_ir_id\": \"IR123\",\n    \"name\": \"My New Name\"\n}"
+				},
+				"url": {
+					"raw": "http://localhost:8000/api/update_ir_name/IR123/",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8000",
+					"path": [
+						"api",
+						"update_ir_name",
+						"IR123",
+						""
+					]
+				},
+				"description": "IR updating their own name. requester_ir_id matches the ir_id in the URL."
+			},
+			"response": []
+		}
+	]
+}

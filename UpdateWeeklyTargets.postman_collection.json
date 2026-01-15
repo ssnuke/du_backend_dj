@@ -1,0 +1,133 @@
+{
+	"info": {
+		"name": "Update Weekly Targets",
+		"description": "API endpoints to update weekly targets for IR or Team",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Update IR Weekly Targets - Reset to 0",
+			"request": {
+				"method": "PATCH",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"acting_ir_id\": \"IR001\",\n    \"ir_id\": \"IR123\",\n    \"weekly_info_target\": 0,\n    \"weekly_plan_target\": 0,\n    \"weekly_uv_target\": 0\n}"
+				},
+				"url": {
+					"raw": "http://localhost:8000/api/update_weekly_targets/",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8000",
+					"path": [
+						"api",
+						"update_weekly_targets",
+						""
+					]
+				},
+				"description": "Reset all weekly targets to 0 for a specific IR. Note: weekly_uv_target only works for CTC (access level 2) and LDC (access level 3)."
+			},
+			"response": []
+		},
+		{
+			"name": "Update Team Weekly Targets - Reset to 0",
+			"request": {
+				"method": "PATCH",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"acting_ir_id\": \"IR001\",\n    \"team_id\": 1,\n    \"team_weekly_info_target\": 0,\n    \"team_weekly_plan_target\": 0,\n    \"team_weekly_uv_target\": 0\n}"
+				},
+				"url": {
+					"raw": "http://localhost:8000/api/update_weekly_targets/",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8000",
+					"path": [
+						"api",
+						"update_weekly_targets",
+						""
+					]
+				},
+				"description": "Reset all weekly targets to 0 for a specific team."
+			},
+			"response": []
+		},
+		{
+			"name": "Update IR Weekly Targets - Partial Update",
+			"request": {
+				"method": "PATCH",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"acting_ir_id\": \"IR001\",\n    \"ir_id\": \"IR123\",\n    \"weekly_info_target\": 10\n}"
+				},
+				"url": {
+					"raw": "http://localhost:8000/api/update_weekly_targets/",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8000",
+					"path": [
+						"api",
+						"update_weekly_targets",
+						""
+					]
+				},
+				"description": "Update only specific targets. In this example, only weekly_info_target is updated while plan and UV targets remain unchanged."
+			},
+			"response": []
+		},
+		{
+			"name": "Update Team Weekly Targets - Partial Update",
+			"request": {
+				"method": "PATCH",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"acting_ir_id\": \"IR001\",\n    \"team_id\": 1,\n    \"team_weekly_info_target\": 15,\n    \"team_weekly_plan_target\": 20\n}"
+				},
+				"url": {
+					"raw": "http://localhost:8000/api/update_weekly_targets/",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8000",
+					"path": [
+						"api",
+						"update_weekly_targets",
+						""
+					]
+				},
+				"description": "Update only info and plan targets for a team, leaving UV target unchanged."
+			},
+			"response": []
+		}
+	]
+}
