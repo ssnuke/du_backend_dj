@@ -54,6 +54,7 @@ from core.views.delete import (
     RemoveIrFromTeam,
     DeleteInfoDetail,
     DeletePlanDetail,
+    DeleteIr
 )
 from core.views.move_ir import MoveIrToTeam
 
