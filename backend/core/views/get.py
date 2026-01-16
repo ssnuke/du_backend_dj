@@ -369,9 +369,9 @@ class GetInfoDetails(APIView):
                 from core.utils.dates import get_week_info_friday_to_friday
                 ist = pytz.timezone('Asia/Kolkata')
                 now = datetime.now(ist)
-                week_info = get_week_info_friday_to_friday(now, int(week_param), int(year_param))
-                from_date = week_info['week_start'].strftime('%Y-%m-%d')
-                to_date = week_info['week_end'].strftime('%Y-%m-%d')
+                _, _, week_start, week_end = get_week_info_friday_to_friday(now, int(week_param), int(year_param))
+                from_date = week_start.strftime('%Y-%m-%d')
+                to_date = week_end.strftime('%Y-%m-%d')
             except Exception as e:
                 logging.exception("Error processing week parameters for ir_id=%s", ir_id)
                 return Response({"detail": f"Error processing week parameters: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
@@ -426,9 +426,9 @@ class GetPlanDetails(APIView):
                     from core.utils.dates import get_week_info_friday_to_friday
                     ist = pytz.timezone('Asia/Kolkata')
                     now = datetime.now(ist)
-                    week_info = get_week_info_friday_to_friday(now, int(week_param), int(year_param))
-                    from_date = week_info['week_start'].strftime('%Y-%m-%d')
-                    to_date = week_info['week_end'].strftime('%Y-%m-%d')
+                    _, _, week_start, week_end = get_week_info_friday_to_friday(now, int(week_param), int(year_param))
+                    from_date = week_start.strftime('%Y-%m-%d')
+                    to_date = week_end.strftime('%Y-%m-%d')
                 except Exception as e:
                     logging.exception("Error processing week parameters for ir_id=%s", ir_id)
                     return Response({"detail": f"Error processing week parameters: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
