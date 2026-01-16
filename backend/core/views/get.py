@@ -31,7 +31,7 @@ from datetime import datetime
 import pytz
 import logging
 
-from core.utils.dates import get_current_week_start, get_saturday_friday_week_info
+from core.utils.dates import get_current_week_start, get_saturday_friday_week_info, get_week_info_friday_to_friday
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -242,6 +242,8 @@ class GetTeamsByLDC(APIView):
 class GetTeamMembers(APIView):
     def get(self, request, team_id):
         requester_ir_id = request.GET.get("requester_ir_id")
+        week_param = request.GET.get("week")
+        year_param = request.GET.get("year")
         
         try:
             team = get_object_or_404(Team, id=team_id)
@@ -261,6 +263,29 @@ class GetTeamMembers(APIView):
                         status=status.HTTP_404_NOT_FOUND
                     )
 
+            # Calculate week info using Friday 9:31 PM IST to Friday 9:30 PM IST
+            if week_param and year_param:
+                try:
+                    week_number = int(week_param)
+                    year = int(year_param)
+                    # Validate week number
+                    if week_number < 1 or week_number > 52:
+                        return Response(
+                            {"detail": "Week number must be between 1 and 52"},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    week_number, year, week_start, week_end = get_week_info_friday_to_friday(
+                        week_number=week_number, year=year
+                    )
+                except ValueError:
+                    return Response(
+                        {"detail": "Invalid week or year parameter"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            else:
+                # Get current week
+                week_number, year, week_start, week_end = get_week_info_friday_to_friday()
+
             members = TeamMember.objects.filter(team_id=team_id).select_related("ir")
 
             # Map team roles to access level numbers (matching AccessLevel class)
@@ -270,17 +295,38 @@ class GetTeamMembers(APIView):
 
             for member in members:
                 ir = member.ir
+                
+                # Calculate info and plan counts for the selected week
+                info_count_week = InfoDetail.objects.filter(
+                    ir_id=ir.ir_id,
+                    info_date__gte=week_start,
+                    info_date__lte=week_end
+                ).count()
+                
+                plan_count_week = PlanDetail.objects.filter(
+                    ir_id=ir.ir_id,
+                    plan_date__gte=week_start,
+                    plan_date__lte=week_end
+                ).count()
+                
+                # Get weekly targets for the selected week
+                ir_target = WeeklyTarget.objects.filter(
+                    ir=ir, week_number=week_number, year=year
+                ).first()
+                
                 result.append({
                     **TeamMemberSerializer(member).data,
                     "ir_name": ir.ir_name,
                     "role_num": role_map.get(member.role, 6),  # Team role (deprecated, use ir_access_level)
                     "ir_access_level": ir.ir_access_level,  # Actual access level from IR model
-                    "weekly_info_target": ir.weekly_info_target,
-                    "weekly_plan_target": ir.weekly_plan_target,
-                    "info_count": ir.info_count,
-                    "plan_count": ir.plan_count,
-                    "weekly_uv_target": ir.weekly_uv_target if ir.ir_access_level in [2, 3] else None,
-                    "uv_count": ir.weekly_uv_target if ir.ir_access_level in [2, 3] else None,
+                    "weekly_info_target": ir_target.ir_weekly_info_target if ir_target else ir.weekly_info_target,
+                    "weekly_plan_target": ir_target.ir_weekly_plan_target if ir_target else ir.weekly_plan_target,
+                    "info_count": info_count_week,
+                    "plan_count": plan_count_week,
+                    "weekly_uv_target": (ir_target.ir_weekly_uv_target if ir_target else ir.weekly_uv_target) if ir.ir_access_level in [2, 3] else None,
+                    "uv_count": ir.uv_count if ir.ir_access_level in [2, 3] else None,
+                    "week_number": week_number,
+                    "year": year,
                 })
 
             return Response(result)
@@ -833,8 +879,32 @@ class GetVisibleTeams(APIView):
         
         viewable_teams = get_viewable_teams_for_ir(ir)
         
-        # Get current week info
-        week_number, year, week_start, week_end = get_saturday_friday_week_info()
+        # Get week filter parameters
+        week_param = request.GET.get("week")
+        year_param = request.GET.get("year")
+        
+        # Calculate week info using Friday 9:31 PM IST to Friday 9:30 PM IST
+        if week_param and year_param:
+            try:
+                week_number = int(week_param)
+                year = int(year_param)
+                # Validate week number
+                if week_number < 1 or week_number > 52:
+                    return Response(
+                        {"detail": "Week number must be between 1 and 52"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                week_number, year, week_start, week_end = get_week_info_friday_to_friday(
+                    week_number=week_number, year=year
+                )
+            except ValueError:
+                return Response(
+                    {"detail": "Invalid week or year parameter"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        else:
+            # Get current week
+            week_number, year, week_start, week_end = get_week_info_friday_to_friday()
         
         teams_data = []
         for team in viewable_teams:
@@ -843,22 +913,22 @@ class GetVisibleTeams(APIView):
             member_irs = [m.ir for m in members]
             member_ir_ids = [m.ir_id for m in member_irs]
             
-            # Calculate achieved for current week only
+            # Calculate achieved for selected week
             info_achieved = InfoDetail.objects.filter(
                 ir_id__in=member_ir_ids,
-                info_date__date__gte=week_start,
-                info_date__date__lte=week_end
+                info_date__gte=week_start,
+                info_date__lte=week_end
             ).count()
             
             plan_achieved = PlanDetail.objects.filter(
                 ir_id__in=member_ir_ids,
-                plan_date__date__gte=week_start,
-                plan_date__date__lte=week_end
+                plan_date__gte=week_start,
+                plan_date__lte=week_end
             ).count()
             
             uv_achieved = sum(m.uv_count or 0 for m in member_irs)
             
-            # Get weekly targets
+            # Get weekly targets for selected week
             team_target = WeeklyTarget.objects.filter(
                 team=team, week_number=week_number, year=year
             ).first()
@@ -897,6 +967,8 @@ class GetVisibleTeams(APIView):
             "hierarchy_level": ir.hierarchy_level,
             "week_number": week_number,
             "year": year,
+            "week_start": week_start.isoformat(),
+            "week_end": week_end.isoformat(),
             "total_visible_teams": len(teams_data),
             "teams": teams_data
         })
@@ -1049,3 +1121,53 @@ class GetHierarchyTree(APIView):
             "max_depth_in_tree": all_downlines.aggregate(max_level=Count('hierarchy_level'))['max_level'] or 0,
             "tree": tree
         })
+
+
+# ---------------------------------------------------
+# GET AVAILABLE WEEKS (for dropdown)
+# ---------------------------------------------------
+class GetAvailableWeeks(APIView):
+    """
+    Returns list of available weeks for filtering.
+    Calculates weeks based on Friday 9:31 PM IST to Friday 9:30 PM IST.
+    """
+    def get(self, request):
+        year_param = request.GET.get("year")
+        
+        # Get current week info
+        current_week_number, current_year, _, _ = get_week_info_friday_to_friday()
+        
+        # Use provided year or current year
+        if year_param:
+            try:
+                year = int(year_param)
+            except ValueError:
+                return Response(
+                    {"detail": "Invalid year parameter"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        else:
+            year = current_year
+        
+        # Generate all 52 weeks
+        weeks = []
+        for week_num in range(1, 53):
+            week_number, year_calc, week_start, week_end = get_week_info_friday_to_friday(
+                week_number=week_num, year=year
+            )
+            weeks.append({
+                "week_number": week_number,
+                "year": year_calc,
+                "week_start": week_start.isoformat(),
+                "week_end": week_end.isoformat(),
+                "is_current": (week_number == current_week_number and year_calc == current_year),
+                "display_name": f"Week {week_number}"
+            })
+        
+        return Response({
+            "year": year,
+            "current_week": current_week_number,
+            "current_year": current_year,
+            "weeks": weeks
+        })
+

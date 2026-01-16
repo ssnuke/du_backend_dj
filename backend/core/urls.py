@@ -20,6 +20,7 @@ from core.views.get import (
     GetDownlineData,
     GetDirectDownlines,
     GetHierarchyTree,
+    GetAvailableWeeks,
 )
 from core.views.post import (
     AddIrId,
@@ -81,6 +82,7 @@ urlpatterns = [
     path("downline_data/<str:ir_id>/", GetDownlineData.as_view()),
     path("direct_downlines/<str:ir_id>/", GetDirectDownlines.as_view()),
     path("hierarchy_tree/<str:ir_id>/", GetHierarchyTree.as_view()),
+    path("available_weeks/", GetAvailableWeeks.as_view()),
     #POST endpoints
     path("add_ir_id/", AddIrId.as_view()),
     path("register_new_ir/", RegisterIR.as_view()),
