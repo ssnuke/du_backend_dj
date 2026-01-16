@@ -420,6 +420,7 @@ class GetPlanDetails(APIView):
                 )
         
         try:
+            status_filter = request.GET.get("status")
             # Check for week/year parameters first
             week_param = request.GET.get("week")
             year_param = request.GET.get("year")
