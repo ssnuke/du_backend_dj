@@ -27,13 +27,14 @@ from core.serializers import (
     PlanDetailSerializer,
 )
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 import logging
 
 from core.utils.dates import get_current_week_start, get_saturday_friday_week_info, get_week_info_friday_to_friday
 
 IST = pytz.timezone("Asia/Kolkata")
+timezone = pytz.timezone
 
 
 # ===================================================
@@ -563,12 +564,34 @@ class GetTargets(APIView):
         ir_id = request.GET.get("ir_id")
         team_id = request.GET.get("team_id")
         requester_ir_id = request.GET.get("requester_ir_id")
+        week_param = request.GET.get("week")
+        year_param = request.GET.get("year")
 
         if not ir_id and not team_id:
             return Response({"detail": "Provide `ir_id` or `team_id` as query parameter"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Get current week info (Saturday-Friday cycle)
-        week_number, year, week_start, week_end = get_saturday_friday_week_info()
+        # Get week info (Saturday-Friday cycle) - use provided week or current
+        if week_param and year_param:
+            try:
+                now = datetime.now(timezone('Asia/Kolkata'))
+                # Use Saturday-Friday cycle for consistency with this endpoint
+                # Calculate the specific week's dates
+                year = int(year_param)
+                week_number = int(week_param)
+                
+                # Find the first Saturday of the year
+                jan_1 = datetime(year, 1, 1, tzinfo=timezone('Asia/Kolkata'))
+                days_to_first_saturday = (5 - jan_1.weekday()) % 7
+                first_saturday = jan_1 + timedelta(days=days_to_first_saturday)
+                
+                # Calculate the start of the requested week
+                week_start = first_saturday + timedelta(weeks=week_number - 1)
+                week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+                week_end = week_start + timedelta(days=6, hours=23, minutes=59, seconds=59)
+            except (ValueError, TypeError):
+                return Response({"detail": "Invalid week or year parameter"}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            week_number, year, week_start, week_end = get_saturday_friday_week_info()
         
         data = {
             "week_info": {
