@@ -740,20 +740,19 @@ class GetTeamInfoTotal(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-        # Get current week info (Saturday-Friday cycle)
-            week_param = request.GET.get("week")
-            year_param = request.GET.get("year")
-        
-            try:
-                if week_param and year_param:
-                    week_number, year, week_start, week_end = get_week_info_friday_to_friday(
-                        int(week_param), int(year_param)
-                    )
-                else:
-                    week_number, year, week_start, week_end = get_week_info_friday_to_friday()
-            except Exception:
-                logging.exception("Error computing week bounds for team totals team_id=%s", team_id)
-                return Response({"detail": "Invalid week parameters"}, status=status.HTTP_400_BAD_REQUEST)
+        # Compute week bounds (Friday→Friday)
+        week_param = request.GET.get("week")
+        year_param = request.GET.get("year")
+        try:
+            if week_param and year_param:
+                week_number, year, week_start, week_end = get_week_info_friday_to_friday(
+                    week_number=int(week_param), year=int(year_param)
+                )
+            else:
+                week_number, year, week_start, week_end = get_week_info_friday_to_friday()
+        except Exception:
+            logging.exception("Error computing week bounds for team totals team_id=%s", team_id)
+            return Response({"detail": "Invalid week parameters"}, status=status.HTTP_400_BAD_REQUEST)
 
         links = TeamMember.objects.filter(team=team)
         member_ids = links.values_list("ir_id", flat=True)
