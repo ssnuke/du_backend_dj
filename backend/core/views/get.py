@@ -360,8 +360,22 @@ class GetInfoDetails(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
         
-        from_date = request.GET.get("from_date")
-        to_date = request.GET.get("to_date")
+        # Check for week/year parameters first
+        week_param = request.GET.get("week")
+        year_param = request.GET.get("year")
+        
+        if week_param and year_param:
+            from core.utils.dates import get_week_info_friday_to_friday
+            import pytz
+            ist = pytz.timezone('Asia/Kolkata')
+            now = datetime.now(ist)
+            week_info = get_week_info_friday_to_friday(now, int(week_param), int(year_param))
+            from_date = week_info['week_start'].strftime('%Y-%m-%d')
+            to_date = week_info['week_end'].strftime('%Y-%m-%d')
+        else:
+            from_date = request.GET.get("from_date")
+            to_date = request.GET.get("to_date")
+        
         response_filter = request.GET.get("response")
 
         qs = InfoDetail.objects.filter(ir_id=ir_id)
@@ -400,8 +414,22 @@ class GetPlanDetails(APIView):
                 )
         
         try:
-            from_date = request.GET.get("from_date")
-            to_date = request.GET.get("to_date")
+            # Check for week/year parameters first
+            week_param = request.GET.get("week")
+            year_param = request.GET.get("year")
+            
+            if week_param and year_param:
+                from core.utils.dates import get_week_info_friday_to_friday
+                import pytz
+                ist = pytz.timezone('Asia/Kolkata')
+                now = datetime.now(ist)
+                week_info = get_week_info_friday_to_friday(now, int(week_param), int(year_param))
+                from_date = week_info['week_start'].strftime('%Y-%m-%d')
+                to_date = week_info['week_end'].strftime('%Y-%m-%d')
+            else:
+                from_date = request.GET.get("from_date")
+                to_date = request.GET.get("to_date")
+            
             status_filter = request.GET.get("status")
 
             qs = PlanDetail.objects.filter(ir_id=ir_id)
