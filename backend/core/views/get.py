@@ -31,7 +31,7 @@ from datetime import datetime, timedelta
 import pytz
 import logging
 
-from core.utils.dates import get_current_week_start, get_saturday_friday_week_info, get_week_info_friday_to_friday
+from core.utils.dates import get_current_week_start, get_week_info_friday_to_friday
 
 IST = pytz.timezone("Asia/Kolkata")
 timezone = pytz.timezone
@@ -365,29 +365,31 @@ class GetInfoDetails(APIView):
         week_param = request.GET.get("week")
         year_param = request.GET.get("year")
         
+        response_filter = request.GET.get("response")
+
+        # Base queryset
+        qs = InfoDetail.objects.filter(ir_id=ir_id)
+
         if week_param and year_param:
+            # Use timezone-aware datetime bounds to match Friday-to-Friday definition precisely
             try:
                 from core.utils.dates import get_week_info_friday_to_friday
                 ist = pytz.timezone('Asia/Kolkata')
                 now = datetime.now(ist)
                 _, _, week_start, week_end = get_week_info_friday_to_friday(now, int(week_param), int(year_param))
-                from_date = week_start.strftime('%Y-%m-%d')
-                to_date = week_end.strftime('%Y-%m-%d')
+                qs = qs.filter(info_date__gte=week_start, info_date__lte=week_end)
             except Exception as e:
                 logging.exception("Error processing week parameters for ir_id=%s", ir_id)
                 return Response({"detail": f"Error processing week parameters: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
         else:
+            # Fallback to date-only filters when explicit dates are provided
             from_date = request.GET.get("from_date")
             to_date = request.GET.get("to_date")
-        
-        response_filter = request.GET.get("response")
+            if from_date:
+                qs = qs.filter(info_date__date__gte=parse_date(from_date))
+            if to_date:
+                qs = qs.filter(info_date__date__lte=parse_date(to_date))
 
-        qs = InfoDetail.objects.filter(ir_id=ir_id)
-
-        if from_date:
-            qs = qs.filter(info_date__date__gte=parse_date(from_date))
-        if to_date:
-            qs = qs.filter(info_date__date__lte=parse_date(to_date))
         if response_filter:
             qs = qs.filter(response=response_filter)
 
@@ -428,23 +430,24 @@ class GetPlanDetails(APIView):
                     ist = pytz.timezone('Asia/Kolkata')
                     now = datetime.now(ist)
                     _, _, week_start, week_end = get_week_info_friday_to_friday(now, int(week_param), int(year_param))
-                    from_date = week_start.strftime('%Y-%m-%d')
-                    to_date = week_end.strftime('%Y-%m-%d')
+                    # Use datetime bounds to match Friday-to-Friday precisely
+                    qs = PlanDetail.objects.filter(
+                        ir_id=ir_id,
+                        plan_date__gte=week_start,
+                        plan_date__lte=week_end,
+                    )
                 except Exception as e:
                     logging.exception("Error processing week parameters for ir_id=%s", ir_id)
                     return Response({"detail": f"Error processing week parameters: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
             else:
                 from_date = request.GET.get("from_date")
                 to_date = request.GET.get("to_date")
-            
-            status_filter = request.GET.get("status")
-
-            qs = PlanDetail.objects.filter(ir_id=ir_id)
-
-            if from_date:
-                qs = qs.filter(plan_date__date__gte=parse_date(from_date))
-            if to_date:
-                qs = qs.filter(plan_date__date__lte=parse_date(to_date))
+                
+                qs = PlanDetail.objects.filter(ir_id=ir_id)
+                if from_date:
+                    qs = qs.filter(plan_date__date__gte=parse_date(from_date))
+                if to_date:
+                    qs = qs.filter(plan_date__date__lte=parse_date(to_date))
             if status_filter:
                 qs = qs.filter(status=status_filter)
 
@@ -462,9 +465,22 @@ class GetPlanDetails(APIView):
 class GetTargetsDashboard(APIView):
     def get(self, request, ir_id):
         ir = get_object_or_404(Ir, ir_id=ir_id)
-
-        # Get current week info (Saturday-Friday cycle)
-        week_number, year, week_start, week_end = get_saturday_friday_week_info()
+        
+        # Get week info using Friday 9:31 PM IST → next Friday 9:30 PM IST
+        week_param = request.GET.get("week")
+        year_param = request.GET.get("year")
+        try:
+            if week_param and year_param:
+                ist = pytz.timezone('Asia/Kolkata')
+                now = datetime.now(ist)
+                week_number, year, week_start, week_end = get_week_info_friday_to_friday(
+                    now, int(week_param), int(year_param)
+                )
+            else:
+                week_number, year, week_start, week_end = get_week_info_friday_to_friday()
+        except Exception:
+            logging.exception("Error computing week bounds for targets_dashboard ir_id=%s", ir_id)
+            return Response({"detail": "Invalid week parameters"}, status=status.HTTP_400_BAD_REQUEST)
         
         # Get weekly targets for current week
         ir_weekly_target = WeeklyTarget.objects.filter(
@@ -476,14 +492,14 @@ class GetTargetsDashboard(APIView):
         # Calculate current week's info and plan counts
         current_week_info_count = InfoDetail.objects.filter(
             ir_id=ir.ir_id,
-            info_date__date__gte=week_start,
-            info_date__date__lte=week_end
+            info_date__gte=week_start,
+            info_date__lte=week_end
         ).count()
         
         current_week_plan_count = PlanDetail.objects.filter(
             ir_id=ir.ir_id,
-            plan_date__date__gte=week_start,
-            plan_date__date__lte=week_end
+            plan_date__gte=week_start,
+            plan_date__lte=week_end
         ).count()
 
         personal = {
@@ -523,14 +539,14 @@ class GetTargetsDashboard(APIView):
             # Calculate current week's progress for all team members
             team_info_progress = InfoDetail.objects.filter(
                 ir_id__in=member_ids,
-                info_date__date__gte=week_start,
-                info_date__date__lte=week_end
+                info_date__gte=week_start,
+                info_date__lte=week_end
             ).count()
             
             team_plan_progress = PlanDetail.objects.filter(
                 ir_id__in=member_ids,
-                plan_date__date__gte=week_start,
-                plan_date__date__lte=week_end
+                plan_date__gte=week_start,
+                plan_date__lte=week_end
             ).count()
             
             team_uv_progress = sum(m.uv_count or 0 for m in members)
@@ -570,28 +586,16 @@ class GetTargets(APIView):
         if not ir_id and not team_id:
             return Response({"detail": "Provide `ir_id` or `team_id` as query parameter"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Get week info (Saturday-Friday cycle) - use provided week or current
+        # Get week info (Friday→Friday) - use provided week or current
         if week_param and year_param:
             try:
-                now = datetime.now(timezone('Asia/Kolkata'))
-                # Use Saturday-Friday cycle for consistency with this endpoint
-                # Calculate the specific week's dates
-                year = int(year_param)
-                week_number = int(week_param)
-                
-                # Find the first Saturday of the year
-                jan_1 = datetime(year, 1, 1, tzinfo=timezone('Asia/Kolkata'))
-                days_to_first_saturday = (5 - jan_1.weekday()) % 7
-                first_saturday = jan_1 + timedelta(days=days_to_first_saturday)
-                
-                # Calculate the start of the requested week
-                week_start = first_saturday + timedelta(weeks=week_number - 1)
-                week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
-                week_end = week_start + timedelta(days=6, hours=23, minutes=59, seconds=59)
+                week_number, year, week_start, week_end = get_week_info_friday_to_friday(
+                    int(week_param), int(year_param)
+                )
             except (ValueError, TypeError):
                 return Response({"detail": "Invalid week or year parameter"}, status=status.HTTP_400_BAD_REQUEST)
         else:
-            week_number, year, week_start, week_end = get_saturday_friday_week_info()
+            week_number, year, week_start, week_end = get_week_info_friday_to_friday()
         
         data = {
             "week_info": {
@@ -736,28 +740,34 @@ class GetTeamInfoTotal(APIView):
                 )
 
         # Get current week info (Saturday-Friday cycle)
-        week_number, year, week_start, week_end = get_saturday_friday_week_info()
+            week_param = request.GET.get("week")
+            year_param = request.GET.get("year")
+        
+            try:
+                if week_param and year_param:
+                    week_number, year, week_start, week_end = get_week_info_friday_to_friday(
+                        int(week_param), int(year_param)
+                    )
+                else:
+                    week_number, year, week_start, week_end = get_week_info_friday_to_friday()
+            except Exception:
+                logging.exception("Error computing week bounds for team totals team_id=%s", team_id)
+                return Response({"detail": "Invalid week parameters"}, status=status.HTTP_400_BAD_REQUEST)
 
         links = TeamMember.objects.filter(team=team)
         member_ids = links.values_list("ir_id", flat=True)
         from_date = request.GET.get("from_date")
         to_date = request.GET.get("to_date")
 
-        # Default to current week if no date filters provided
-        if not from_date:
-            from_date = week_start.strftime("%Y-%m-%d")
-        if not to_date:
-            to_date = week_end.strftime("%Y-%m-%d")
-
         info_qs = InfoDetail.objects.filter(ir_id__in=member_ids)
         plan_qs = PlanDetail.objects.filter(ir_id__in=member_ids)
 
-        if from_date:
-            info_qs = info_qs.filter(info_date__date__gte=parse_date(from_date))
-            plan_qs = plan_qs.filter(plan_date__date__gte=parse_date(from_date))
-        if to_date:
-            info_qs = info_qs.filter(info_date__date__lte=parse_date(to_date))
-            plan_qs = plan_qs.filter(plan_date__date__lte=parse_date(to_date))
+        if from_date and to_date:
+            info_qs = info_qs.filter(info_date__date__gte=parse_date(from_date), info_date__date__lte=parse_date(to_date))
+            plan_qs = plan_qs.filter(plan_date__date__gte=parse_date(from_date), plan_date__date__lte=parse_date(to_date))
+        else:
+            info_qs = info_qs.filter(info_date__gte=week_start, info_date__lte=week_end)
+            plan_qs = plan_qs.filter(plan_date__gte=week_start, plan_date__lte=week_end)
 
         members_info_total = info_qs.count()
         members_plan_total = plan_qs.count()
@@ -1054,8 +1064,19 @@ class GetDownlineData(APIView):
         # Get teams created by viewable IRs
         viewable_teams = Team.objects.filter(created_by__in=viewable_irs)
         
-        # Get current week info
-        week_number, year, week_start, week_end = get_saturday_friday_week_info()
+        # Get current week info using Friday→Friday; accept optional week/year
+        week_param = request.GET.get("week")
+        year_param = request.GET.get("year")
+        try:
+            if week_param and year_param:
+                week_number, year, week_start, week_end = get_week_info_friday_to_friday(
+                    int(week_param), int(year_param)
+                )
+            else:
+                week_number, year, week_start, week_end = get_week_info_friday_to_friday()
+        except Exception:
+            logging.exception("Error computing week bounds for downline ir_id=%s", ir_id)
+            return Response({"detail": "Invalid week parameters"}, status=status.HTTP_400_BAD_REQUEST)
         
         return Response({
             "ir_id": ir.ir_id,
