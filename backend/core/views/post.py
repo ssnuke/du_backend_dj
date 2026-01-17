@@ -6,7 +6,7 @@ from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.contrib.auth.hashers import make_password
-from core.utils.dates import get_current_week_start, get_saturday_friday_week_info
+from core.utils.dates import get_current_week_start, get_saturday_friday_week_info, get_week_info_friday_to_friday
 from django.db.models import F
 
 from core.models import (
@@ -916,8 +916,8 @@ class SetTargets(APIView):
         if acting_ir.ir_access_level not in [1, 2, 3]:
             return Response({"detail": "Not authorized. Only ADMIN, CTC, and LDC can set targets"}, status=status.HTTP_403_FORBIDDEN)
 
-        # Get current week info (Saturday-Friday cycle)
-        week_number, year, week_start, week_end = get_saturday_friday_week_info()
+        # Get current week info (Friday 9:31 PM → Friday 9:30 PM cycle)
+        week_number, year, week_start, week_end = get_week_info_friday_to_friday()
         
         updated = {
             "week_number": week_number,
