@@ -670,6 +670,7 @@ class GetTargets(APIView):
                     "created_by_id": team.created_by.ir_id if team.created_by else None,
                     "weekly_info_target": weekly_target.team_weekly_info_target if weekly_target else 0,
                     "weekly_plan_target": weekly_target.team_weekly_plan_target if weekly_target else 0,
+                    "weekly_uv_target": weekly_target.team_weekly_uv_target if weekly_target else 0,
                     "has_weekly_targets_set": weekly_target is not None
                 }
 
