@@ -220,17 +220,15 @@ def get_week_info_monday_to_sunday(now: datetime | None = None, week_number: int
     friday_start_date = friday_start.replace(hour=0, minute=0, second=0, microsecond=0)
     
     # Find the Monday of the week containing the Friday start
-    # Friday is weekday 4, so Monday is 3 days before
-    days_to_monday = (friday_start_date.weekday() - 0) % 7  # Distance to previous Monday
-    if days_to_monday == 0:
-        # Friday is not a Monday, so calculate back
-        days_to_monday = (friday_start_date.weekday()) % 7
+    # weekday(): Monday=0, Friday=4
+    # To get Monday from any day, subtract that day's weekday value
+    days_to_monday = friday_start_date.weekday()  # Friday=4, so go back 4 days
     
     week_start = friday_start_date - timedelta(days=days_to_monday)
     week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
     
     # Week end is the Sunday after the Friday
-    # Friday + 2 days = Sunday
+    # Friday + 2 days = Sunday at 23:59:59
     week_end = friday_start_date + timedelta(days=2, hours=23, minutes=59, seconds=59)
     
     return week_number, year, week_start, week_end
