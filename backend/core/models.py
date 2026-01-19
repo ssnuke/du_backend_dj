@@ -558,3 +558,66 @@ class WeeklyTarget(models.Model):
             models.Index(fields=['ir', 'week_number', 'year']),
             models.Index(fields=['team', 'week_number', 'year']),
         ]
+
+
+class TeamWeeklyTargets(models.Model):
+    """
+    Stores team weekly targets in nested JSON format organized by year and week.
+    Structure: {
+        "2026": {
+            "1": {
+                "week_start": "2026-01-03T00:00:00+05:30",
+                "week_end": "2026-01-09T23:59:59+05:30",
+                "team_weekly_info_target": 150,
+                "team_weekly_plan_target": 30,
+                "team_weekly_uv_target": 15
+            },
+            "2": { ... }
+        },
+        "2027": { ... }
+    }
+    """
+    team = models.OneToOneField(Team, on_delete=models.CASCADE, related_name='weekly_targets_json')
+    targets_data = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = "Team Weekly Targets (JSON)"
+        verbose_name_plural = "Team Weekly Targets (JSON)"
+    
+    def get_week_targets(self, year, week_number):
+        """Get targets for a specific week"""
+        year_str = str(year)
+        week_str = str(week_number)
+        return self.targets_data.get(year_str, {}).get(week_str)
+    
+    def set_week_targets(self, year, week_number, week_start, week_end, 
+                         info_target, plan_target, uv_target, allow_overwrite=False):
+        """Set targets for a specific week"""
+        year_str = str(year)
+        week_str = str(week_number)
+        
+        # Initialize year if doesn't exist
+        if year_str not in self.targets_data:
+            self.targets_data[year_str] = {}
+        
+        # Check if week already exists
+        if week_str in self.targets_data[year_str] and not allow_overwrite:
+            return False, "Week targets already exist"
+        
+        # Set the week data
+        self.targets_data[year_str][week_str] = {
+            "week_start": week_start.isoformat() if hasattr(week_start, 'isoformat') else week_start,
+            "week_end": week_end.isoformat() if hasattr(week_end, 'isoformat') else week_end,
+            "team_weekly_info_target": int(info_target),
+            "team_weekly_plan_target": int(plan_target),
+            "team_weekly_uv_target": int(uv_target)
+        }
+        
+        return True, "Targets set successfully"
+    
+    def get_all_weeks_for_year(self, year):
+        """Get all week targets for a specific year"""
+        year_str = str(year)
+        return self.targets_data.get(year_str, {})

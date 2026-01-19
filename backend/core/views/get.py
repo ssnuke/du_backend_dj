@@ -530,12 +530,13 @@ class GetTargetsDashboard(APIView):
             
             member_ids = members.values_list('ir_id', flat=True)
 
-            # Get weekly targets for this team
-            team_weekly_target = WeeklyTarget.objects.filter(
-                team=team,
-                week_number=week_number,
-                year=year
-            ).first()
+            # Get weekly targets for this team from JSON structure
+            from core.models import TeamWeeklyTargets
+            try:
+                team_targets = TeamWeeklyTargets.objects.get(team=team)
+                week_data = team_targets.get_week_targets(year, week_number)
+            except TeamWeeklyTargets.DoesNotExist:
+                week_data = None
 
             # Calculate current week's progress for all team members
             team_info_progress = InfoDetail.objects.filter(
@@ -565,9 +566,9 @@ class GetTargetsDashboard(APIView):
                 "created_by_id": team.created_by.ir_id if team.created_by else None,
                 "created_by_name": team.created_by.ir_name if team.created_by else None,
                 "can_edit": can_edit,
-                "weekly_info_target": team_weekly_target.team_weekly_info_target if team_weekly_target else 0,
-                "weekly_plan_target": team_weekly_target.team_weekly_plan_target if team_weekly_target else 0,
-                "weekly_uv_target": team_weekly_target.team_weekly_uv_target if team_weekly_target else 0,
+                "weekly_info_target": week_data.get("team_weekly_info_target", 0) if week_data else 0,
+                "weekly_plan_target": week_data.get("team_weekly_plan_target", 0) if week_data else 0,
+                "weekly_uv_target": week_data.get("team_weekly_uv_target", 0) if week_data else 0,
                 "info_progress": team_info_progress,
                 "plan_progress": team_plan_progress,
                 "uv_progress": team_uv_progress,
@@ -587,15 +588,19 @@ class GetTargets(APIView):
         if not ir_id and not team_id:
             return Response({"detail": "Provide `ir_id` or `team_id` as query parameter"}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Determine if we should return single week or all weeks
+        return_all_weeks = week_param is None or year_param is None
+        
         # Get week info (Friday→Friday) - use provided week or current
-        if week_param and year_param:
+        if not return_all_weeks:
             try:
                 week_number, year, week_start, week_end = get_week_info_friday_to_friday(
-                    int(week_param), int(year_param)
+                    week_number=int(week_param), year=int(year_param)
                 )
             except (ValueError, TypeError):
                 return Response({"detail": "Invalid week or year parameter"}, status=status.HTTP_400_BAD_REQUEST)
         else:
+            # Get current week info for reference
             week_number, year, week_start, week_end = get_week_info_friday_to_friday()
         
         data = {
@@ -629,21 +634,42 @@ class GetTargets(APIView):
                         status=status.HTTP_403_FORBIDDEN
                     )
                 
-                # Get weekly targets for current week
-                weekly_target = WeeklyTarget.objects.filter(
-                    ir=ir,
-                    week_number=week_number,
-                    year=year
-                ).first()
-                
-                data["ir"] = {
-                    "ir_id": ir.ir_id,
-                    "ir_name": ir.ir_name,
-                    "weekly_info_target": weekly_target.ir_weekly_info_target if weekly_target else 0,
-                    "weekly_plan_target": weekly_target.ir_weekly_plan_target if weekly_target else 0,
-                    "weekly_uv_target": weekly_target.ir_weekly_uv_target if (weekly_target and ir.ir_access_level in [2, 3]) else None,
-                    "has_weekly_targets_set": weekly_target is not None
-                }
+                if return_all_weeks:
+                    # Return all weeks' targets for this IR
+                    weekly_targets = WeeklyTarget.objects.filter(ir=ir).order_by('year', 'week_number')
+                    data["ir"] = {
+                        "ir_id": ir.ir_id,
+                        "ir_name": ir.ir_name,
+                        "weeks": [
+                            {
+                                "week_number": wt.week_number,
+                                "year": wt.year,
+                                "week_start": wt.week_start.isoformat(),
+                                "week_end": wt.week_end.isoformat(),
+                                "weekly_info_target": wt.ir_weekly_info_target or 0,
+                                "weekly_plan_target": wt.ir_weekly_plan_target or 0,
+                                "weekly_uv_target": wt.ir_weekly_uv_target if ir.ir_access_level in [2, 3] else None,
+                            }
+                            for wt in weekly_targets
+                        ],
+                        "total_weeks_with_targets": weekly_targets.count()
+                    }
+                else:
+                    # Return single week's targets
+                    weekly_target = WeeklyTarget.objects.filter(
+                        ir=ir,
+                        week_number=week_number,
+                        year=year
+                    ).first()
+                    
+                    data["ir"] = {
+                        "ir_id": ir.ir_id,
+                        "ir_name": ir.ir_name,
+                        "weekly_info_target": weekly_target.ir_weekly_info_target if weekly_target else 0,
+                        "weekly_plan_target": weekly_target.ir_weekly_plan_target if weekly_target else 0,
+                        "weekly_uv_target": weekly_target.ir_weekly_uv_target if (weekly_target and ir.ir_access_level in [2, 3]) else None,
+                        "has_weekly_targets_set": weekly_target is not None
+                    }
 
             if team_id:
                 team = get_object_or_404(Team, id=team_id)
@@ -657,22 +683,59 @@ class GetTargets(APIView):
                             status=status.HTTP_403_FORBIDDEN
                         )
                 
-                # Get weekly targets for current week
-                weekly_target = WeeklyTarget.objects.filter(
-                    team=team,
-                    week_number=week_number,
-                    year=year
-                ).first()
+                # Get TeamWeeklyTargets record for this team
+                from core.models import TeamWeeklyTargets
+                try:
+                    team_targets = TeamWeeklyTargets.objects.get(team=team)
+                except TeamWeeklyTargets.DoesNotExist:
+                    team_targets = None
                 
-                data["team"] = {
-                    "team_id": team.id,
-                    "team_name": team.name,
-                    "created_by_id": team.created_by.ir_id if team.created_by else None,
-                    "weekly_info_target": weekly_target.team_weekly_info_target if weekly_target else 0,
-                    "weekly_plan_target": weekly_target.team_weekly_plan_target if weekly_target else 0,
-                    "weekly_uv_target": weekly_target.team_weekly_uv_target if weekly_target else 0,
-                    "has_weekly_targets_set": weekly_target is not None
-                }
+                if return_all_weeks:
+                    # Return all weeks' targets for this team from JSON
+                    if team_targets and team_targets.targets_data:
+                        all_weeks = []
+                        for year_str, weeks_data in sorted(team_targets.targets_data.items()):
+                            for week_str, week_data in sorted(weeks_data.items(), key=lambda x: int(x[0])):
+                                all_weeks.append({
+                                    "week_number": int(week_str),
+                                    "year": int(year_str),
+                                    "week_start": week_data.get("week_start"),
+                                    "week_end": week_data.get("week_end"),
+                                    "team_weekly_info_target": week_data.get("team_weekly_info_target", 0),
+                                    "team_weekly_plan_target": week_data.get("team_weekly_plan_target", 0),
+                                    "team_weekly_uv_target": week_data.get("team_weekly_uv_target", 0),
+                                })
+                        
+                        data["team"] = {
+                            "team_id": team.id,
+                            "team_name": team.name,
+                            "created_by_id": team.created_by.ir_id if team.created_by else None,
+                            "weeks": all_weeks,
+                            "total_weeks_with_targets": len(all_weeks)
+                        }
+                    else:
+                        data["team"] = {
+                            "team_id": team.id,
+                            "team_name": team.name,
+                            "created_by_id": team.created_by.ir_id if team.created_by else None,
+                            "weeks": [],
+                            "total_weeks_with_targets": 0
+                        }
+                else:
+                    # Return single week's targets from JSON
+                    week_data = None
+                    if team_targets:
+                        week_data = team_targets.get_week_targets(year, week_number)
+                    
+                    data["team"] = {
+                        "team_id": team.id,
+                        "team_name": team.name,
+                        "created_by_id": team.created_by.ir_id if team.created_by else None,
+                        "team_weekly_info_target": week_data.get("team_weekly_info_target", 0) if week_data else 0,
+                        "team_weekly_plan_target": week_data.get("team_weekly_plan_target", 0) if week_data else 0,
+                        "team_weekly_uv_target": week_data.get("team_weekly_uv_target", 0) if week_data else 0,
+                        "has_weekly_targets_set": week_data is not None
+                    }
 
             return Response(data)
         except Exception:

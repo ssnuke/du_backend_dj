@@ -916,8 +916,24 @@ class SetTargets(APIView):
         if acting_ir.ir_access_level not in [1, 2, 3]:
             return Response({"detail": "Not authorized. Only ADMIN, CTC, and LDC can set targets"}, status=status.HTTP_403_FORBIDDEN)
 
-        # Get current week info (Friday 9:31 PM → Friday 9:30 PM cycle)
-        week_number, year, week_start, week_end = get_week_info_friday_to_friday()
+        # Get week info - use specified week or current week
+        week_param = payload.get("week") if isinstance(payload, dict) else None
+        year_param = payload.get("year") if isinstance(payload, dict) else None
+        
+        if week_param is not None and year_param is not None:
+            try:
+                week_number, year, week_start, week_end = get_week_info_friday_to_friday(
+                    week_number=int(week_param),
+                    year=int(year_param)
+                )
+            except Exception:
+                return Response(
+                    {"detail": "Invalid week or year parameter"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        else:
+            # Default to current week
+            week_number, year, week_start, week_end = get_week_info_friday_to_friday()
         
         updated = {
             "week_number": week_number,
@@ -973,7 +989,7 @@ class SetTargets(APIView):
                     weekly_target.save()
                     updated["ir_id"] = ir.ir_id
 
-                # Update Team targets for current week
+                # Update Team targets for current week using JSON structure
                 if payload.get("team_id"):
                     # accept numeric or string team_id
                     team_id_raw = payload.get("team_id")
@@ -991,37 +1007,40 @@ class SetTargets(APIView):
                             status=status.HTTP_403_FORBIDDEN
                         )
                     
-                    # Get or create weekly target for this team
-                    weekly_target, created = WeeklyTarget.objects.get_or_create(
-                        team=team,
-                        week_number=week_number,
+                    # Get or create TeamWeeklyTargets record for this team
+                    from core.models import TeamWeeklyTargets
+                    team_targets, created = TeamWeeklyTargets.objects.get_or_create(team=team)
+                    
+                    # Extract target values
+                    info_target = payload.get("team_weekly_info_target", 0)
+                    plan_target = payload.get("team_weekly_plan_target", 0)
+                    uv_target = payload.get("team_weekly_uv_target", 0)
+                    
+                    # Try to set the week targets (will fail if week already exists)
+                    success, message = team_targets.set_week_targets(
                         year=year,
-                        defaults={
-                            'week_start': week_start,
-                            'week_end': week_end
-                        }
+                        week_number=week_number,
+                        week_start=week_start,
+                        week_end=week_end,
+                        info_target=info_target,
+                        plan_target=plan_target,
+                        uv_target=uv_target,
+                        allow_overwrite=False  # Prevent overwriting existing weeks
                     )
                     
-                    # Update team weekly targets
-                    if payload.get("team_weekly_info_target") is not None:
-                        try:
-                            weekly_target.team_weekly_info_target = int(payload["team_weekly_info_target"])
-                        except Exception:
-                            weekly_target.team_weekly_info_target = payload["team_weekly_info_target"]
+                    if not success:
+                        return Response(
+                            {
+                                "detail": f"Targets for week {week_number}, {year} already exist. Cannot overwrite existing week data.",
+                                "week_number": week_number,
+                                "year": year,
+                                "message": message
+                            },
+                            status=status.HTTP_409_CONFLICT
+                        )
                     
-                    if payload.get("team_weekly_plan_target") is not None:
-                        try:
-                            weekly_target.team_weekly_plan_target = int(payload["team_weekly_plan_target"])
-                        except Exception:
-                            weekly_target.team_weekly_plan_target = payload["team_weekly_plan_target"]
-                    
-                    if payload.get("team_weekly_uv_target") is not None:
-                        try:
-                            weekly_target.team_weekly_uv_target = int(payload["team_weekly_uv_target"])
-                        except Exception:
-                            weekly_target.team_weekly_uv_target = payload["team_weekly_uv_target"]
-                    
-                    weekly_target.save()
+                    # Save the updated JSON data
+                    team_targets.save()
                     updated["team_id"] = team.id
 
         except Exception as e:
