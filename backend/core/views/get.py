@@ -31,7 +31,7 @@ from datetime import datetime, timedelta
 import pytz
 import logging
 
-from core.utils.dates import get_current_week_start, get_week_info_friday_to_friday
+from core.utils.dates import get_current_week_start, get_week_info_friday_to_friday, get_week_info_monday_to_sunday
 
 IST = pytz.timezone("Asia/Kolkata")
 timezone = pytz.timezone
@@ -264,7 +264,8 @@ class GetTeamMembers(APIView):
                         status=status.HTTP_404_NOT_FOUND
                     )
 
-            # Calculate week info using Friday 9:31 PM IST to Friday 9:30 PM IST
+            # Calculate week info - Infos use Friday 9:30 PM to next Friday 11:45 PM
+            # Plans use Monday to Sunday
             if week_param and year_param:
                 try:
                     week_number = int(week_param)
@@ -275,7 +276,12 @@ class GetTeamMembers(APIView):
                             {"detail": "Week number must be between 1 and 52"},
                             status=status.HTTP_400_BAD_REQUEST
                         )
-                    week_number, year, week_start, week_end = get_week_info_friday_to_friday(
+                    # Infos use Friday-Friday range
+                    week_number, year, info_week_start, info_week_end = get_week_info_friday_to_friday(
+                        week_number=week_number, year=year
+                    )
+                    # Plans use Monday-Sunday range
+                    _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday(
                         week_number=week_number, year=year
                     )
                 except ValueError:
@@ -285,7 +291,8 @@ class GetTeamMembers(APIView):
                     )
             else:
                 # Get current week
-                week_number, year, week_start, week_end = get_week_info_friday_to_friday()
+                week_number, year, info_week_start, info_week_end = get_week_info_friday_to_friday()
+                _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday()
 
             members = TeamMember.objects.filter(team_id=team_id).select_related("ir")
 
@@ -297,17 +304,18 @@ class GetTeamMembers(APIView):
             for member in members:
                 ir = member.ir
                 
-                # Calculate info and plan counts for the selected week
+                # Calculate info counts for the selected week (Friday to next Friday 11:45 PM)
                 info_count_week = InfoDetail.objects.filter(
                     ir_id=ir.ir_id,
-                    info_date__gte=week_start,
-                    info_date__lte=week_end
+                    info_date__gte=info_week_start,
+                    info_date__lte=info_week_end
                 ).count()
                 
+                # Calculate plan counts for the selected week (Monday to Sunday)
                 plan_count_week = PlanDetail.objects.filter(
                     ir_id=ir.ir_id,
-                    plan_date__gte=week_start,
-                    plan_date__lte=week_end
+                    plan_date__gte=plan_week_start,
+                    plan_date__lte=plan_week_end
                 ).count()
                 
                 # Get weekly targets for the selected week
@@ -427,11 +435,10 @@ class GetPlanDetails(APIView):
             
             if week_param and year_param:
                 try:
-                    from core.utils.dates import get_week_info_friday_to_friday
                     ist = pytz.timezone('Asia/Kolkata')
                     now = datetime.now(ist)
-                    _, _, week_start, week_end = get_week_info_friday_to_friday(now, int(week_param), int(year_param))
-                    # Use datetime bounds to match Friday-to-Friday precisely
+                    _, _, week_start, week_end = get_week_info_monday_to_sunday(now, int(week_param), int(year_param))
+                    # Use datetime bounds to match Monday-to-Sunday precisely
                     qs = PlanDetail.objects.filter(
                         ir_id=ir_id,
                         plan_date__gte=week_start,
@@ -804,16 +811,24 @@ class GetTeamInfoTotal(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-        # Compute week bounds (Friday→Friday)
+        # Compute week bounds - Infos use Friday→Friday, Plans use Monday→Sunday
         week_param = request.GET.get("week")
         year_param = request.GET.get("year")
         try:
             if week_param and year_param:
-                week_number, year, week_start, week_end = get_week_info_friday_to_friday(
+                # Infos use Friday-Friday range
+                week_number, year, info_week_start, info_week_end = get_week_info_friday_to_friday(
+                    week_number=int(week_param), year=int(year_param)
+                )
+                # Plans use Monday-Sunday range
+                _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday(
                     week_number=int(week_param), year=int(year_param)
                 )
             else:
-                week_number, year, week_start, week_end = get_week_info_friday_to_friday()
+                # Infos use Friday-Friday range
+                week_number, year, info_week_start, info_week_end = get_week_info_friday_to_friday()
+                # Plans use Monday-Sunday range
+                _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday()
         except Exception:
             logging.exception("Error computing week bounds for team totals team_id=%s", team_id)
             return Response({"detail": "Invalid week parameters"}, status=status.HTTP_400_BAD_REQUEST)
@@ -830,8 +845,9 @@ class GetTeamInfoTotal(APIView):
             info_qs = info_qs.filter(info_date__date__gte=parse_date(from_date), info_date__date__lte=parse_date(to_date))
             plan_qs = plan_qs.filter(plan_date__date__gte=parse_date(from_date), plan_date__date__lte=parse_date(to_date))
         else:
-            info_qs = info_qs.filter(info_date__gte=week_start, info_date__lte=week_end)
-            plan_qs = plan_qs.filter(plan_date__gte=week_start, plan_date__lte=week_end)
+            # Use separate date ranges for infos and plans
+            info_qs = info_qs.filter(info_date__gte=info_week_start, info_date__lte=info_week_end)
+            plan_qs = plan_qs.filter(plan_date__gte=plan_week_start, plan_date__lte=plan_week_end)
 
         members_info_total = info_qs.count()
         members_plan_total = plan_qs.count()
@@ -1014,7 +1030,7 @@ class GetVisibleTeams(APIView):
         week_param = request.GET.get("week")
         year_param = request.GET.get("year")
         
-        # Calculate week info using Friday 9:31 PM IST to Friday 9:30 PM IST
+        # Calculate week info - Infos use Friday 9:30 PM to next Friday 11:45 PM, Plans use Monday-Sunday
         if week_param and year_param:
             try:
                 week_number = int(week_param)
@@ -1025,7 +1041,12 @@ class GetVisibleTeams(APIView):
                         {"detail": "Week number must be between 1 and 52"},
                         status=status.HTTP_400_BAD_REQUEST
                     )
-                week_number, year, week_start, week_end = get_week_info_friday_to_friday(
+                # Infos use Friday-Friday range
+                week_number, year, info_week_start, info_week_end = get_week_info_friday_to_friday(
+                    week_number=week_number, year=year
+                )
+                # Plans use Monday-Sunday range
+                _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday(
                     week_number=week_number, year=year
                 )
             except ValueError:
@@ -1035,7 +1056,8 @@ class GetVisibleTeams(APIView):
                 )
         else:
             # Get current week
-            week_number, year, week_start, week_end = get_week_info_friday_to_friday()
+            week_number, year, info_week_start, info_week_end = get_week_info_friday_to_friday()
+            _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday()
         
         teams_data = []
         for team in viewable_teams:
@@ -1044,17 +1066,18 @@ class GetVisibleTeams(APIView):
             member_irs = [m.ir for m in members]
             member_ir_ids = [m.ir_id for m in member_irs]
             
-            # Calculate achieved for selected week
+            # Calculate achieved for selected week (Infos use Friday-Friday range)
             info_achieved = InfoDetail.objects.filter(
                 ir_id__in=member_ir_ids,
-                info_date__gte=week_start,
-                info_date__lte=week_end
+                info_date__gte=info_week_start,
+                info_date__lte=info_week_end
             ).count()
             
+            # Calculate achieved for selected week (Plans use Monday-Sunday range)
             plan_achieved = PlanDetail.objects.filter(
                 ir_id__in=member_ir_ids,
-                plan_date__gte=week_start,
-                plan_date__lte=week_end
+                plan_date__gte=plan_week_start,
+                plan_date__lte=plan_week_end
             ).count()
             
             uv_achieved = sum(m.uv_count or 0 for m in member_irs)

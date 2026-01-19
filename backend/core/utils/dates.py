@@ -86,7 +86,7 @@ def get_current_week_start(now: datetime | None = None) -> datetime:
 def get_week_info_friday_to_friday(now: datetime | None = None, week_number: int | None = None, year: int | None = None) -> tuple[int, int, datetime, datetime]:
     """
     Calculate week number (1-52), year, week start, and week end
-    for Friday 9:31 PM IST to next Friday 9:30 PM IST weekly cycles.
+    for Friday 9:30 PM IST to next Friday 11:45 PM IST weekly cycles.
     
     If week_number and year are provided, returns that specific week's bounds.
     Otherwise, calculates for current time.
@@ -109,19 +109,19 @@ def get_week_info_friday_to_friday(now: datetime | None = None, week_number: int
     
     # If specific week requested, calculate bounds for that week
     if week_number is not None and year is not None:
-        # Find first Friday 9:31 PM of the year
+        # Find first Friday 9:30 PM of the year
         jan_1 = datetime(year, 1, 1, tzinfo=IST)
         # Friday = 4 in weekday()
         days_to_first_friday = (4 - jan_1.weekday()) % 7
-        if days_to_first_friday == 0 and jan_1.hour < 21 or (jan_1.hour == 21 and jan_1.minute < 31):
-            # If Jan 1 is Friday but before 9:31 PM
+        if days_to_first_friday == 0 and jan_1.hour < 21 or (jan_1.hour == 21 and jan_1.minute < 30):
+            # If Jan 1 is Friday but before 9:30 PM
             days_to_first_friday = 0
         elif days_to_first_friday == 0:
-            # If Jan 1 is Friday after 9:31 PM, first week already started
+            # If Jan 1 is Friday after 9:30 PM, first week already started
             days_to_first_friday = 0
         
         first_friday = jan_1 + timedelta(days=days_to_first_friday)
-        first_friday = first_friday.replace(hour=21, minute=31, second=0, microsecond=0)
+        first_friday = first_friday.replace(hour=21, minute=30, second=0, microsecond=0)
         
         # If first Friday is after Jan 1, and Jan 1 is in the last week of previous year
         if first_friday > jan_1 and jan_1.weekday() != 4:
@@ -130,37 +130,39 @@ def get_week_info_friday_to_friday(now: datetime | None = None, week_number: int
         
         # Calculate the start of the requested week
         week_start = first_friday + timedelta(weeks=(week_number - 1))
-        week_end = week_start + timedelta(days=7, seconds=-1)  # Next Friday 9:30:59 PM
+        # Next Friday 11:45:59 PM (7 days + 2 hours + 15 minutes)
+        week_end = week_start + timedelta(days=7, hours=2, minutes=15, seconds=-1)
         
         return week_number, year, week_start, week_end
     
     # Calculate current week
-    # Find the most recent Friday 9:31 PM
+    # Find the most recent Friday 9:30 PM
     # weekday(): Monday=0, Tuesday=1, ..., Friday=4, Saturday=5, Sunday=6
     days_since_friday = (now.weekday() - 4) % 7
     
     # Get to last Friday
     last_friday = now - timedelta(days=days_since_friday)
-    last_friday = last_friday.replace(hour=21, minute=31, second=0, microsecond=0)
+    last_friday = last_friday.replace(hour=21, minute=30, second=0, microsecond=0)
     
-    # If current time is before Friday 9:31 PM this week, go back one more week
+    # If current time is before Friday 9:30 PM this week, go back one more week
     if now < last_friday:
         last_friday -= timedelta(days=7)
     
     week_start = last_friday
-    week_end = week_start + timedelta(days=7, seconds=-1)  # Next Friday 9:30:59 PM
+    # Next Friday 11:45:59 PM (7 days + 2 hours + 15 minutes from start)
+    week_end = week_start + timedelta(days=7, hours=2, minutes=15, seconds=-1)
     
     # Determine year (use the year when the week starts)
     year = week_start.year
     
-    # Calculate week number: weeks since first Friday 9:31 PM of the year
+    # Calculate week number: weeks since first Friday 9:30 PM of the year
     jan_1 = datetime(year, 1, 1, tzinfo=IST)
     days_to_first_friday = (4 - jan_1.weekday()) % 7
     
     first_friday = jan_1 + timedelta(days=days_to_first_friday)
-    first_friday = first_friday.replace(hour=21, minute=31, second=0, microsecond=0)
+    first_friday = first_friday.replace(hour=21, minute=30, second=0, microsecond=0)
     
-    # If Jan 1 is after the first Friday 9:31 PM, first week started in previous year
+    # If Jan 1 is after the first Friday 9:30 PM, first week started in previous year
     if jan_1 > first_friday:
         first_friday += timedelta(days=7)
     
@@ -170,5 +172,65 @@ def get_week_info_friday_to_friday(now: datetime | None = None, week_number: int
     
     # Ensure week number is between 1 and 52
     week_number = max(1, min(52, week_number))
+    
+    return week_number, year, week_start, week_end
+
+
+def get_week_info_monday_to_sunday(now: datetime | None = None, week_number: int | None = None, year: int | None = None) -> tuple[int, int, datetime, datetime]:
+    """
+    Calculate week start (Monday 00:00 AM) and week end (Sunday 23:59:59) IST for a given week.
+    Week numbers are based on the Friday-to-Friday weekly system for consistency.
+    
+    This function is used for Plans, which need Monday-to-Sunday boundaries.
+    The week numbering matches get_week_info_friday_to_friday() for consistency.
+    
+    If week_number and year are provided, returns that specific week's bounds.
+    Otherwise, calculates for current time.
+    
+    Args:
+        now: Current datetime (optional, defaults to now in IST)
+        week_number: Specific week number to calculate (1-52, optional)
+        year: Year for the specific week (optional)
+    
+    Returns:
+        tuple: (week_number, year, week_start, week_end)
+    """
+    if now is None:
+        now = datetime.now(IST)
+    else:
+        try:
+            now = now.astimezone(IST)
+        except Exception:
+            now = datetime.now(IST)
+    
+    # First, get the Friday-Friday week info to determine the week number
+    if week_number is not None and year is not None:
+        # Calculate the Friday-Friday bounds for this week (for week number consistency)
+        friday_week_num, friday_year, friday_start, friday_end = get_week_info_friday_to_friday(
+            week_number=week_number, year=year
+        )
+        week_number = friday_week_num
+        year = friday_year
+    else:
+        # Get current week's Friday-Friday bounds
+        week_number, year, friday_start, friday_end = get_week_info_friday_to_friday(now)
+    
+    # Now find the Monday that corresponds to this week
+    # If the Friday start is in week N, find the Monday of that same week
+    friday_start_date = friday_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    # Find the Monday of the week containing the Friday start
+    # Friday is weekday 4, so Monday is 3 days before
+    days_to_monday = (friday_start_date.weekday() - 0) % 7  # Distance to previous Monday
+    if days_to_monday == 0:
+        # Friday is not a Monday, so calculate back
+        days_to_monday = (friday_start_date.weekday()) % 7
+    
+    week_start = friday_start_date - timedelta(days=days_to_monday)
+    week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    # Week end is the Sunday after the Friday
+    # Friday + 2 days = Sunday
+    week_end = friday_start_date + timedelta(days=2, hours=23, minutes=59, seconds=59)
     
     return week_number, year, week_start, week_end

@@ -6,7 +6,7 @@ from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.contrib.auth.hashers import make_password
-from core.utils.dates import get_current_week_start, get_saturday_friday_week_info, get_week_info_friday_to_friday
+from core.utils.dates import get_current_week_start, get_saturday_friday_week_info, get_week_info_friday_to_friday, get_week_info_monday_to_sunday
 from django.db.models import F
 
 from core.models import (
