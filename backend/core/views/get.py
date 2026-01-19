@@ -1121,8 +1121,8 @@ class GetVisibleTeams(APIView):
             "hierarchy_level": ir.hierarchy_level,
             "week_number": week_number,
             "year": year,
-            "week_start": week_start.isoformat(),
-            "week_end": week_end.isoformat(),
+            "week_start": info_week_start.isoformat(),
+            "week_end": info_week_end.isoformat(),
             "total_visible_teams": len(teams_data),
             "teams": teams_data
         })
