@@ -200,10 +200,9 @@ def get_week_info_monday_to_sunday(now: datetime | None = None, week_number: int
         # Get current week's Friday-Friday bounds
         week_number, year, friday_start, friday_end = get_week_info_friday_to_friday(now)
     
-    # Find the Monday-Sunday immediately BEFORE the Friday week start
-    # Friday week start is always a Friday, so previous Sunday is 5 days before
-    prev_sunday = friday_start - timedelta(days=5)
-    week_start = prev_sunday - timedelta(days=6)
+    # Find the previous Sunday before the Friday week start
+    week_end = friday_start - timedelta(days=5)
+    week_end = week_end.replace(hour=23, minute=59, second=59, microsecond=0)
+    week_start = week_end - timedelta(days=6)
     week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
-    week_end = prev_sunday.replace(hour=23, minute=59, second=59, microsecond=0)
     return week_number, year, week_start, week_end
