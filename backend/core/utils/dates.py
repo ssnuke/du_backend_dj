@@ -104,71 +104,35 @@ def get_week_info_friday_to_friday(now: datetime | None = None, week_number: int
     return week_number, current_year, week_start, week_end
 
 
-def get_week_info_monday_to_sunday(now: datetime | None = None, week_number: int | None = None, year: int | None = None) -> tuple[int, int, datetime, datetime]:
-    """
-    Calculate week start (Sunday 00:00 AM) and week end (Saturday 23:59:59) IST for a given week.
-    Week numbers are based on the Friday-to-Friday weekly system for consistency.
-    
-    This function is used for Plans, which need Sunday-to-Saturday boundaries.
-    The week numbering matches get_week_info_friday_to_friday() for consistency.
-    
-    For Week 1 of 2026:
-    - Friday-Friday (Infos): Jan 2, 2026 9:31 PM to Jan 9, 2026 9:30 PM
-    - Sunday-Saturday (Plans): Dec 28, 2025 to Jan 3, 2026 (the Sunday-Saturday range before the Friday week start)
-    
-    Logic: For a given Friday-Friday week, find the Sunday that comes BEFORE the Friday start,
-    and the Saturday that follows that Sunday (6 days later).
-    
-    If week_number and year are provided, returns that specific week's bounds.
-    Otherwise, calculates for current time.
-    
-    Args:
-        now: Current datetime (optional, defaults to now in IST)
-        week_number: Specific week number to calculate (1-52, optional)
-        year: Year for the specific week (optional)
-    
-    Returns:
-        tuple: (week_number, year, week_start, week_end)
-    """
+def get_week_info_monday_to_sunday(
+    now: datetime | None = None,
+    week_number: int | None = None,
+    year: int | None = None
+) -> tuple[int, int, datetime, datetime]:
+
     if now is None:
         now = datetime.now(IST)
     else:
-        try:
-            now = now.astimezone(IST)
-        except Exception:
-            now = datetime.now(IST)
-    
-    # First, get the Friday-Friday week info to determine the week number and Friday start
+        now = now.astimezone(IST)
+
     if week_number is not None and year is not None:
-        friday_week_num, friday_year, friday_start, friday_end = get_week_info_friday_to_friday(
+        week_num, yr, friday_start, _ = get_week_info_friday_to_friday(
             week_number=week_number, year=year
         )
     else:
-        friday_week_num, friday_year, friday_start, friday_end = get_week_info_friday_to_friday(now)
-    
-    # Now find the Sunday-Saturday range that comes BEFORE the Friday start time
-    # friday_start is a Friday at 9:31 PM
-    # We need to find the Sunday before this Friday
-    
-    # Friday is weekday() = 4, Sunday is weekday() = 6
-    # Days back from Friday to previous Sunday: (4 - 6) % 7 = -2 % 7 = 5 days
-    # But we want the Sunday before, so: (4 + 2) % 7 = 6, but that doesn't work
-    # Actually: Friday (4) back to Sunday (6 of previous week) = 5 days back
-    
-    # From Friday, go back 5 days to get to Sunday
-    days_to_sunday = (friday_start.weekday() + 2) % 7  # This gives us days back to Sunday
-    if days_to_sunday == 0:  # If Friday's weekday + 2 is divisible by 7
-        days_to_sunday = 7
-    
-    # Actually simpler: Friday is weekday 4, Sunday (previous week) is 5 days before
-    # Friday -> Thursday (1) -> Wednesday (2) -> Tuesday (3) -> Monday (4) -> Sunday (5)
-    week_start = friday_start - timedelta(days=5)
+        week_num, yr, friday_start, _ = get_week_info_friday_to_friday(now)
+   
+    # Friday → Monday
+    week_start = friday_start - timedelta(days=4)
     week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    # Saturday is 6 days after Sunday
+
+ 
+    print(friday_start,week_start)
+
+    # Monday → Sunday
     week_end = week_start + timedelta(days=6, hours=23, minutes=59, seconds=59)
-    
-    return friday_week_num, friday_year, week_start, week_end
+
+    return week_num, yr, week_start, week_end
 
 
 def get_current_week_start(now: datetime | None = None) -> datetime:
