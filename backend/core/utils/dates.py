@@ -127,7 +127,7 @@ def get_week_info_monday_to_sunday(
     week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
 
  
-    print(friday_start,week_start)
+    # print(friday_start,week_start)
 
     # Monday → Sunday
     week_end = week_start + timedelta(days=6, hours=23, minutes=59, seconds=59)

@@ -1112,6 +1112,8 @@ class GetVisibleTeams(APIView):
                     "info_achieved": info_achieved,
                     "plan_achieved": plan_achieved,
                     "uv_achieved": uv_achieved,
+                    "plan_week_start": plan_week_start.isoformat(),
+                    "plan_week_end": plan_week_end.isoformat(),
                 }
             })
         
