@@ -121,18 +121,19 @@ def get_week_info_monday_to_sunday(
         )
     else:
         week_num, yr, friday_start, _ = get_week_info_friday_to_friday(now)
-   
-    # Friday → Monday
-    week_start = friday_start - timedelta(days=4)
-    week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
 
- 
-    # print(friday_start,week_start)
+    # 👉 Friday → NEXT Monday
+    days_to_next_monday = (7 - friday_start.weekday()) % 7
+    if days_to_next_monday == 0:
+        days_to_next_monday = 7
+
+    plan_start = friday_start + timedelta(days=days_to_next_monday)
+    plan_start = plan_start.replace(hour=0, minute=0, second=0, microsecond=0)
 
     # Monday → Sunday
-    week_end = week_start + timedelta(days=6, hours=23, minutes=59, seconds=59)
+    plan_end = plan_start + timedelta(days=6, hours=23, minutes=59, seconds=59)
 
-    return week_num, yr, week_start, week_end
+    return week_num, yr, plan_start, plan_end
 
 
 def get_current_week_start(now: datetime | None = None) -> datetime:
