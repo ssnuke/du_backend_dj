@@ -1076,38 +1076,40 @@ class GetVisibleTeams(APIView):
         for team in viewable_teams:
             # Get team members
             members = TeamMember.objects.filter(team=team).select_related('ir')
-            member_irs = [m.ir for m in members]
+            # Exclude LDCs who are the owner (TeamRole.LDC) of the team
+            filtered_members = [m for m in members if not (m.role == TeamRole.LDC and m.ir == team.created_by)]
+            member_irs = [m.ir for m in filtered_members]
             member_ir_ids = [m.ir_id for m in member_irs]
-            
+
             # Calculate achieved for selected week (Infos use Friday-Friday range)
             info_achieved = InfoDetail.objects.filter(
                 ir_id__in=member_ir_ids,
                 info_date__gte=info_week_start,
                 info_date__lte=info_week_end
             ).count()
-            
+
             # Calculate achieved for selected week (Plans use Monday-Sunday range)
             plan_achieved = PlanDetail.objects.filter(
                 ir_id__in=member_ir_ids,
                 plan_date__gte=plan_week_start,
                 plan_date__lte=plan_week_end
             ).count()
-            
+
             uv_achieved = sum(m.uv_count or 0 for m in member_irs)
-            
+
             # Get weekly targets for selected week
             team_target = WeeklyTarget.objects.filter(
                 team=team, week_number=week_number, year=year
             ).first()
-            
+
             # Check if requester can edit this team
             can_edit = False
             if team.created_by:
                 can_edit = ir.can_view_ir(team.created_by)
-            
+
             # Check if IR is a member
             is_member = any(m.ir_id == ir.ir_id for m in members)
-            
+
             teams_data.append({
                 "team_id": team.id,
                 "team_name": team.name,
