@@ -196,7 +196,20 @@ class GetLDCs(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-        data = [{"ir_id": i.ir_id, "ir_name": i.ir_name, "id": i.ir_id, "ir_access_level": i.ir_access_level} for i in ldcs]
+        data = []
+        for ldc in ldcs:
+            # Find all teams where this LDC is a member with role LDC
+            teams_managed = TeamMember.objects.filter(ir_id=ldc.ir_id, role=TeamRole.LDC).values_list('team_id', flat=True)
+            # Find all unique IRs in those teams, excluding the LDC
+            member_ids = TeamMember.objects.filter(team_id__in=teams_managed).exclude(ir_id=ldc.ir_id).values_list('ir_id', flat=True).distinct()
+            member_count = len(member_ids)
+            data.append({
+                "ir_id": ldc.ir_id,
+                "ir_name": ldc.ir_name,
+                "id": ldc.ir_id,
+                "ir_access_level": ldc.ir_access_level,
+                "team_member_count": member_count
+            })
         return Response(data)
 
 
