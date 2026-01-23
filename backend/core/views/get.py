@@ -175,6 +175,7 @@ class GetAllTeams(APIView):
 # GET ALL LDCs (with hierarchy filter)
 # ---------------------------------------------------
 class GetLDCs(APIView):
+    import logging
     def get(self, request):
         requester_ir_id = request.GET.get("requester_ir_id")
         
@@ -218,9 +219,10 @@ class GetLDCs(APIView):
             team_member_ids = TeamMember.objects.filter(team_id__in=team_ids).exclude(ir_id=ldc.ir_id).values_list('ir_id', flat=True).distinct()
 
             week_data = {}
-            for week_num in range(1, 53):
+            for week_num in range(1, current_week_number):
                 # Only aggregate for weeks up to the current week and year
                 _, year, week_start, week_end = get_week_info_friday_to_friday(week_number=week_num)
+                logging.info(f"LDC {ldc.ir_id} Week {week_num}: week_start={week_start}, week_end={week_end}")
                 if (year < current_year) or (year == current_year and week_num <= current_week_number):
                     total_infos_done = InfoDetail.objects.filter(
                         ir_id__in=team_member_ids,
@@ -228,6 +230,7 @@ class GetLDCs(APIView):
                         info_date__lte=week_end
                     ).count()
                     _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday(week_number=week_num)
+                    logging.info(f"LDC {ldc.ir_id} Week {week_num}: plan_week_start={plan_week_start}, plan_week_end={plan_week_end}")
                     total_plans_done = PlanDetail.objects.filter(
                         ir_id__in=team_member_ids,
                         plan_date__gte=plan_week_start,
