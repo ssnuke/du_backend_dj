@@ -203,12 +203,46 @@ class GetLDCs(APIView):
             # Find all unique IRs in those teams, excluding the LDC
             member_ids = TeamMember.objects.filter(team_id__in=teams_managed).exclude(ir_id=ldc.ir_id).values_list('ir_id', flat=True).distinct()
             member_count = len(member_ids)
+
+            # Find all teams created by this LDC
+            teams_created = Team.objects.filter(created_by=ldc)
+
+            # Aggregate week-wise data for all teams created by this LDC
+            week_data = {}
+            # For each week (1-52)
+            for week_num in range(1, 53):
+                # Get all members in these teams, excluding the LDC
+                team_ids = teams_created.values_list('id', flat=True)
+                team_member_ids = TeamMember.objects.filter(team_id__in=team_ids).exclude(ir_id=ldc.ir_id).values_list('ir_id', flat=True).distinct()
+                # Infos: Friday-Friday
+                _, year, week_start, week_end = get_week_info_friday_to_friday(week_number=week_num)
+                total_infos_done = InfoDetail.objects.filter(
+                    ir_id__in=team_member_ids,
+                    info_date__gte=week_start,
+                    info_date__lte=week_end
+                ).count()
+                # Plans: Monday-Sunday
+                _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday(week_number=week_num)
+                total_plans_done = PlanDetail.objects.filter(
+                    ir_id__in=team_member_ids,
+                    plan_date__gte=plan_week_start,
+                    plan_date__lte=plan_week_end
+                ).count()
+                # UVs: sum for all members
+                uvs_fallen = sum(Ir.objects.filter(ir_id__in=team_member_ids).values_list('uv_count', flat=True))
+                week_data[week_num] = {
+                    "total_infos_done": total_infos_done,
+                    "total_plans_done": total_plans_done,
+                    "uvs_fallen": uvs_fallen
+                }
+
             data.append({
                 "ir_id": ldc.ir_id,
                 "ir_name": ldc.ir_name,
                 "id": ldc.ir_id,
                 "ir_access_level": ldc.ir_access_level,
-                "team_member_count": member_count
+                "team_member_count": member_count,
+                "week": week_data
             })
         return Response(data)
 
