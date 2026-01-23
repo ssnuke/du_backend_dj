@@ -219,28 +219,37 @@ class GetLDCs(APIView):
             team_member_ids = TeamMember.objects.filter(team_id__in=team_ids).exclude(ir_id=ldc.ir_id).values_list('ir_id', flat=True).distinct()
 
             week_data = {}
-            for week_num in range(1, current_week_number):
-                # Only aggregate for weeks up to the current week and year
-                _, year, week_start, week_end = get_week_info_friday_to_friday(week_number=week_num)
+            for week_num in range(1, current_week_number + 1):
+                # Reset values for each week iteration
+                total_infos_done = 0
+                total_plans_done = 0
+                uvs_fallen = 0
+                
+                # Get week date ranges with explicit year parameter
+                _, year, week_start, week_end = get_week_info_friday_to_friday(week_number=week_num, year=current_year)
                 logging.info(f"LDC {ldc.ir_id} Week {week_num}: week_start={week_start}, week_end={week_end}")
+                
                 if (year < current_year) or (year == current_year and week_num <= current_week_number):
+                    # Count infos for this specific week
                     total_infos_done = InfoDetail.objects.filter(
                         ir_id__in=team_member_ids,
                         info_date__gte=week_start,
                         info_date__lte=week_end
                     ).count()
-                    _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday(week_number=week_num)
+                    
+                    # Count plans for this specific week
+                    _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday(week_number=week_num, year=current_year)
                     logging.info(f"LDC {ldc.ir_id} Week {week_num}: plan_week_start={plan_week_start}, plan_week_end={plan_week_end}")
                     total_plans_done = PlanDetail.objects.filter(
                         ir_id__in=team_member_ids,
                         plan_date__gte=plan_week_start,
                         plan_date__lte=plan_week_end
                     ).count()
+                    
+                    # Note: UV is a cumulative counter, not week-specific historical data
+                    # This will be the same for all weeks since it's the current total
                     uvs_fallen = sum(Ir.objects.filter(ir_id__in=team_member_ids).values_list('uv_count', flat=True))
-                else:
-                    total_infos_done = 0
-                    total_plans_done = 0
-                    uvs_fallen = 0
+                
                 week_data[week_num] = {
                     "total_infos_done": total_infos_done,
                     "total_plans_done": total_plans_done,
