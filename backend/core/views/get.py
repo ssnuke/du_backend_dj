@@ -1015,6 +1015,8 @@ class GetTeamInfoTotal(APIView):
 class GetUVCount(APIView):
     def get(self, request, ir_id):
         requester_ir_id = request.GET.get("requester_ir_id")
+        week_param = request.GET.get("week")
+        year_param = request.GET.get("year")
         
         try:
             ir = get_object_or_404(Ir, ir_id=ir_id)
@@ -1034,11 +1036,57 @@ class GetUVCount(APIView):
                         status=status.HTTP_404_NOT_FOUND
                     )
             
+            # Calculate week info - UVs use Friday-Friday range
+            if week_param and year_param:
+                try:
+                    week_number = int(week_param)
+                    year = int(year_param)
+                    # Validate week number
+                    if week_number < 1 or week_number > 52:
+                        return Response(
+                            {"detail": "Week number must be between 1 and 52"},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    week_number, year, week_start, week_end = get_week_info_friday_to_friday(
+                        week_number=week_number, year=year
+                    )
+                except ValueError:
+                    return Response(
+                        {"detail": "Invalid week or year parameter"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            else:
+                # Get current week
+                week_number, year, week_start, week_end = get_week_info_friday_to_friday()
+            
+            # Calculate week-specific UV count from UVDetail records
+            try:
+                weekly_uv_count = UVDetail.objects.filter(
+                    ir_id=ir_id,
+                    uv_date__gte=week_start,
+                    uv_date__lte=week_end
+                ).aggregate(total=Sum('uv_count'))['total'] or 0
+            except Exception:
+                # UVDetail table may not exist yet due to pending migrations
+                weekly_uv_count = 0
+            
+            # Get weekly UV target for this specific week
+            weekly_target = WeeklyTarget.objects.filter(
+                ir=ir,
+                week_number=week_number,
+                year=year
+            ).first()
+            
             return Response({
                 "ir_id": ir.ir_id,
                 "ir_name": ir.ir_name,
-                "uv_count": ir.uv_count,
-                "weekly_uv_target": ir.weekly_uv_target if ir.ir_access_level in [2, 3] else None,
+                "week_number": week_number,
+                "year": year,
+                "week_start": week_start.isoformat(),
+                "week_end": week_end.isoformat(),
+                "uv_count": weekly_uv_count,
+                "cumulative_uv_count": ir.uv_count,
+                "weekly_uv_target": (weekly_target.ir_weekly_uv_target if weekly_target else ir.weekly_uv_target) if ir.ir_access_level in [2, 3] else None,
             })
         except Ir.DoesNotExist:
             return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
