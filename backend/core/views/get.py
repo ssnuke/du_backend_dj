@@ -145,6 +145,8 @@ class GetAllTeams(APIView):
             teams = Team.objects.all()
         
         result = []
+        # Get current week bounds for UV calculation
+        _, _, week_start, week_end = get_week_info_friday_to_friday()
 
         for team in teams:
             members = TeamMember.objects.filter(team=team).select_related("ir")
@@ -153,12 +155,19 @@ class GetAllTeams(APIView):
             plan_total = 0
             uv_total = 0
 
+            member_ir_ids = []
             for member in members:
                 ir = member.ir
                 info_total += ir.info_count or 0
                 plan_total += ir.plan_count or 0
-                if ir.ir_access_level in [2, 3]:
-                    uv_total += ir.weekly_uv_target or 0
+                member_ir_ids.append(ir.ir_id)
+
+            # Calculate week-specific UV progress
+            uv_total = UVDetail.objects.filter(
+                ir_id__in=member_ir_ids,
+                uv_date__gte=week_start,
+                uv_date__lte=week_end
+            ).aggregate(total=Sum('uv_count'))['total'] or 0
 
             result.append({
                 **TeamSerializer(team).data,
@@ -247,9 +256,12 @@ class GetLDCs(APIView):
                         plan_date__lte=plan_week_end
                     ).count()
                     
-                    # Note: UV is a cumulative counter, not week-specific historical data
-                    # This will be the same for all weeks since it's the current total
-                    uvs_fallen = sum(Ir.objects.filter(ir_id__in=team_member_ids).values_list('uv_count', flat=True))
+                    # Get week-specific UV progress from UVDetail records
+                    uvs_fallen = UVDetail.objects.filter(
+                        ir_id__in=team_member_ids,
+                        uv_date__gte=week_start,
+                        uv_date__lte=week_end
+                    ).aggregate(total=Sum('uv_count'))['total'] or 0
                 
                 week_data[week_num] = {
                     "total_infos_done": total_infos_done,
@@ -933,7 +945,17 @@ class GetTeamInfoTotal(APIView):
         info_counts = {i["ir_id"]: i["total"] for i in info_qs.values("ir_id").annotate(total=Count("id"))}
         plan_counts = {p["ir_id"]: p["total"] for p in plan_qs.values("ir_id").annotate(total=Count("id"))}
 
-        # fetch ir data for members (including UV counts)
+        # Get week-specific UV counts from UVDetail records
+        uv_counts = {}
+        uv_records = UVDetail.objects.filter(
+            ir_id__in=member_ids,
+            uv_date__gte=info_week_start,
+            uv_date__lte=info_week_end
+        ).values('ir_id').annotate(total=Sum('uv_count'))
+        for record in uv_records:
+            uv_counts[record['ir_id']] = record['total'] or 0
+
+        # fetch ir data for members
         irs = Ir.objects.filter(ir_id__in=member_ids)
         ir_data_map = {ir.ir_id: ir for ir in irs}
 
@@ -942,7 +964,7 @@ class GetTeamInfoTotal(APIView):
         
         for ir_id in member_ids:
             ir = ir_data_map.get(ir_id)
-            uv_count = ir.uv_count or 0 if ir else 0
+            uv_count = uv_counts.get(ir_id, 0)
             total_uv_count += uv_count
             
             members.append({
