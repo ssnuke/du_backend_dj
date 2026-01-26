@@ -406,6 +406,17 @@ class GetTeamMembers(APIView):
                     plan_date__lte=plan_week_end
                 ).count()
                 
+                # Calculate week-specific UV count from UVDetail records (Friday-Friday range)
+                try:
+                    uv_count_week = UVDetail.objects.filter(
+                        ir_id=ir.ir_id,
+                        uv_date__gte=info_week_start,
+                        uv_date__lte=info_week_end
+                    ).aggregate(total=Sum('uv_count'))['total'] or 0
+                except Exception:
+                    # UVDetail table may not exist yet due to pending migrations
+                    uv_count_week = 0
+                
                 # Get weekly targets for the selected week
                 ir_target = WeeklyTarget.objects.filter(
                     ir=ir, week_number=week_number, year=year
@@ -421,7 +432,8 @@ class GetTeamMembers(APIView):
                     "info_count": info_count_week,
                     "plan_count": plan_count_week,
                     "weekly_uv_target": (ir_target.ir_weekly_uv_target if ir_target else ir.weekly_uv_target) if ir.ir_access_level in [2, 3] else None,
-                    "uv_count": ir.uv_count if ir.ir_access_level in [2, 3] else None,
+                    "uv_count": uv_count_week , #if ir.ir_access_level in [2, 3] else None
+                    "cumulative_uv_count": ir.uv_count if ir.ir_access_level in [2, 3] else None,
                     "week_number": week_number,
                     "year": year,
                 })
