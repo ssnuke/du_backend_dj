@@ -866,9 +866,10 @@ class AddUV(APIView):
                             status=status.HTTP_400_BAD_REQUEST
                         )
                     
-                    # Create UVDetail record for week-specific tracking
+                    # Create UVDetail record for week-specific tracking with IR name
                     uv_detail = UVDetail.objects.create(
                         ir=ir,
+                        ir_name=ir.ir_name,  # Store IR name for display
                         uv_count=uv_count,
                         uv_date=item.get("uv_date", timezone.now()),
                         comments=item.get("comments")
