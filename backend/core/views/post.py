@@ -16,6 +16,7 @@ from core.models import (
     TeamMember,
     InfoDetail,
     PlanDetail,
+    UVDetail,
     TeamWeek,
     TeamRole,
     WeeklyTarget,
@@ -848,6 +849,7 @@ class AddUV(APIView):
                     payload = [payload]
                 
                 total_uvs_added = 0
+                uv_record_ids = []
                 
                 for item in payload:
                     uv_count = item.get("uv_count", 1)  # Default to 1 UV if not specified
@@ -864,6 +866,14 @@ class AddUV(APIView):
                             status=status.HTTP_400_BAD_REQUEST
                         )
                     
+                    # Create UVDetail record for week-specific tracking
+                    uv_detail = UVDetail.objects.create(
+                        ir=ir,
+                        uv_count=uv_count,
+                        uv_date=item.get("uv_date", timezone.now()),
+                        comments=item.get("comments")
+                    )
+                    uv_record_ids.append(uv_detail.id)
                     total_uvs_added += uv_count
                 
                 # ✅ Atomic IR UV counter update
@@ -876,6 +886,7 @@ class AddUV(APIView):
                         "message": "UV count updated successfully",
                         "ir_id": ir_id,
                         "uvs_added": total_uvs_added,
+                        "uv_record_ids": uv_record_ids,
                         "new_uv_count": ir.uv_count + total_uvs_added
                     },
                     status=status.HTTP_201_CREATED,

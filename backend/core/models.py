@@ -519,6 +519,13 @@ class PlanDetail(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='closing_pending', null=True, blank=True)
 
 
+class UVDetail(models.Model):
+    ir = models.ForeignKey(Ir, on_delete=models.CASCADE)
+    uv_date = models.DateTimeField(default=timezone.now)
+    uv_count = models.IntegerField(default=1)
+    comments = models.TextField(null=True, blank=True)
+
+
 class TeamWeek(models.Model):
     team = models.ForeignKey(Team, on_delete=models.CASCADE)
     week_start = models.DateTimeField()

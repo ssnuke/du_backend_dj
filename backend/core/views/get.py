@@ -13,6 +13,7 @@ from core.models import (
     TeamMember,
     InfoDetail,
     PlanDetail,
+    UVDetail,
     TeamWeek,
     TeamRole,
     WeeklyTarget,
@@ -626,7 +627,11 @@ class GetTargetsDashboard(APIView):
                 plan_date__lte=plan_week_end
             ).count()
             
-            team_uv_progress = sum(m.uv_count or 0 for m in members)
+            team_uv_progress = UVDetail.objects.filter(
+                ir_id__in=member_ids,
+                uv_date__gte=week_start,
+                uv_date__lte=week_end
+            ).aggregate(total=models.Sum('uv_count'))['total'] or 0
 
             # Check if requester can edit this team (created by someone in their subtree)
             can_edit = False
@@ -1154,7 +1159,11 @@ class GetVisibleTeams(APIView):
                 plan_date__lte=plan_week_end
             ).count()
 
-            uv_achieved = sum(m.uv_count or 0 for m in member_irs)
+            uv_achieved = UVDetail.objects.filter(
+                ir_id__in=member_ir_ids,
+                uv_date__gte=info_week_start,
+                uv_date__lte=info_week_end
+            ).aggregate(total=models.Sum('uv_count'))['total'] or 0
 
             # Get weekly targets for selected week
             team_target = WeeklyTarget.objects.filter(
