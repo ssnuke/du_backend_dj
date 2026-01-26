@@ -61,3 +61,9 @@ class PlanDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = PlanDetail
         fields = "__all__"
+
+
+class UVDetailSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UVDetail
+        fields = "__all__"
