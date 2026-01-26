@@ -3,19 +3,19 @@ import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
 
-# Define Year 2026 Week 1 Start: January 2, 2026, 9:31 PM IST
-YEAR_2026_WEEK_1_START = datetime(2026, 1, 2, 21, 31, 0, 0, tzinfo=IST)
+# Define Year 2026 Week 1 Start: January 2, 2026, 9:30 PM IST
+YEAR_2026_WEEK_1_START = datetime(2026, 1, 2, 21, 30, 0, 0, tzinfo=IST)
 
 
 def get_week_info_friday_to_friday(now: datetime | None = None, week_number: int | None = None, year: int | None = None) -> tuple[int, int, datetime, datetime]:
     """
     Calculate week number (1-52), year, week start, and week end
-    for Friday 9:31 PM IST to next Friday 9:30 PM IST weekly cycles.
+    for Friday 9:30 PM IST to next Friday 11:30 PM IST weekly cycles.
     
-    Week 1 of 2026 starts: Jan 2, 2026 9:31 PM IST
-    Week 1 of 2026 ends: Jan 9, 2026 9:30 PM IST
+    Week 1 of 2026 starts: Jan 2, 2026 9:30 PM IST
+    Week 1 of 2026 ends: Jan 9, 2026 11:30 PM IST
     
-    For other years, Week 1 starts on the first Friday of January at 9:31 PM.
+    For other years, Week 1 starts on the first Friday of January at 9:30 PM.
     
     If week_number and year are provided, returns that specific week's bounds.
     Otherwise, calculates for current time.
@@ -42,22 +42,21 @@ def get_week_info_friday_to_friday(now: datetime | None = None, week_number: int
         if year == 2026:
             first_week_start = YEAR_2026_WEEK_1_START
         else:
-            # For other years, Week 1 starts on first Friday of January at 9:31 PM
+            # For other years, Week 1 starts on first Friday of January at 9:30 PM
             jan_1 = datetime(year, 1, 1, tzinfo=IST)
             # Friday = 4 in weekday() (Monday=0, ..., Friday=4, Saturday=5, Sunday=6)
             days_to_first_friday = (4 - jan_1.weekday()) % 7
             if days_to_first_friday == 0:  # Jan 1 is a Friday
                 days_to_first_friday = 0
             first_week_start = jan_1 + timedelta(days=days_to_first_friday)
-            first_week_start = first_week_start.replace(hour=21, minute=31, second=0, microsecond=0)
+            first_week_start = first_week_start.replace(hour=21, minute=30, second=0, microsecond=0)
         
         # Calculate the start of the requested week
         # Week 1 starts at first_week_start, Week 2 at first_week_start + 7 days, etc.
         week_start = first_week_start + timedelta(weeks=(week_number - 1))
         
-        # Week ends next Friday at 9:30 PM (6 days, 23 hours, 59 minutes later)
-        # From 9:31 PM Friday to 9:30 PM next Friday = 6 days + 23 hours + 59 minutes
-        week_end = week_start + timedelta(days=6, hours=23, minutes=59, seconds=59)
+        # Week ends next Friday at 11:30 PM (7 days + 2 hours after start)
+        week_end = week_start + timedelta(days=7, hours=2)
         
         return week_number, year, week_start, week_end
     
@@ -74,7 +73,7 @@ def get_week_info_friday_to_friday(now: datetime | None = None, week_number: int
         if days_to_first_friday == 0:
             days_to_first_friday = 0
         first_week_start = jan_1 + timedelta(days=days_to_first_friday)
-        first_week_start = first_week_start.replace(hour=21, minute=31, second=0, microsecond=0)
+        first_week_start = first_week_start.replace(hour=21, minute=30, second=0, microsecond=0)
     
     # Check if we're before Week 1 of current year
     if now < first_week_start:
@@ -88,7 +87,7 @@ def get_week_info_friday_to_friday(now: datetime | None = None, week_number: int
             if days_to_first_friday == 0:
                 days_to_first_friday = 0
             first_week_start = jan_1 + timedelta(days=days_to_first_friday)
-            first_week_start = first_week_start.replace(hour=21, minute=31, second=0, microsecond=0)
+            first_week_start = first_week_start.replace(hour=21, minute=30, second=0, microsecond=0)
     
     # Calculate how many complete weeks have passed since first_week_start
     time_diff = now - first_week_start
@@ -99,7 +98,7 @@ def get_week_info_friday_to_friday(now: datetime | None = None, week_number: int
     
     # Calculate actual week start and end
     week_start = first_week_start + timedelta(weeks=weeks_passed)
-    week_end = week_start + timedelta(days=6, hours=23, minutes=59, seconds=59)
+    week_end = week_start + timedelta(days=7, hours=2)
     
     return week_number, current_year, week_start, week_end
 
@@ -139,9 +138,9 @@ def get_week_info_monday_to_sunday(
 def get_current_week_start(now: datetime | None = None) -> datetime:
     """
     Compute the current week start datetime using
-    Friday 9:31 PM IST as the week boundary.
+    Friday 9:30 PM IST as the week boundary.
     
-    Week starts at Friday 9:31 PM and ends next Friday 9:30 PM.
+    Week starts at Friday 9:30 PM and ends next Friday 11:30 PM.
 
     Returns:
         timezone-aware datetime in IST

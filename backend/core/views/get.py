@@ -541,15 +541,13 @@ class GetTargetsDashboard(APIView):
     def get(self, request, ir_id):
         ir = get_object_or_404(Ir, ir_id=ir_id)
         
-        # Get week info using Friday 9:31 PM IST → next Friday 9:30 PM IST
+        # Get week info using Friday 9:30 PM IST → next Friday 11:30 PM IST for infos/UVs
         week_param = request.GET.get("week")
         year_param = request.GET.get("year")
         try:
             if week_param and year_param:
-                ist = pytz.timezone('Asia/Kolkata')
-                now = datetime.now(ist)
                 week_number, year, week_start, week_end = get_week_info_friday_to_friday(
-                    now, int(week_param), int(year_param)
+                    week_number=int(week_param), year=int(year_param)
                 )
             else:
                 week_number, year, week_start, week_end = get_week_info_friday_to_friday()
@@ -565,6 +563,9 @@ class GetTargetsDashboard(APIView):
         ).first()
 
         # Calculate current week's info and plan counts
+        _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday(
+            week_number=week_number, year=year
+        )
         current_week_info_count = InfoDetail.objects.filter(
             ir_id=ir.ir_id,
             info_date__gte=week_start,
@@ -573,8 +574,8 @@ class GetTargetsDashboard(APIView):
         
         current_week_plan_count = PlanDetail.objects.filter(
             ir_id=ir.ir_id,
-            plan_date__gte=week_start,
-            plan_date__lte=week_end
+            plan_date__gte=plan_week_start,
+            plan_date__lte=plan_week_end
         ).count()
 
         personal = {
@@ -621,8 +622,8 @@ class GetTargetsDashboard(APIView):
             
             team_plan_progress = PlanDetail.objects.filter(
                 ir_id__in=member_ids,
-                plan_date__gte=week_start,
-                plan_date__lte=week_end
+                plan_date__gte=plan_week_start,
+                plan_date__lte=plan_week_end
             ).count()
             
             team_uv_progress = sum(m.uv_count or 0 for m in members)
@@ -646,6 +647,10 @@ class GetTargetsDashboard(APIView):
                 "info_progress": team_info_progress,
                 "plan_progress": team_plan_progress,
                 "uv_progress": team_uv_progress,
+                "plan_week_start": plan_week_start.isoformat(),
+                "plan_week_end": plan_week_end.isoformat(),
+                "info_week_start": week_start.isoformat(),
+                "info_week_end": week_end.isoformat(),
             })
 
         return Response({"personal": personal, "teams": teams_progress})
@@ -1097,7 +1102,7 @@ class GetVisibleTeams(APIView):
         week_param = request.GET.get("week")
         year_param = request.GET.get("year")
         
-        # Calculate week info - Infos use Friday 9:30 PM to next Friday 11:45 PM, Plans use Monday-Sunday
+        # Calculate week info - Infos use Friday 9:30 PM to next Friday 11:30 PM, Plans use Monday-Sunday
         if week_param and year_param:
             try:
                 week_number = int(week_param)

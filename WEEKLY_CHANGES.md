@@ -5,15 +5,15 @@
 Updated the Django backend to calculate weekly data with different date ranges for Plans and Infos:
 
 1. **Plans for the week**: Monday 00:00 AM to Sunday 23:59:59 IST
-2. **Infos for the week**: Friday 9:30 PM IST to Next Friday 11:45 PM IST
+2. **Infos for the week**: Friday 9:30 PM IST to Next Friday 11:30 PM IST
 
 ## Files Modified
 
 ### 1. `/backend/core/utils/dates.py`
 - **Updated**: `get_week_info_friday_to_friday()` 
   - Changed time boundary from Friday 9:31 PM to Friday 9:30 PM (start)
-  - Changed end time from Friday 9:30 PM to Friday 11:45 PM (end)
-  - Now correctly: Friday 9:30 PM → Next Friday 11:45 PM
+  - Changed end time from Friday 9:30 PM to Friday 11:30 PM (end)
+  - Now correctly: Friday 9:30 PM → Next Friday 11:30 PM
   
 - **Added**: `get_week_info_monday_to_sunday()`
   - New function for calculating Plans weekly data
