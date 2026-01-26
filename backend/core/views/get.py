@@ -163,11 +163,15 @@ class GetAllTeams(APIView):
                 member_ir_ids.append(ir.ir_id)
 
             # Calculate week-specific UV progress
-            uv_total = UVDetail.objects.filter(
-                ir_id__in=member_ir_ids,
-                uv_date__gte=week_start,
-                uv_date__lte=week_end
-            ).aggregate(total=Sum('uv_count'))['total'] or 0
+            try:
+                uv_total = UVDetail.objects.filter(
+                    ir_id__in=member_ir_ids,
+                    uv_date__gte=week_start,
+                    uv_date__lte=week_end
+                ).aggregate(total=Sum('uv_count'))['total'] or 0
+            except Exception:
+                # UVDetail table may not exist yet due to pending migrations
+                uv_total = 0
 
             result.append({
                 **TeamSerializer(team).data,
@@ -257,11 +261,15 @@ class GetLDCs(APIView):
                     ).count()
                     
                     # Get week-specific UV progress from UVDetail records
-                    uvs_fallen = UVDetail.objects.filter(
-                        ir_id__in=team_member_ids,
-                        uv_date__gte=week_start,
-                        uv_date__lte=week_end
-                    ).aggregate(total=Sum('uv_count'))['total'] or 0
+                    try:
+                        uvs_fallen = UVDetail.objects.filter(
+                            ir_id__in=team_member_ids,
+                            uv_date__gte=week_start,
+                            uv_date__lte=week_end
+                        ).aggregate(total=Sum('uv_count'))['total'] or 0
+                    except Exception:
+                        # UVDetail table may not exist yet due to pending migrations
+                        uvs_fallen = 0
                 
                 week_data[week_num] = {
                     "total_infos_done": total_infos_done,
@@ -639,11 +647,15 @@ class GetTargetsDashboard(APIView):
                 plan_date__lte=plan_week_end
             ).count()
             
-            team_uv_progress = UVDetail.objects.filter(
-                ir_id__in=member_ids,
-                uv_date__gte=week_start,
-                uv_date__lte=week_end
-            ).aggregate(total=models.Sum('uv_count'))['total'] or 0
+            try:
+                team_uv_progress = UVDetail.objects.filter(
+                    ir_id__in=member_ids,
+                    uv_date__gte=week_start,
+                    uv_date__lte=week_end
+                ).aggregate(total=Sum('uv_count'))['total'] or 0
+            except Exception:
+                # UVDetail table may not exist yet due to pending migrations
+                team_uv_progress = 0
 
             # Check if requester can edit this team (created by someone in their subtree)
             can_edit = False
@@ -947,13 +959,17 @@ class GetTeamInfoTotal(APIView):
 
         # Get week-specific UV counts from UVDetail records
         uv_counts = {}
-        uv_records = UVDetail.objects.filter(
-            ir_id__in=member_ids,
-            uv_date__gte=info_week_start,
-            uv_date__lte=info_week_end
-        ).values('ir_id').annotate(total=Sum('uv_count'))
-        for record in uv_records:
-            uv_counts[record['ir_id']] = record['total'] or 0
+        try:
+            uv_records = UVDetail.objects.filter(
+                ir_id__in=member_ids,
+                uv_date__gte=info_week_start,
+                uv_date__lte=info_week_end
+            ).values('ir_id').annotate(total=Sum('uv_count'))
+            for record in uv_records:
+                uv_counts[record['ir_id']] = record['total'] or 0
+        except Exception:
+            # UVDetail table may not exist yet due to pending migrations
+            pass
 
         # fetch ir data for members
         irs = Ir.objects.filter(ir_id__in=member_ids)
@@ -1181,11 +1197,15 @@ class GetVisibleTeams(APIView):
                 plan_date__lte=plan_week_end
             ).count()
 
-            uv_achieved = UVDetail.objects.filter(
-                ir_id__in=member_ir_ids,
-                uv_date__gte=info_week_start,
-                uv_date__lte=info_week_end
-            ).aggregate(total=models.Sum('uv_count'))['total'] or 0
+            try:
+                uv_achieved = UVDetail.objects.filter(
+                    ir_id__in=member_ir_ids,
+                    uv_date__gte=info_week_start,
+                    uv_date__lte=info_week_end
+                ).aggregate(total=Sum('uv_count'))['total'] or 0
+            except Exception:
+                # UVDetail table may not exist yet due to pending migrations
+                uv_achieved = 0
 
             # Get weekly targets for selected week
             team_target = WeeklyTarget.objects.filter(
