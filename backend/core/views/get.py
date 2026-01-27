@@ -976,7 +976,8 @@ class GetTeamInfoTotal(APIView):
             uv_records = UVDetail.objects.filter(
                 ir_id__in=member_ids,
                 uv_date__gte=info_week_start,
-                uv_date__lte=info_week_end
+                uv_date__lte=info_week_end,
+                uv_count__gt=0
             ).values('ir_id').annotate(total=Sum('uv_count'))
             for record in uv_records:
                 uv_counts[record['ir_id']] = record['total'] or 0
