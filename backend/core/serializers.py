@@ -64,6 +64,8 @@ class PlanDetailSerializer(serializers.ModelSerializer):
 
 
 class UVDetailSerializer(serializers.ModelSerializer):
+    ir_id = serializers.CharField(source='ir.ir_id', read_only=True)
+    
     class Meta:
         model = UVDetail
-        fields = "__all__"
+        fields = ['id', 'ir', 'ir_id', 'ir_name', 'prospect_name', 'uv_date', 'uv_count', 'comments']
