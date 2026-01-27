@@ -439,9 +439,11 @@ class IRLogin(APIView):
         except Ir.DoesNotExist:
             return Response({"detail": "IR ID Not Found"}, status=404)
 
+        print("password:", password)
+
         if not ir.check_password(password):
             return Response({"detail": "Invalid credentials"}, status=401)
-
+        
         return Response({
             "message": "Login Successful",
             "ir": {
