@@ -13,6 +13,7 @@ from core.models import (
     TeamMember,
     InfoDetail,
     PlanDetail,
+    UVDetail,
     TeamWeek,
 )
 
@@ -208,3 +209,76 @@ class DeletePlanDetail(APIView):
         except Exception:
             logging.exception("Error deleting plan detail with id=%s", plan_id)
             return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ---------------------------------------------------
+# DELETE UV DETAIL RECORD (with hierarchy check)
+# ---------------------------------------------------
+class DeleteUVDetail(APIView):
+    """
+    Delete a specific UV detail record by ID.
+    Only allowed for LDC and above (access_level <= 3).
+    """
+    def delete(self, request, uv_id):
+        requester_ir_id = request.data.get("requester_ir_id") if request.data else request.GET.get("requester_ir_id")
+        
+        try:
+            # Get the UV detail record
+            uv_detail = get_object_or_404(UVDetail, id=uv_id)
+            ir = uv_detail.ir
+            
+            # Check hierarchy permission if requester provided
+            if requester_ir_id:
+                try:
+                    requester = Ir.objects.get(ir_id=requester_ir_id)
+                    
+                    # Check if requester can view this IR
+                    if not requester.can_view_ir(ir):
+                        return Response(
+                            {"detail": "Not authorized to delete this UV record"},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                    
+                    # Check if requester is LDC and above (access_level <= 3)
+                    if requester.ir_access_level > 3:
+                        return Response(
+                            {"detail": "Only LDC and above can delete UV records"},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                except Ir.DoesNotExist:
+                    return Response(
+                        {"detail": "Requester IR not found"},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+            
+            # Store details for response before deletion
+            uv_id_val = uv_detail.id
+            ir_id = uv_detail.ir_id
+            ir_name = uv_detail.ir_name
+            prospect_name = uv_detail.prospect_name
+            
+            # Delete the record
+            uv_detail.delete()
+            
+            return Response(
+                {
+                    "message": "UV record deleted successfully",
+                    "id": uv_id_val,
+                    "ir_id": ir_id,
+                    "ir_name": ir_name,
+                    "prospect_name": prospect_name
+                },
+                status=status.HTTP_200_OK
+            )
+        
+        except UVDetail.DoesNotExist:
+            return Response(
+                {"detail": "UV record not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception:
+            logging.exception("Error deleting UV record id=%s", uv_id)
+            return Response(
+                {"detail": "Internal server error"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

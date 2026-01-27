@@ -12,6 +12,7 @@ from core.models import (
     TeamMember,
     InfoDetail,
     PlanDetail,
+    UVDetail,
     AccessLevel,
 )
 from core.serializers import (
@@ -22,6 +23,8 @@ from core.serializers import (
 from django.contrib.auth.hashers import make_password
 
 import logging
+from datetime import datetime
+import pytz
 
 
 # ---------------------------------------------------
@@ -614,3 +617,109 @@ class UpdateIrName(APIView):
             },
             status=status.HTTP_200_OK
         )
+
+
+# ---------------------------------------------------
+# UPDATE UV DETAIL RECORD (with hierarchy check)
+# ---------------------------------------------------
+class UpdateUVCount(APIView):
+    """
+    Update a specific UV detail record by ID.
+    Allows updating: uv_count, prospect_name, comments, ir_name (optional)
+    """
+    def put(self, request, uv_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        
+        try:
+            # Get the UV detail record
+            uv_detail = get_object_or_404(UVDetail, id=uv_id)
+            ir = uv_detail.ir
+            
+            # Check hierarchy permission if requester provided
+            if requester_ir_id:
+                try:
+                    requester = Ir.objects.get(ir_id=requester_ir_id)
+                    if not requester.can_view_ir(ir):
+                        return Response(
+                            {"detail": "Not authorized to update this UV record"},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                except Ir.DoesNotExist:
+                    return Response(
+                        {"detail": "Requester IR not found"},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+            
+            # Get fields to update (all optional)
+            uv_count = request.data.get("uv_count")
+            prospect_name = request.data.get("prospect_name")
+            comments = request.data.get("comments")
+            ir_name = request.data.get("ir_name")
+            uv_date = request.data.get("uv_date")
+            
+            # Update fields if provided
+            if uv_count is not None:
+                try:
+                    uv_detail.uv_count = int(uv_count)
+                except (ValueError, TypeError):
+                    return Response(
+                        {"detail": "uv_count must be a valid integer"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            
+            if prospect_name is not None:
+                uv_detail.prospect_name = str(prospect_name).strip()
+            
+            if comments is not None:
+                uv_detail.comments = str(comments).strip() if comments else ""
+            
+            if ir_name is not None:
+                uv_detail.ir_name = str(ir_name).strip()
+
+            if uv_date is not None:
+                try:
+                    # Accept YYYY-MM-DD or full ISO; localize to IST if date-only
+                    ist = pytz.timezone("Asia/Kolkata")
+                    if len(str(uv_date)) == 10:
+                        parsed = datetime.strptime(str(uv_date), "%Y-%m-%d")
+                        uv_detail.uv_date = ist.localize(parsed)
+                    else:
+                        parsed_dt = datetime.fromisoformat(str(uv_date))
+                        if parsed_dt.tzinfo is None:
+                            uv_detail.uv_date = ist.localize(parsed_dt)
+                        else:
+                            uv_detail.uv_date = parsed_dt.astimezone(ist)
+                except Exception:
+                    return Response(
+                        {"detail": "uv_date must be a valid date (YYYY-MM-DD or ISO datetime)"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            
+            # Save the updated record
+            uv_detail.save()
+            
+            return Response(
+                {
+                    "message": "UV record updated successfully",
+                    "id": uv_detail.id,
+                    "ir_id": uv_detail.ir_id,
+                    "ir_name": uv_detail.ir_name,
+                    "prospect_name": uv_detail.prospect_name,
+                    "uv_count": uv_detail.uv_count,
+                    "uv_date": uv_detail.uv_date.isoformat() if uv_detail.uv_date else None,
+                    "comments": uv_detail.comments
+                },
+                status=status.HTTP_200_OK
+            )
+        
+        except UVDetail.DoesNotExist:
+            return Response(
+                {"detail": "UV record not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception:
+            logging.exception("Error updating UV record id=%s", uv_id)
+            return Response(
+                {"detail": "Internal server error"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

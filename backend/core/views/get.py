@@ -26,6 +26,7 @@ from core.serializers import (
     TeamMemberSerializer,
     InfoDetailSerializer,
     PlanDetailSerializer,
+    UVDetailSerializer,
 )
 
 from datetime import datetime, timedelta
@@ -1076,11 +1077,22 @@ class GetUVCount(APIView):
                 weekly_uv_count = UVDetail.objects.filter(
                     ir_id=ir_id,
                     uv_date__gte=week_start,
-                    uv_date__lte=week_end
+                    uv_date__lte=week_end,
+                    uv_count__gt=0,
                 ).aggregate(total=Sum('uv_count'))['total'] or 0
+
+                uv_details = UVDetail.objects.filter(
+                    ir_id=ir_id,
+                    uv_date__gte=week_start,
+                    uv_date__lte=week_end,
+                    uv_count__gt=0,
+                ).order_by('-uv_date')
+
+                uv_records = UVDetailSerializer(uv_details, many=True).data
             except Exception:
                 # UVDetail table may not exist yet due to pending migrations
                 weekly_uv_count = 0
+                uv_records = []
             
             # Get weekly UV target for this specific week
             weekly_target = WeeklyTarget.objects.filter(
@@ -1099,6 +1111,7 @@ class GetUVCount(APIView):
                 "uv_count": weekly_uv_count,
                 "cumulative_uv_count": ir.uv_count,
                 "weekly_uv_target": (weekly_target.ir_weekly_uv_target if weekly_target else ir.weekly_uv_target) if ir.ir_access_level in [2, 3] else None,
+                "uv_records": uv_records,
             })
         except Ir.DoesNotExist:
             return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)

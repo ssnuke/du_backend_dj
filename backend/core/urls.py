@@ -48,6 +48,7 @@ from core.views.put import (
     UpdateParentIR,
     UpdateWeeklyTargets,
     UpdateIrName,
+    UpdateUVCount,
 )
 from core.views.delete import (
     ResetDatabase,
@@ -55,7 +56,8 @@ from core.views.delete import (
     RemoveIrFromTeam,
     DeleteInfoDetail,
     DeletePlanDetail,
-    DeleteIr
+    DeleteIr,
+    DeleteUVDetail,
 )
 from core.views.move_ir import MoveIrToTeam
 
@@ -105,12 +107,14 @@ urlpatterns = [
     path("update_ir_name/<str:ir_id>/", UpdateIrName.as_view()),
     path("update_parent_ir/<str:ir_id>/", UpdateParentIR.as_view()),
     path("update_weekly_targets/", UpdateWeeklyTargets.as_view()),
+    path("update_uv_count/<int:uv_id>/", UpdateUVCount.as_view()),
     path("move_ir_to_team/", MoveIrToTeam.as_view()),
     #DELETE endpoints
     path("delete_team/<int:team_id>/", DeleteTeam.as_view()),
     path("remove_ir_from_team/<int:team_id>/<str:ir_id>/", RemoveIrFromTeam.as_view()),
     path("delete_info_detail/<int:info_id>/", DeleteInfoDetail.as_view()),
     path("delete_plan_detail/<int:plan_id>/", DeletePlanDetail.as_view()),
+    path("delete_uv_detail/<int:uv_id>/", DeleteUVDetail.as_view()),
     path("delete_ir/<str:ir_id>/", DeleteIr.as_view()),
     # Health Check endpoint
     path("health/", health_check)
