@@ -15,6 +15,7 @@ from core.models import (
     Team,
     TeamMember,
     InfoDetail,
+    InfoType,
     PlanDetail,
     UVDetail,
     TeamWeek,
@@ -669,6 +670,7 @@ class AddInfoDetail(APIView):
                     ir=ir,
                     info_date=item.get("info_date", timezone.now()),
                     response=item["response"],
+                    info_type=item.get("info_type", InfoType.FRESH),
                     comments=item.get("comments"),
                     info_name=item["info_name"],
                 )

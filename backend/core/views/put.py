@@ -11,6 +11,7 @@ from core.models import (
     Team,
     TeamMember,
     InfoDetail,
+    InfoType,
     PlanDetail,
     UVDetail,
     AccessLevel,

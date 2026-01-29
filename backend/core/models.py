@@ -51,6 +51,11 @@ class InfoResponse(models.TextChoices):
     C = "C"
 
 
+class InfoType(models.TextChoices):
+    FRESH = "Fresh"
+    REINFO = "Re-info"
+
+
 class IrId(models.Model):
     ir_id = models.CharField(primary_key=True, max_length=18)
 
@@ -496,10 +501,85 @@ class TeamMember(models.Model):
         unique_together = ("team", "ir")
 
 
+class Pocket(models.Model):
+    """
+    Represents a sub-group within a team.
+    Allows better visibility and target management at a granular level.
+    """
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name='pockets')
+    name = models.CharField(max_length=100)
+    created_by = models.ForeignKey(
+        Ir,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_pockets'
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("team", "name")  # One pocket name per team
+        ordering = ['name']
+
+    def __str__(self):
+        return f"{self.name} (Team: {self.team.name})"
+
+
+class PocketMember(models.Model):
+    """
+    Represents an IR's membership in a pocket within a team.
+    Each IR can be in multiple pockets within the same team.
+    """
+    pocket = models.ForeignKey(Pocket, on_delete=models.CASCADE, related_name='members')
+    ir = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name='pocket_memberships')
+    role = models.CharField(max_length=5, choices=TeamRole.choices)
+    
+    # Optional: Track which IR added this member
+    added_by = models.ForeignKey(
+        Ir,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='pocket_members_added'
+    )
+    
+    # Denormalization: Store team ID for easier querying without double FK traversal
+    team = models.ForeignKey(
+        Team,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='pocket_members'
+    )
+    
+    joined_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("pocket", "ir")  # Each IR can be in a pocket only once
+        indexes = [
+            models.Index(fields=['pocket', 'role']),
+            models.Index(fields=['ir', 'team']),
+            models.Index(fields=['pocket', 'ir']),
+        ]
+
+    def save(self, *args, **kwargs):
+        """Auto-populate team from pocket's team"""
+        if not self.team:
+            self.team = self.pocket.team
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.ir.ir_name} in {self.pocket.name}"
+
+
 class InfoDetail(models.Model):
     ir = models.ForeignKey(Ir, on_delete=models.CASCADE)
     info_date = models.DateTimeField(default=timezone.now)
     response = models.CharField(max_length=1, choices=InfoResponse.choices)
+    info_type = models.CharField(max_length=10, choices=InfoType.choices, default=InfoType.FRESH)
     comments = models.TextField(null=True, blank=True)
     info_name = models.CharField(max_length=100)
 
@@ -554,18 +634,26 @@ class WeeklyTarget(models.Model):
     team_weekly_plan_target = models.IntegerField(null=True, blank=True)
     team_weekly_uv_target = models.IntegerField(null=True, blank=True)
     
+    # Pocket targets (optional - can split team targets to pockets)
+    pocket = models.ForeignKey(Pocket, on_delete=models.CASCADE, null=True, blank=True, related_name='weekly_targets')
+    pocket_weekly_info_target = models.IntegerField(null=True, blank=True)
+    pocket_weekly_plan_target = models.IntegerField(null=True, blank=True)
+    pocket_weekly_uv_target = models.IntegerField(null=True, blank=True)
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
         unique_together = [
             ('week_number', 'year', 'ir'),
-            ('week_number', 'year', 'team')
+            ('week_number', 'year', 'team'),
+            ('week_number', 'year', 'pocket'),
         ]
         indexes = [
             models.Index(fields=['week_number', 'year']),
             models.Index(fields=['ir', 'week_number', 'year']),
             models.Index(fields=['team', 'week_number', 'year']),
+            models.Index(fields=['pocket', 'week_number', 'year']),
         ]
 
 

@@ -69,3 +69,67 @@ class UVDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = UVDetail
         fields = ['id', 'ir', 'ir_id', 'ir_name', 'prospect_name', 'uv_date', 'uv_count', 'comments']
+
+
+class PocketMemberSerializer(serializers.ModelSerializer):
+    ir_id = serializers.CharField(source='ir.ir_id', read_only=True)
+    ir_name = serializers.CharField(source='ir.ir_name', read_only=True)
+    ir_email = serializers.CharField(source='ir.ir_email', read_only=True)
+    added_by_name = serializers.CharField(source='added_by.ir_name', read_only=True, allow_null=True)
+    
+    class Meta:
+        model = PocketMember
+        fields = ['id', 'pocket', 'ir', 'ir_id', 'ir_name', 'ir_email', 'role', 'added_by', 'added_by_name', 'team', 'joined_at', 'updated_at']
+        extra_kwargs = {
+            'team': {'read_only': True},
+            'joined_at': {'read_only': True},
+            'updated_at': {'read_only': True},
+        }
+
+
+class PocketSerializer(serializers.ModelSerializer):
+    members = PocketMemberSerializer(many=True, read_only=True)
+    created_by_name = serializers.CharField(source='created_by.ir_name', read_only=True, allow_null=True)
+    member_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Pocket
+        fields = ['id', 'team', 'name', 'created_by', 'created_by_name', 'is_active', 'members', 'member_count', 'created_at', 'updated_at']
+        extra_kwargs = {
+            'created_by': {'required': False},
+            'created_at': {'read_only': True},
+            'updated_at': {'read_only': True},
+        }
+    
+    def get_member_count(self, obj):
+        return obj.members.count()
+
+
+class PocketDetailedSerializer(serializers.ModelSerializer):
+    """Includes nested team info and all member details"""
+    team_name = serializers.CharField(source='team.name', read_only=True)
+    created_by_name = serializers.CharField(source='created_by.ir_name', read_only=True, allow_null=True)
+    members = PocketMemberSerializer(many=True, read_only=True)
+    member_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Pocket
+        fields = ['id', 'team', 'team_name', 'name', 'created_by', 'created_by_name', 'is_active', 
+                  'members', 'member_count', 'created_at', 'updated_at']
+        extra_kwargs = {
+            'created_at': {'read_only': True},
+            'updated_at': {'read_only': True},
+        }
+    
+    def get_member_count(self, obj):
+        return obj.members.count()
+
+
+class WeeklyTargetSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WeeklyTarget
+        fields = "__all__"
+        extra_kwargs = {
+            'created_at': {'read_only': True},
+            'updated_at': {'read_only': True},
+        }

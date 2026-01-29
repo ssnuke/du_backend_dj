@@ -61,6 +61,20 @@ from core.views.delete import (
 )
 from core.views.move_ir import MoveIrToTeam
 
+# Pocket views
+from core.views.pockets import (
+    CreatePocket,
+    GetPockets,
+    GetPocketDetail,
+    UpdatePocket,
+    DeletePocket,
+    AddMemberToPocket,
+    RemoveMemberFromPocket,
+    MoveMemberBetweenPockets,
+    SplitTargetToPockets,
+    GetPocketTargets,
+)
+
 
 urlpatterns = [
     #GET endpoints
@@ -117,5 +131,22 @@ urlpatterns = [
     path("delete_uv_detail/<int:uv_id>/", DeleteUVDetail.as_view()),
     path("delete_ir/<str:ir_id>/", DeleteIr.as_view()),
     # Health Check endpoint
-    path("health/", health_check)
+    path("health/", health_check),
+    
+    # ============ POCKET ENDPOINTS ============
+    # Pocket CRUD
+    path("pockets/create/", CreatePocket.as_view()),
+    path("pockets/<int:team_id>/", GetPockets.as_view()),
+    path("pocket/<int:pocket_id>/", GetPocketDetail.as_view()),
+    path("pocket/<int:pocket_id>/update/", UpdatePocket.as_view()),
+    path("pocket/<int:pocket_id>/delete/", DeletePocket.as_view()),
+    
+    # Pocket member management
+    path("pocket/members/add/", AddMemberToPocket.as_view()),
+    path("pocket/members/remove/", RemoveMemberFromPocket.as_view()),
+    path("pocket/members/move/", MoveMemberBetweenPockets.as_view()),
+    
+    # Target allocation
+    path("pockets/split_targets/", SplitTargetToPockets.as_view()),
+    path("pockets/targets/", GetPocketTargets.as_view()),
 ]
