@@ -7,7 +7,7 @@ import django.db.models.deletion
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('core', '0011_uvdetail_prospect_name'),
+        ('core', '0012_pocketmember_infodetail_info_type_and_more'),
     ]
 
     operations = [
