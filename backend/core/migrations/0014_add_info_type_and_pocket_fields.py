@@ -20,7 +20,9 @@ class Migration(migrations.Migration):
             field=models.CharField(
                 choices=[('Fresh', 'Fresh'), ('Re-info', 'Reinfo')],
                 default='Fresh',
-                max_length=10
+                max_length=10,
+                null=True,
+                blank=True
             ),
         ),
         # Add pocket field to WeeklyTarget (FK to Pocket)

@@ -579,7 +579,7 @@ class InfoDetail(models.Model):
     ir = models.ForeignKey(Ir, on_delete=models.CASCADE)
     info_date = models.DateTimeField(default=timezone.now)
     response = models.CharField(max_length=1, choices=InfoResponse.choices)
-    info_type = models.CharField(max_length=10, choices=InfoType.choices, default=InfoType.FRESH)
+    info_type = models.CharField(max_length=10, choices=InfoType.choices, default=InfoType.FRESH, null=True, blank=True)
     comments = models.TextField(null=True, blank=True)
     info_name = models.CharField(max_length=100)
 
