@@ -209,9 +209,8 @@ class DeletePocket(APIView):
                     status=status.HTTP_403_FORBIDDEN
                 )
             
-            # Soft delete
-            pocket.is_active = False
-            pocket.save()
+            # Hard delete - also deletes related PocketMembers due to CASCADE
+            pocket.delete()
             
             return Response(
                 {"message": "Pocket deleted successfully"},

@@ -502,6 +502,11 @@ class GetInfoDetails(APIView):
         if response_filter:
             qs = qs.filter(response=response_filter)
 
+        # Filter by info_type if provided
+        info_type_filter = request.GET.get("infoType")
+        if info_type_filter:
+            qs = qs.filter(info_type=info_type_filter)
+
         return Response(InfoDetailSerializer(qs, many=True).data)
 
 
