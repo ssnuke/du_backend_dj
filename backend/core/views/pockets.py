@@ -84,9 +84,9 @@ class GetPockets(APIView):
             
             # Permission check: Can user view this team?
             if not requester.can_view_team(team):
-                # Allow GC/IR to view only if they're a pocket head
+                # Allow GC/IR to view only if they're a pocket head in this team
                 is_pocket_head = PocketMember.objects.filter(
-                    team=team, 
+                    pocket__team=team,  # Check through the pocket relationship
                     ir=requester, 
                     is_head=True
                 ).exists()
