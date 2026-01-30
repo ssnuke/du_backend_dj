@@ -511,9 +511,9 @@ class SplitTargetToPockets(APIView):
             with transaction.atomic():
                 for pocket_target in pocket_targets:
                     pocket_id = pocket_target.get("pocket_id")
-                    info_target = pocket_target.get("info_target", 0)
-                    plan_target = pocket_target.get("plan_target", 0)
-                    uv_target = pocket_target.get("uv_target", 0)
+                    info_target = int(pocket_target.get("info_target", 0) or 0)
+                    plan_target = int(pocket_target.get("plan_target", 0) or 0)
+                    uv_target = float(pocket_target.get("uv_target", 0) or 0)
                     
                     pocket = get_object_or_404(Pocket, id=pocket_id)
                     
@@ -532,9 +532,9 @@ class SplitTargetToPockets(APIView):
                         },
                     )
                     
-                    pocket_wt.pocket_weekly_info_target = info_target
-                    pocket_wt.pocket_weekly_plan_target = plan_target
-                    pocket_wt.pocket_weekly_uv_target = uv_target
+                    pocket_wt.pocket_weekly_info_target = int(info_target)
+                    pocket_wt.pocket_weekly_plan_target = int(plan_target)
+                    pocket_wt.pocket_weekly_uv_target = int(uv_target)
                     pocket_wt.save()
                     
                     created_targets.append(pocket_wt)
@@ -553,9 +553,32 @@ class SplitTargetToPockets(APIView):
                 status=status.HTTP_200_OK
             )
         
-        except Exception as e:
+        except Ir.DoesNotExist:
             return Response(
-                {"error": str(e)},
+                {"error": "Requester IR not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Team.DoesNotExist:
+            return Response(
+                {"error": "Team not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Pocket.DoesNotExist:
+            return Response(
+                {"error": "One or more pockets not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except ValueError as e:
+            return Response(
+                {"error": f"Invalid data format: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            import traceback
+            error_detail = traceback.format_exc()
+            print(f"Error in SplitTargetToPockets: {error_detail}")
+            return Response(
+                {"error": str(e), "detail": "Internal server error"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
