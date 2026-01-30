@@ -536,6 +536,9 @@ class PocketMember(models.Model):
     ir = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name='pocket_memberships')
     role = models.CharField(max_length=5, choices=TeamRole.choices)
     
+    # Mark if this member is the pocket head (typically the first/creator member)
+    is_head = models.BooleanField(default=False)
+    
     # Optional: Track which IR added this member
     added_by = models.ForeignKey(
         Ir,

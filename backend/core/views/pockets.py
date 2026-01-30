@@ -84,19 +84,28 @@ class GetPockets(APIView):
             
             # Permission check: Can user view this team?
             if not requester.can_view_team(team):
-                return Response(
-                    {"error": "Not authorized to view this team"},
-                    status=status.HTTP_403_FORBIDDEN
-                )
+                # Allow GC/IR to view only if they're a pocket head
+                is_pocket_head = PocketMember.objects.filter(
+                    team=team, 
+                    ir=requester, 
+                    is_head=True
+                ).exists()
+                if not is_pocket_head:
+                    return Response(
+                        {"error": "Not authorized to view this team"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
             
-            # For LS and above only
+            # For GC/IR (non-LS+): restrict to pockets where requester is a pocket head
             if requester.ir_access_level > AccessLevel.LS:
-                return Response(
-                    {"error": "Only LS and above can view pockets"},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-            
-            pockets = Pocket.objects.filter(team=team, is_active=True).order_by('name')
+                pockets = Pocket.objects.filter(
+                    team=team,
+                    is_active=True,
+                    members__ir=requester,
+                    members__is_head=True
+                ).distinct().order_by('name')
+            else:
+                pockets = Pocket.objects.filter(team=team, is_active=True).order_by('name')
             serializer = PocketDetailedSerializer(pockets, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
         
@@ -121,17 +130,25 @@ class GetPocketDetail(APIView):
             
             # Permission check: Can user view the team?
             if not requester.can_view_team(pocket.team):
-                return Response(
-                    {"error": "Not authorized to view this pocket"},
-                    status=status.HTTP_403_FORBIDDEN
-                )
+                # Allow GC/IR if they're the pocket head
+                is_pocket_head = PocketMember.objects.filter(
+                    pocket=pocket,
+                    ir=requester,
+                    is_head=True
+                ).exists()
+                if not is_pocket_head:
+                    return Response(
+                        {"error": "Not authorized to view this pocket"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
             
-            # For LS and above only
+            # For GC/IR: only allow if they're the pocket head
             if requester.ir_access_level > AccessLevel.LS:
-                return Response(
-                    {"error": "Only LS and above can view pocket details"},
-                    status=status.HTTP_403_FORBIDDEN
-                )
+                if not PocketMember.objects.filter(pocket=pocket, ir=requester, is_head=True).exists():
+                    return Response(
+                        {"error": "Only pocket heads can view their pocket details"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
             
             serializer = PocketDetailedSerializer(pocket)
             return Response(serializer.data, status=status.HTTP_200_OK)
@@ -270,12 +287,16 @@ class AddMemberToPocket(APIView):
                 )
             
             # Create membership
+            # First member becomes the pocket head
+            is_first_member = not PocketMember.objects.filter(pocket=pocket).exists()
+            
             member = PocketMember.objects.create(
                 pocket=pocket,
                 ir=ir,
                 team=pocket.team,
                 role=role,
-                added_by=requester
+                added_by=requester,
+                is_head=is_first_member
             )
             
             serializer = PocketMemberSerializer(member)

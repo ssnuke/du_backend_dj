@@ -79,7 +79,7 @@ class PocketMemberSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = PocketMember
-        fields = ['id', 'pocket', 'ir', 'ir_id', 'ir_name', 'ir_email', 'role', 'added_by', 'added_by_name', 'team', 'joined_at', 'updated_at']
+        fields = ['id', 'pocket', 'ir', 'ir_id', 'ir_name', 'ir_email', 'role', 'is_head', 'added_by', 'added_by_name', 'team', 'joined_at', 'updated_at']
         extra_kwargs = {
             'team': {'read_only': True},
             'joined_at': {'read_only': True},
