@@ -8,10 +8,12 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.db import transaction
 from django.shortcuts import get_object_or_404
+from django.utils.dateparse import parse_datetime
+from django.utils import timezone
 
 from core.models import (
-    Ir, Team, Pocket, PocketMember, WeeklyTarget, 
-    AccessLevel, TeamRole
+    Ir, Team, Pocket, PocketMember, WeeklyTarget,
+    AccessLevel, TeamRole, TeamWeeklyTargets,
 )
 from core.serializers import (
     PocketSerializer, PocketDetailedSerializer, PocketMemberSerializer
@@ -435,17 +437,33 @@ class SplitTargetToPockets(APIView):
             requester_id = request.data.get("requester_ir_id")
             requester = get_object_or_404(Ir, ir_id=requester_id)
             
-            team_id = request.data.get("team_id")
-            week_number = request.data.get("week_number")
-            year = request.data.get("year")
+            team_id_raw = request.data.get("team_id")
+            week_number_raw = request.data.get("week_number")
+            year_raw = request.data.get("year")
             pocket_targets = request.data.get("pocket_targets", [])
             
-            if not team_id or not week_number or not year or not pocket_targets:
+            if not team_id_raw or not week_number_raw or not year_raw or not pocket_targets:
                 return Response(
                     {"error": "team_id, week_number, year, and pocket_targets are required"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            
+
+            # Normalise numeric fields
+            try:
+                team_id = int(team_id_raw)
+            except (TypeError, ValueError):
+                team_id = team_id_raw
+
+            try:
+                week_number = int(week_number_raw)
+            except (TypeError, ValueError):
+                week_number = week_number_raw
+
+            try:
+                year = int(year_raw)
+            except (TypeError, ValueError):
+                year = year_raw
+
             team = get_object_or_404(Team, id=team_id)
             
             # Permission check: Can user edit the team?
@@ -455,18 +473,33 @@ class SplitTargetToPockets(APIView):
                     status=status.HTTP_403_FORBIDDEN
                 )
             
-            # Get or create team weekly target
-            team_target = WeeklyTarget.objects.filter(
-                team=team,
-                week_number=week_number,
-                year=year
-            ).first()
-            
-            if not team_target:
+            # Look up team targets for this week from TeamWeeklyTargets JSON
+            team_targets = TeamWeeklyTargets.objects.filter(team=team).first()
+
+            if not team_targets:
+                return Response(
+                    {"error": "Team targets not configured for this team"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            week_data = team_targets.get_week_targets(year=year, week_number=week_number) or {}
+
+            if not week_data:
                 return Response(
                     {"error": "Team target not found for this week"},
-                    status=status.HTTP_404_NOT_FOUND
+                    status=status.HTTP_404_NOT_FOUND,
                 )
+
+            # Extract team-level targets and week range from JSON data
+            team_info_target = week_data.get("team_weekly_info_target", 0)
+            team_plan_target = week_data.get("team_weekly_plan_target", 0)
+            team_uv_target = week_data.get("team_weekly_uv_target", 0)
+
+            week_start_raw = week_data.get("week_start")
+            week_end_raw = week_data.get("week_end")
+
+            week_start = parse_datetime(week_start_raw) or timezone.now()
+            week_end = parse_datetime(week_end_raw) or timezone.now()
             
             # Validate pocket_targets format and totals
             total_info = 0
@@ -494,9 +527,9 @@ class SplitTargetToPockets(APIView):
                         week_number=week_number,
                         year=year,
                         defaults={
-                            'week_start': team_target.week_start,
-                            'week_end': team_target.week_end,
-                        }
+                            'week_start': week_start,
+                            'week_end': week_end,
+                        },
                     )
                     
                     pocket_wt.pocket_weekly_info_target = info_target
@@ -509,9 +542,9 @@ class SplitTargetToPockets(APIView):
             return Response(
                 {
                     "message": "Targets split successfully across pockets",
-                    "team_target_info": team_target.team_weekly_info_target,
-                    "team_target_plan": team_target.team_weekly_plan_target,
-                    "team_target_uv": team_target.team_weekly_uv_target,
+					"team_target_info": team_info_target,
+					"team_target_plan": team_plan_target,
+					"team_target_uv": team_uv_target,
                     "allocated_info": total_info,
                     "allocated_plan": total_plan,
                     "allocated_uv": total_uv,
