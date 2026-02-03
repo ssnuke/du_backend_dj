@@ -59,6 +59,12 @@ from core.views.delete import (
     DeleteIr,
     DeleteUVDetail,
 )
+from core.views.notifications import (
+    get_notifications,
+    mark_notification_read,
+    mark_all_read,
+    get_unread_count,
+)
 from core.views.move_ir import MoveIrToTeam
 
 # Pocket views
@@ -149,4 +155,10 @@ urlpatterns = [
     # Target allocation
     path("pockets/split_targets/", SplitTargetToPockets.as_view()),
     path("pockets/targets/", GetPocketTargets.as_view()),
+    
+    # ============ NOTIFICATION ENDPOINTS ============
+    path("notifications/", get_notifications),
+    path("notifications/unread_count/", get_unread_count),
+    path("notifications/<int:notification_id>/read/", mark_notification_read),
+    path("notifications/mark_all_read/", mark_all_read),
 ]

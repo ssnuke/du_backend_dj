@@ -624,28 +624,28 @@ class WeeklyTarget(models.Model):
     year = models.PositiveIntegerField()
     week_start = models.DateTimeField()
     week_end = models.DateTimeField()
-    
+
     # IR targets (optional - only set if IR target is being set)
     ir = models.ForeignKey(Ir, on_delete=models.CASCADE, null=True, blank=True)
     ir_weekly_info_target = models.IntegerField(null=True, blank=True)
     ir_weekly_plan_target = models.IntegerField(null=True, blank=True)
     ir_weekly_uv_target = models.IntegerField(null=True, blank=True)
-    
+
     # Team targets (optional - only set if team target is being set)
     team = models.ForeignKey(Team, on_delete=models.CASCADE, null=True, blank=True)
     team_weekly_info_target = models.IntegerField(null=True, blank=True)
     team_weekly_plan_target = models.IntegerField(null=True, blank=True)
     team_weekly_uv_target = models.IntegerField(null=True, blank=True)
-    
+
     # Pocket targets (optional - can split team targets to pockets)
     pocket = models.ForeignKey(Pocket, on_delete=models.CASCADE, null=True, blank=True, related_name='weekly_targets')
     pocket_weekly_info_target = models.IntegerField(null=True, blank=True)
     pocket_weekly_plan_target = models.IntegerField(null=True, blank=True)
     pocket_weekly_uv_target = models.IntegerField(null=True, blank=True)
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         unique_together = [
             ('week_number', 'year', 'ir'),
@@ -681,31 +681,31 @@ class TeamWeeklyTargets(models.Model):
     targets_data = models.JSONField(default=dict)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         verbose_name = "Team Weekly Targets (JSON)"
         verbose_name_plural = "Team Weekly Targets (JSON)"
-    
+
     def get_week_targets(self, year, week_number):
         """Get targets for a specific week"""
         year_str = str(year)
         week_str = str(week_number)
         return self.targets_data.get(year_str, {}).get(week_str)
-    
+
     def set_week_targets(self, year, week_number, week_start, week_end, 
                          info_target, plan_target, uv_target, allow_overwrite=False):
         """Set targets for a specific week"""
         year_str = str(year)
         week_str = str(week_number)
-        
+
         # Initialize year if doesn't exist
         if year_str not in self.targets_data:
             self.targets_data[year_str] = {}
-        
+
         # Check if week already exists
         if week_str in self.targets_data[year_str] and not allow_overwrite:
             return False, "Week targets already exist"
-        
+
         # Set the week data
         self.targets_data[year_str][week_str] = {
             "week_start": week_start.isoformat() if hasattr(week_start, 'isoformat') else week_start,
@@ -714,10 +714,33 @@ class TeamWeeklyTargets(models.Model):
             "team_weekly_plan_target": int(plan_target),
             "team_weekly_uv_target": int(uv_target)
         }
-        
+
         return True, "Targets set successfully"
-    
+
     def get_all_weeks_for_year(self, year):
         """Get all week targets for a specific year"""
         year_str = str(year)
         return self.targets_data.get(year_str, {})
+
+
+class Notification(models.Model):
+    class Type(models.TextChoices):
+        UV_ADDED = 'UV_ADDED', 'UV Added'
+        NEW_IR = 'NEW_IR', 'New IR Registered'
+
+    recipient = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name='notifications')
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+    notification_type = models.CharField(max_length=20, choices=Type.choices)
+    is_read = models.BooleanField(default=False)
+    
+    # Optional: Link to the related object (e.g., the UV ID or New IR ID) for navigation
+    related_object_id = models.CharField(max_length=50, null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.title} -> {self.recipient.ir_name}"

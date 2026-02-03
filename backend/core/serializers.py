@@ -133,3 +133,10 @@ class WeeklyTargetSerializer(serializers.ModelSerializer):
             'created_at': {'read_only': True},
             'updated_at': {'read_only': True},
         }
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = ['id', 'recipient', 'title', 'message', 'notification_type', 'is_read', 'related_object_id', 'created_at']
+        read_only_fields = ['created_at']
