@@ -661,10 +661,10 @@ class UpdateUVCount(APIView):
             # Update fields if provided
             if uv_count is not None:
                 try:
-                    uv_detail.uv_count = int(uv_count)
+                    uv_detail.uv_count = float(uv_count)
                 except (ValueError, TypeError):
                     return Response(
-                        {"detail": "uv_count must be a valid integer"},
+                        {"detail": "uv_count must be a valid number (integer or decimal)"},
                         status=status.HTTP_400_BAD_REQUEST
                     )
             

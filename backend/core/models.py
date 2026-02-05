@@ -607,7 +607,7 @@ class UVDetail(models.Model):
     ir_name = models.CharField(max_length=45, blank=True, default="")  # Track IR name for display
     prospect_name = models.CharField(max_length=255, blank=True, default="")  # Name of prospect whose UV fell
     uv_date = models.DateTimeField(default=timezone.now)
-    uv_count = models.IntegerField(default=1)
+    uv_count = models.DecimalField(max_digits=10, decimal_places=2, default=1)
     comments = models.TextField(null=True, blank=True)
 
 
