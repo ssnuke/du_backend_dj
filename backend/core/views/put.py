@@ -758,12 +758,6 @@ class UpdateIrId(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        if not IrId.objects.filter(ir_id=new_ir_id).exists():
-            return Response(
-                {"detail": "new_ir_id is not in the whitelist"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
         def refresh_subtree_paths(root_ir):
             queue = list(Ir.objects.filter(parent_ir=root_ir))
             while queue:
