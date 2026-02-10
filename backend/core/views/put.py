@@ -636,16 +636,16 @@ class TransferTeamOwnership(APIView):
                     status=status.HTTP_403_FORBIDDEN
                 )
 
-        # Ensure new owner is an LDC member of this team
-        is_ldc_member = TeamMember.objects.filter(
+        # Ensure new owner is at least LS (LS/LDC/CTC/ADMIN) member of this team
+        is_eligible_member = TeamMember.objects.filter(
             team=team,
             ir=new_owner,
-            role=TeamRole.LDC
+            role__in=[TeamRole.ADMIN, TeamRole.CTC, TeamRole.LDC, TeamRole.LS]
         ).exists()
 
-        if not is_ldc_member:
+        if not is_eligible_member:
             return Response(
-                {"detail": "New owner must be an LDC member of this team"},
+                {"detail": "New owner must be LS or above member of this team"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
