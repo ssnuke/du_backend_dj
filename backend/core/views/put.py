@@ -10,10 +10,15 @@ from core.models import (
     Ir,
     Team,
     TeamMember,
+    Pocket,
+    PocketMember,
+    TeamRole,
     InfoDetail,
     InfoType,
     PlanDetail,
     UVDetail,
+    WeeklyTarget,
+    Notification,
     AccessLevel,
 )
 from core.serializers import (
@@ -570,6 +575,88 @@ class UpdateTeamName(APIView):
 
 
 # ---------------------------------------------------
+# TRANSFER TEAM OWNERSHIP (PUT) (with role-based check)
+# ---------------------------------------------------
+class TransferTeamOwnership(APIView):
+    """
+    Transfer team ownership to an LDC member in the team.
+
+    Request body:
+    - requester_ir_id: IR performing the action (required)
+    - new_owner_ir_id: IR to set as team owner (required)
+    """
+    def put(self, request, team_id):
+        team = get_object_or_404(Team, id=team_id)
+
+        requester_ir_id = request.data.get("requester_ir_id")
+        new_owner_ir_id = request.data.get("new_owner_ir_id")
+
+        if not requester_ir_id:
+            return Response(
+                {"detail": "requester_ir_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not new_owner_ir_id:
+            return Response(
+                {"detail": "new_owner_ir_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        requester = get_object_or_404(Ir, ir_id=requester_ir_id)
+        new_owner = get_object_or_404(Ir, ir_id=new_owner_ir_id)
+
+        if team.created_by and new_owner.ir_id == team.created_by.ir_id:
+            return Response(
+                {"detail": "IR is already the team owner"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Only current owner or ADMIN/CTC can transfer ownership
+        if team.created_by:
+            if requester.ir_id != team.created_by.ir_id and not requester.has_full_access():
+                return Response(
+                    {"detail": "Not authorized to transfer ownership of this team"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        else:
+            if not requester.has_full_access():
+                return Response(
+                    {"detail": "Not authorized to transfer ownership of this team"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+        # Ensure new owner is an LDC member of this team
+        is_ldc_member = TeamMember.objects.filter(
+            team=team,
+            ir=new_owner,
+            role=TeamRole.LDC
+        ).exists()
+
+        if not is_ldc_member:
+            return Response(
+                {"detail": "New owner must be an LDC member of this team"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        old_owner = team.created_by
+        team.created_by = new_owner
+        team.save()
+
+        return Response(
+            {
+                "message": "Team ownership transferred successfully",
+                "team_id": team.id,
+                "old_owner_id": old_owner.ir_id if old_owner else None,
+                "old_owner_name": old_owner.ir_name if old_owner else None,
+                "new_owner_id": new_owner.ir_id,
+                "new_owner_name": new_owner.ir_name,
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+# ---------------------------------------------------
 # UPDATE IR NAME (PATCH) (with role-based check)
 # ---------------------------------------------------
 class UpdateIrName(APIView):
@@ -618,6 +705,132 @@ class UpdateIrName(APIView):
             },
             status=status.HTTP_200_OK
         )
+
+
+# ---------------------------------------------------
+# UPDATE IR ID (PUT) (with role-based check)
+# ---------------------------------------------------
+class UpdateIrId(APIView):
+    """
+    Update an IR's primary ID and rewire all references.
+
+    Request body:
+    - requester_ir_id: IR performing the action (required)
+    - current_ir_id: existing IR ID to change (required)
+    - new_ir_id: new IR ID to set (required)
+    """
+    def put(self, request):
+        requester_ir_id = request.data.get("requester_ir_id")
+        current_ir_id = request.data.get("current_ir_id")
+        new_ir_id = request.data.get("new_ir_id")
+
+        if not requester_ir_id:
+            return Response(
+                {"detail": "requester_ir_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not current_ir_id or not new_ir_id:
+            return Response(
+                {"detail": "current_ir_id and new_ir_id are required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        requester = get_object_or_404(Ir, ir_id=requester_ir_id)
+
+        if not requester.has_full_access():
+            return Response(
+                {"detail": "Not authorized to update IR IDs"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if current_ir_id == new_ir_id:
+            return Response(
+                {"detail": "current_ir_id and new_ir_id must be different"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        ir = get_object_or_404(Ir, ir_id=current_ir_id)
+
+        if Ir.objects.filter(ir_id=new_ir_id).exists():
+            return Response(
+                {"detail": "new_ir_id already exists"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not IrId.objects.filter(ir_id=new_ir_id).exists():
+            return Response(
+                {"detail": "new_ir_id is not in the whitelist"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        def refresh_subtree_paths(root_ir):
+            queue = list(Ir.objects.filter(parent_ir=root_ir))
+            while queue:
+                node = queue.pop(0)
+                node.save()
+                queue.extend(Ir.objects.filter(parent_ir=node))
+
+        try:
+            with transaction.atomic():
+                # Create a new IR with the new ID
+                new_ir = Ir.objects.create(
+                    ir_id=new_ir_id,
+                    ir_name=ir.ir_name,
+                    ir_email=ir.ir_email,
+                    ir_access_level=ir.ir_access_level,
+                    ir_password=ir.ir_password,
+                    status=ir.status,
+                    parent_ir=ir.parent_ir,
+                    plan_count=ir.plan_count,
+                    dr_count=ir.dr_count,
+                    info_count=ir.info_count,
+                    name_list=ir.name_list,
+                    uv_count=ir.uv_count,
+                    weekly_info_target=ir.weekly_info_target,
+                    weekly_plan_target=ir.weekly_plan_target,
+                    weekly_uv_target=ir.weekly_uv_target,
+                )
+
+                # Preserve started_date
+                Ir.objects.filter(ir_id=new_ir_id).update(started_date=ir.started_date)
+
+                # Update references
+                Team.objects.filter(created_by=ir).update(created_by=new_ir)
+                TeamMember.objects.filter(ir=ir).update(ir=new_ir)
+                Pocket.objects.filter(created_by=ir).update(created_by=new_ir)
+                PocketMember.objects.filter(ir=ir).update(ir=new_ir)
+                PocketMember.objects.filter(added_by=ir).update(added_by=new_ir)
+                InfoDetail.objects.filter(ir=ir).update(ir=new_ir)
+                PlanDetail.objects.filter(ir=ir).update(ir=new_ir)
+                UVDetail.objects.filter(ir=ir).update(ir=new_ir)
+                WeeklyTarget.objects.filter(ir=ir).update(ir=new_ir)
+                Notification.objects.filter(recipient=ir).update(recipient=new_ir)
+
+                # Update hierarchy references
+                Ir.objects.filter(parent_ir=ir).update(parent_ir=new_ir)
+
+                # Recalculate hierarchy paths for new IR subtree
+                new_ir.save()
+                refresh_subtree_paths(new_ir)
+
+                # Remove old IR
+                ir.delete()
+
+                return Response(
+                    {
+                        "message": "IR ID updated successfully",
+                        "old_ir_id": current_ir_id,
+                        "new_ir_id": new_ir_id,
+                    },
+                    status=status.HTTP_200_OK
+                )
+        except Exception:
+            logging.exception("Error updating IR ID")
+            return Response(
+                {"detail": "Internal server error"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 # ---------------------------------------------------

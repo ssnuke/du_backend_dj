@@ -45,9 +45,11 @@ from core.views.put import (
     UpdatePlanDetail,
     SetTargetsPut,
     UpdateTeamName,
+    TransferTeamOwnership,
     UpdateParentIR,
     UpdateWeeklyTargets,
     UpdateIrName,
+    UpdateIrId,
     UpdateUVCount,
 )
 from core.views.delete import (
@@ -124,7 +126,9 @@ urlpatterns = [
     path("update_info_detail/<int:info_id>/", UpdateInfoDetail.as_view()),
     path("update_plan_detail/<int:plan_id>/", UpdatePlanDetail.as_view()),
     path("update_team_name/<int:team_id>/", UpdateTeamName.as_view()),
+    path("transfer_team_ownership/<int:team_id>/", TransferTeamOwnership.as_view()),
     path("update_ir_name/<str:ir_id>/", UpdateIrName.as_view()),
+    path("update_ir_id/", UpdateIrId.as_view()),
     path("update_parent_ir/<str:ir_id>/", UpdateParentIR.as_view()),
     path("update_weekly_targets/", UpdateWeeklyTargets.as_view()),
     path("update_uv_count/<int:uv_id>/", UpdateUVCount.as_view()),

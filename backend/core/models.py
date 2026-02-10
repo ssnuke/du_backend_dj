@@ -307,16 +307,15 @@ class Ir(models.Model):
                 return True
             return False
         
-        # LDC can edit teams they created OR teams where they are an LDC member
+        # LDC can edit teams they created OR teams where they are a member
         if self.ir_access_level == AccessLevel.LDC:
             # Check if they created the team
             if team.created_by and team.created_by.ir_id == self.ir_id:
                 return True
-            # Check if they are an LDC member of the team
+            # Check if they are a member of the team
             return TeamMember.objects.filter(
-                team=team, 
-                ir=self, 
-                role=TeamRole.LDC
+                team=team,
+                ir=self
             ).exists()
         
         # Others cannot edit teams
@@ -428,14 +427,11 @@ class Ir(models.Model):
             viewable_irs = self.get_subtree_irs()
             return Team.objects.filter(created_by__in=viewable_irs)
         
-        # LDC can edit teams they created OR teams where they are an LDC member
+        # LDC can edit teams they created OR teams where they are a member
         if self.ir_access_level == AccessLevel.LDC:
             created_teams = Team.objects.filter(created_by=self)
-            ldc_member_teams = Team.objects.filter(
-                teammember__ir=self,
-                teammember__role=TeamRole.LDC
-            )
-            return (created_teams | ldc_member_teams).distinct()
+            member_teams = Team.objects.filter(teammember__ir=self)
+            return (created_teams | member_teams).distinct()
         
         return Team.objects.none()
 
