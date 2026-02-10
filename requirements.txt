@@ -12,3 +12,4 @@ sqlparse==0.5.5
 whitenoise==6.11.0
 pandas==2.2.3
 openpyxl==3.1.5
+pywebpush==1.14.0

@@ -21,7 +21,9 @@ from core.models import (
     TeamWeek,
     TeamRole,
     WeeklyTarget,
+    Notification,
 )
+from core.utils.notifications import get_notification_recipients, create_notifications
 from core.serializers import (
     IrIdSerializer,
     IrRegisterSerializer,
@@ -507,6 +509,15 @@ class CreateTeam(APIView):
                     team=team,
                     role=TeamRole.LDC
                 )
+
+                recipients = get_notification_recipients(ir)
+                create_notifications(
+                    recipients=recipients,
+                    title="New Team Created",
+                    message=f"{ir.ir_name} ({ir.ir_id}) created a new team: {team.name}.",
+                    notification_type=Notification.Type.TEAM_CREATED,
+                    related_object_id=str(team.id),
+                )
                 
                 return Response({
                     "message": "Team created successfully",
@@ -661,6 +672,7 @@ class AddInfoDetail(APIView):
                 items = payload
             
             created_ids = []
+            created_plans = []
 
             for item in items:
                 if not isinstance(item, dict):
@@ -768,6 +780,7 @@ class AddPlanDetail(APIView):
                     comments=item.get("comments"),
                 )
                 created_ids.append(plan.id)
+                created_plans.append(plan)
 
                 # ✅ Atomic IR counter update
                 Ir.objects.filter(ir_id=ir_id).update(
@@ -805,6 +818,16 @@ class AddPlanDetail(APIView):
                     Team.objects.filter(id=team.id).update(
                         weekly_plan_done=F("weekly_plan_done") + 1
                     )
+
+            recipients = get_notification_recipients(ir)
+            for plan in created_plans:
+                create_notifications(
+                    recipients=recipients,
+                    title="Plan Added",
+                    message=f"{ir.ir_name} ({ir.ir_id}) added a new plan: {plan.plan_name or 'Plan'}.",
+                    notification_type=Notification.Type.PLAN_ADDED,
+                    related_object_id=str(plan.id),
+                )
 
         return Response(
             {"message": "Plan details added", "plan_ids": created_ids},

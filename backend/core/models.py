@@ -722,7 +722,11 @@ class TeamWeeklyTargets(models.Model):
 class Notification(models.Model):
     class Type(models.TextChoices):
         UV_ADDED = 'UV_ADDED', 'UV Added'
+        UV_UPDATED = 'UV_UPDATED', 'UV Updated'
+        PLAN_ADDED = 'PLAN_ADDED', 'Plan Added'
+        PLAN_UPDATED = 'PLAN_UPDATED', 'Plan Updated'
         NEW_IR = 'NEW_IR', 'New IR Registered'
+        TEAM_CREATED = 'TEAM_CREATED', 'Team Created'
 
     recipient = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name='notifications')
     title = models.CharField(max_length=255)
@@ -740,3 +744,21 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"{self.title} -> {self.recipient.ir_name}"
+
+
+class PushSubscription(models.Model):
+    ir = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name='push_subscriptions')
+    endpoint = models.TextField()
+    p256dh = models.CharField(max_length=255)
+    auth = models.CharField(max_length=255)
+    user_agent = models.CharField(max_length=255, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("ir", "endpoint")
+        indexes = [
+            models.Index(fields=["ir"]),
+        ]
+
+    def __str__(self):
+        return f"{self.ir.ir_id} -> {self.endpoint[:35]}"

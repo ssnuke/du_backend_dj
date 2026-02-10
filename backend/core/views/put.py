@@ -21,6 +21,7 @@ from core.models import (
     Notification,
     AccessLevel,
 )
+from core.utils.notifications import get_notification_recipients, create_notifications
 from core.serializers import (
     InfoDetailSerializer,
     PlanDetailSerializer,
@@ -275,6 +276,15 @@ class UpdatePlanDetail(APIView):
             )
             serializer.is_valid(raise_exception=True)
             serializer.save()
+
+            recipients = get_notification_recipients(plan.ir)
+            create_notifications(
+                recipients=recipients,
+                title="Plan Updated",
+                message=f"{plan.ir.ir_name} ({plan.ir.ir_id}) updated a plan: {plan.plan_name or 'Plan' }.",
+                notification_type=Notification.Type.PLAN_UPDATED,
+                related_object_id=str(plan.id),
+            )
 
             return Response(
                 {
@@ -905,6 +915,15 @@ class UpdateUVCount(APIView):
             
             # Save the updated record
             uv_detail.save()
+
+            recipients = get_notification_recipients(ir)
+            create_notifications(
+                recipients=recipients,
+                title="UV Record Updated",
+                message=f"{ir.ir_name} ({ir.ir_id}) updated a UV record for '{uv_detail.prospect_name or 'Prospect'}'.",
+                notification_type=Notification.Type.UV_UPDATED,
+                related_object_id=str(uv_detail.id),
+            )
             
             return Response(
                 {

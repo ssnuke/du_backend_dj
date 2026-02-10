@@ -66,6 +66,9 @@ from core.views.notifications import (
     mark_notification_read,
     mark_all_read,
     get_unread_count,
+    get_vapid_public_key,
+    subscribe_push,
+    unsubscribe_push,
 )
 from core.views.move_ir import MoveIrToTeam
 
@@ -163,6 +166,9 @@ urlpatterns = [
     # ============ NOTIFICATION ENDPOINTS ============
     path("notifications/", get_notifications),
     path("notifications/unread_count/", get_unread_count),
+    path("notifications/vapid_public_key/", get_vapid_public_key),
+    path("notifications/subscribe/", subscribe_push),
+    path("notifications/unsubscribe/", unsubscribe_push),
     path("notifications/<int:notification_id>/read/", mark_notification_read),
     path("notifications/mark_all_read/", mark_all_read),
 ]
