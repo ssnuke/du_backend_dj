@@ -60,7 +60,10 @@ class AddIrId(APIView):
             return Response({"detail": "Empty list provided"}, status=status.HTTP_400_BAD_REQUEST)
 
         errors = []
+        skipped = []
+        items_to_create = []
         seen = set()
+        
         for idx, item in enumerate(items):
             if not isinstance(item, dict):
                 error_msg = "Invalid item format, expected object"
@@ -83,15 +86,17 @@ class AddIrId(APIView):
             seen.add(ir_id)
 
             if IrId.objects.filter(ir_id=ir_id).exists():
-                error_msg = "IR ID already exists"
-                logging.warning(f"AddIrId: Validation error for {ir_id}: {error_msg}")
-                errors.append({"index": idx, "ir_id": ir_id, "error": error_msg})
+                # Skip existing IDs silently (idempotent behavior)
+                logging.info(f"AddIrId: Skipping {ir_id} - already exists (idempotent)")
+                skipped.append(ir_id)
+            else:
+                items_to_create.append(item)
 
         if errors:
             logging.error(f"AddIrId: Returning validation errors: {errors}")
             return Response({"errors": errors}, status=status.HTTP_400_BAD_REQUEST)
 
-        serializer = IrIdSerializer(data=items, many=True)
+        serializer = IrIdSerializer(data=items_to_create, many=True)
         if not serializer.is_valid():
             logging.error(f"AddIrId: Serializer validation failed: {serializer.errors}")
             return Response({"errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
@@ -108,8 +113,18 @@ class AddIrId(APIView):
             return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         created_ids = [obj.ir_id for obj in created]
-        logging.info(f"AddIrId: Response sent with IDs: {created_ids}")
-        return Response({"message": "IrId(s) added", "ir_ids": created_ids}, status=status.HTTP_201_CREATED)
+        logging.info(f"AddIrId: Response sent with IDs: {created_ids}, Skipped: {skipped}")
+        
+        response_data = {
+            "message": "IrId(s) added",
+            "ir_ids": created_ids,
+        }
+        if skipped:
+            response_data["skipped_count"] = len(skipped)
+            response_data["skipped_ids"] = skipped
+            response_data["message"] += f" ({len(skipped)} already existed)"
+        
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
 
 # ---------------------------------------------------
