@@ -673,7 +673,7 @@ class AddInfoDetail(APIView):
             
             created_ids = []
             created_plans = []
-            created_plans = []
+            
 
             for item in items:
                 if not isinstance(item, dict):
@@ -769,6 +769,7 @@ class AddPlanDetail(APIView):
                 items = payload
             
             created_ids = []
+            created_plans = []
 
             for item in items:
                 if not isinstance(item, dict):
