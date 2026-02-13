@@ -36,6 +36,8 @@ from core.views.post import (
     ResetDatabase,
     PasswordReset,
     ChangeIRAccessLevel,
+    SaveFCMToken,
+    SendFCMNotification,
 )
 
 from core.views.health import health_check
@@ -124,6 +126,8 @@ urlpatterns = [
     path("password_reset/", PasswordReset.as_view()),
     path("change_access_level/", ChangeIRAccessLevel.as_view()),
     path("reset_database/", ResetDatabase.as_view()),
+    path("save_fcm_token/", SaveFCMToken.as_view()),
+    path("send_fcm_notification/", SendFCMNotification.as_view()),
     #PUT endpoints
     path("update_ir/<str:update_ir>/", UpdateIrDetails.as_view()),
     path("update_info_detail/<int:info_id>/", UpdateInfoDetail.as_view()),

@@ -87,3 +87,4 @@ tox.ini
 *.bak
 *.tmp
 *.orig
+serviceAccountKey.json

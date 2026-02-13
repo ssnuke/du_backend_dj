@@ -1327,3 +1327,178 @@ class ResetDatabase(APIView):
         IrId.objects.all().delete()
 
         return Response({"status": "success", "message": "Database reset"})
+
+
+# ---------------------------------------------------
+# SAVE FCM TOKEN FOR PUSH NOTIFICATIONS
+# ---------------------------------------------------
+class SaveFCMToken(APIView):
+    def post(self, request):
+        """
+        Save Firebase Cloud Messaging token for the IR.
+        This allows the backend to send push notifications to the user's device.
+        
+        Expected payload:
+        {
+            "ir_id": "IM064623",
+            "fcm_token": "..."
+        }
+        """
+        try:
+            ir_id = request.data.get('ir_id')
+            fcm_token = request.data.get('fcm_token')
+            
+            if not ir_id or not fcm_token:
+                return Response(
+                    {"detail": "ir_id and fcm_token are required"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            logging.info(f"SaveFCMToken: Saving token for ir_id={ir_id}, token_length={len(fcm_token)}")
+            
+            # Get the IR
+            ir = get_object_or_404(Ir, ir_id=ir_id)
+            
+            # Initialize fcm_tokens list if needed
+            if not ir.fcm_tokens:
+                ir.fcm_tokens = []
+            elif not isinstance(ir.fcm_tokens, list):
+                ir.fcm_tokens = []
+            
+            # Add token if not already present (avoid duplicates)
+            if fcm_token not in ir.fcm_tokens:
+                ir.fcm_tokens.append(fcm_token)
+                logging.info(f"SaveFCMToken: Added new token for ir_id={ir_id}")
+            else:
+                logging.info(f"SaveFCMToken: Token already exists for ir_id={ir_id}")
+            
+            # Save the IR with updated FCM tokens
+            ir.save()
+            
+            return Response({
+                "status": "success",
+                "message": "FCM token saved successfully",
+                "ir_id": ir_id,
+                "token_count": len(ir.fcm_tokens)
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logging.exception(f"Error saving FCM token: {str(e)}")
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+# ---------------------------------------------------
+# SEND FCM NOTIFICATION TO USERS
+# ---------------------------------------------------
+class SendFCMNotification(APIView):
+    def post(self, request):
+        """
+        Send a push notification to one or more IRs.
+        Only accessible to LDC/CTC/Admin users (access levels 1, 2, 3).
+        
+        Expected payload:
+        {
+            "ir_ids": ["IM064623", "IM064624"],  # or single "ir_id"
+            "title": "Notification Title",
+            "body": "Notification content",
+            "data": {"action": "view_dashboard", "url": "/dashboard"}  # optional
+        }
+        """
+        try:
+            from core.utils.firebase_messaging import send_multicast, send_notification
+            
+            requester_ir_id = request.data.get('requester_ir_id')
+            ir_ids = request.data.get('ir_ids', [])
+            single_ir_id = request.data.get('ir_id')
+            title = request.data.get('title')
+            body = request.data.get('body')
+            data = request.data.get('data', {})
+            
+            # Get requester for permission check
+            requester = None
+            if requester_ir_id:
+                try:
+                    requester = Ir.objects.get(ir_id=requester_ir_id)
+                except Ir.DoesNotExist:
+                    return Response(
+                        {"detail": "Requester IR not found"},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+            
+            # Check if requester has permission to send notifications (LDC/CTC/Admin - levels 1, 2, 3)
+            if requester and requester.ir_access_level not in [1, 2, 3]:  # ADMIN=1, CTC=2, LDC=3
+                return Response(
+                    {"detail": "Only LDC/CTC/Admin users can send notifications"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            # Prepare IR IDs list
+            if not ir_ids:
+                ir_ids = [single_ir_id] if single_ir_id else []
+            
+            if not ir_ids:
+                return Response(
+                    {"detail": "ir_ids or ir_id is required"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not title or not body:
+                return Response(
+                    {"detail": "title and body are required"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Collect all FCM tokens from target IRs
+            all_fcm_tokens = []
+            ir_count = 0
+            
+            for ir_id in ir_ids:
+                try:
+                    ir = Ir.objects.get(ir_id=ir_id)
+                    if ir.fcm_tokens and isinstance(ir.fcm_tokens, list):
+                        all_fcm_tokens.extend(ir.fcm_tokens)
+                        ir_count += 1
+                except Ir.DoesNotExist:
+                    logging.warning(f"IR {ir_id} not found")
+                    continue
+            
+            if not all_fcm_tokens:
+                return Response({
+                    "status": "success",
+                    "message": "No FCM tokens found for target IRs",
+                    "irs_with_tokens": ir_count,
+                    "total_tokens": 0
+                }, status=status.HTTP_200_OK)
+            
+            # Send notification
+            logging.info(f"SendFCMNotification: Sending to {len(all_fcm_tokens)} tokens across {ir_count} IRs")
+            
+            if len(all_fcm_tokens) == 1:
+                response = send_notification(all_fcm_tokens[0], title, body, data)
+                return Response({
+                    "status": "success" if response else "failed",
+                    "message": "Notification sent successfully" if response else "Failed to send notification",
+                    "irs_targeted": ir_count,
+                    "tokens_sent": 1,
+                    "response": str(response) if response else None
+                }, status=status.HTTP_200_OK if response else status.HTTP_500_INTERNAL_SERVER_ERROR)
+            else:
+                result = send_multicast(all_fcm_tokens, title, body, data)
+                return Response({
+                    "status": "success",
+                    "message": f"Notification sent to {result['success']} device(s)",
+                    "irs_targeted": ir_count,
+                    "tokens_sent": result['success'],
+                    "tokens_failed": result['failure']
+                }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logging.exception(f"Error sending FCM notification: {str(e)}")
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+

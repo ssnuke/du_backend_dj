@@ -92,6 +92,10 @@ class Ir(models.Model):
     weekly_plan_target = models.IntegerField(default=0)
     weekly_uv_target = models.IntegerField(null=True, blank=True)
     started_date = models.DateField(auto_now_add=True)
+    
+    # ========== FCM NOTIFICATION FIELD ==========
+    fcm_tokens = models.JSONField(default=list, blank=True)  # Store multiple device tokens
+    # ============================================
 
     def set_password(self, raw_password):
         self.ir_password = make_password(raw_password)
