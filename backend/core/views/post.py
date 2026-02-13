@@ -47,53 +47,68 @@ IST = pytz.timezone("Asia/Kolkata")
 class AddIrId(APIView):
     def post(self, request):
         payload = request.data
+        logging.info(f"AddIrId: Received payload: {payload}")
 
         if payload is None:
+            logging.warning("AddIrId: Empty payload received")
             return Response({"detail": "Empty payload"}, status=status.HTTP_400_BAD_REQUEST)
 
         items = payload if isinstance(payload, list) else [payload]
 
         if not items:
+            logging.warning("AddIrId: Empty list provided")
             return Response({"detail": "Empty list provided"}, status=status.HTTP_400_BAD_REQUEST)
 
         errors = []
         seen = set()
         for idx, item in enumerate(items):
             if not isinstance(item, dict):
-                errors.append({"index": idx, "error": "Invalid item format, expected object"})
+                error_msg = "Invalid item format, expected object"
+                logging.warning(f"AddIrId: Validation error at index {idx}: {error_msg}")
+                errors.append({"index": idx, "error": error_msg})
                 continue
 
             ir_id = item.get("ir_id")
             if not ir_id:
-                errors.append({"index": idx, "error": "ir_id missing"})
+                error_msg = "ir_id missing"
+                logging.warning(f"AddIrId: Validation error at index {idx}: {error_msg}")
+                errors.append({"index": idx, "error": error_msg})
                 continue
 
             if ir_id in seen:
-                errors.append({"index": idx, "ir_id": ir_id, "error": "Duplicate in payload"})
+                error_msg = "Duplicate in payload"
+                logging.warning(f"AddIrId: Validation error for {ir_id}: {error_msg}")
+                errors.append({"index": idx, "ir_id": ir_id, "error": error_msg})
                 continue
             seen.add(ir_id)
 
             if IrId.objects.filter(ir_id=ir_id).exists():
-                errors.append({"index": idx, "ir_id": ir_id, "error": "IR ID already exists"})
+                error_msg = "IR ID already exists"
+                logging.warning(f"AddIrId: Validation error for {ir_id}: {error_msg}")
+                errors.append({"index": idx, "ir_id": ir_id, "error": error_msg})
 
         if errors:
+            logging.error(f"AddIrId: Returning validation errors: {errors}")
             return Response({"errors": errors}, status=status.HTTP_400_BAD_REQUEST)
 
         serializer = IrIdSerializer(data=items, many=True)
         if not serializer.is_valid():
+            logging.error(f"AddIrId: Serializer validation failed: {serializer.errors}")
             return Response({"errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             with transaction.atomic():
                 created = serializer.save()
-        except IntegrityError:
-            logging.exception("IntegrityError while bulk adding IrId entries")
+            logging.info(f"AddIrId: Successfully created {len(created)} IrId entries")
+        except IntegrityError as e:
+            logging.exception(f"AddIrId: IntegrityError while bulk adding IrId entries: {str(e)}")
             return Response({"detail": "Database integrity error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        except Exception:
-            logging.exception("Unexpected error while bulk adding IrId entries")
+        except Exception as e:
+            logging.exception(f"AddIrId: Unexpected error while bulk adding IrId entries: {str(e)}")
             return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         created_ids = [obj.ir_id for obj in created]
+        logging.info(f"AddIrId: Response sent with IDs: {created_ids}")
         return Response({"message": "IrId(s) added", "ir_ids": created_ids}, status=status.HTTP_201_CREATED)
 
 
@@ -103,19 +118,24 @@ class AddIrId(APIView):
 class RegisterIR(APIView):
     def post(self, request):
         payload = request.data
+        logging.info(f"RegisterIR: Received payload: {payload}")
 
         # Basic payload validation
         if payload is None:
+            logging.warning("RegisterIR: Empty payload received")
             return Response({"detail": "Empty payload"}, status=status.HTTP_400_BAD_REQUEST)
 
         items = payload if isinstance(payload, list) else [payload]
 
         if not items:
+            logging.warning("RegisterIR: Empty list provided")
             return Response({"detail": "Empty list provided"}, status=status.HTTP_400_BAD_REQUEST)
 
         for idx, itm in enumerate(items):
             if not isinstance(itm, dict):
-                return Response({"detail": "Invalid payload format, expected object or list of objects", "index": idx}, status=status.HTTP_400_BAD_REQUEST)
+                error_msg = "Invalid payload format, expected object or list of objects"
+                logging.error(f"RegisterIR: {error_msg} at index {idx}")
+                return Response({"detail": error_msg, "index": idx}, status=status.HTTP_400_BAD_REQUEST)
 
         # Pre-check whitelist, existing registrations, and parent validation
         errors = []
@@ -124,17 +144,26 @@ class RegisterIR(APIView):
             parent_ir_id = item.get("parent_ir_id")
             
             if not ir_id:
-                errors.append({"index": idx, "error": "ir_id missing"})
+                error_msg = "ir_id missing"
+                logging.warning(f"RegisterIR: Validation error at index {idx}: {error_msg}")
+                errors.append({"index": idx, "error": error_msg})
                 continue
             if not IrId.objects.filter(ir_id=ir_id).exists():
-                errors.append({"index": idx, "ir_id": ir_id, "error": "IR ID Not Found in whitelist"})
+                error_msg = "IR ID Not Found in whitelist"
+                logging.warning(f"RegisterIR: Validation error for {ir_id}: {error_msg}")
+                errors.append({"index": idx, "ir_id": ir_id, "error": error_msg})
             if Ir.objects.filter(ir_id=ir_id).exists():
-                errors.append({"index": idx, "ir_id": ir_id, "error": "Already registered"})
+                error_msg = "Already registered"
+                logging.warning(f"RegisterIR: Validation error for {ir_id}: {error_msg}")
+                errors.append({"index": idx, "ir_id": ir_id, "error": error_msg})
             # Validate parent exists if provided
             if parent_ir_id and not Ir.objects.filter(ir_id=parent_ir_id).exists():
-                errors.append({"index": idx, "ir_id": ir_id, "error": f"Parent IR '{parent_ir_id}' not found"})
+                error_msg = f"Parent IR '{parent_ir_id}' not found"
+                logging.warning(f"RegisterIR: Validation error for {ir_id}: {error_msg}")
+                errors.append({"index": idx, "ir_id": ir_id, "error": error_msg})
 
         if errors:
+            logging.error(f"RegisterIR: Returning validation errors: {errors}")
             return Response({"errors": errors}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
@@ -158,14 +187,16 @@ class RegisterIR(APIView):
                         "hierarchy_level": ir.hierarchy_level,
                         "parent_ir_id": parent_ir_id
                     })
+                    logging.info(f"RegisterIR: Created IR {ir.ir_id} with hierarchy_level {ir.hierarchy_level}")
                     
-        except IntegrityError:
-            logging.exception("IntegrityError while bulk registering IRs")
+        except IntegrityError as e:
+            logging.exception(f"RegisterIR: IntegrityError while bulk registering IRs: {str(e)}")
             return Response({"detail": "Database integrity error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        except Exception:
-            logging.exception("Unexpected error while bulk registering IRs")
+        except Exception as e:
+            logging.exception(f"RegisterIR: Unexpected error while bulk registering IRs: {str(e)}")
             return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+        logging.info(f"RegisterIR: Successfully registered {len(created_irs)} IR(s)")
         return Response(
             {"message": "IR(s) registered successfully", "ir_ids": created_irs},
             status=status.HTTP_201_CREATED,
@@ -674,7 +705,6 @@ class AddInfoDetail(APIView):
             created_ids = []
             created_plans = []
             
-
             for item in items:
                 if not isinstance(item, dict):
                     continue
