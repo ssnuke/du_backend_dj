@@ -673,6 +673,7 @@ class AddInfoDetail(APIView):
             
             created_ids = []
             created_plans = []
+            created_plans = []
 
             for item in items:
                 if not isinstance(item, dict):
@@ -778,6 +779,7 @@ class AddPlanDetail(APIView):
                     plan_date=item.get("plan_date", timezone.now()),
                     plan_name=item.get("plan_name"),
                     comments=item.get("comments"),
+                    status=item.get("status") or "closing_pending",
                 )
                 created_ids.append(plan.id)
                 created_plans.append(plan)
