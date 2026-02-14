@@ -90,7 +90,7 @@ class Ir(models.Model):
     uv_count = models.IntegerField(default=0)
     weekly_info_target = models.IntegerField(default=0)
     weekly_plan_target = models.IntegerField(default=0)
-    weekly_uv_target = models.IntegerField(null=True, blank=True)
+    weekly_uv_target = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     started_date = models.DateField(auto_now_add=True)
     
     # ========== FCM NOTIFICATION FIELD ==========
@@ -629,19 +629,19 @@ class WeeklyTarget(models.Model):
     ir = models.ForeignKey(Ir, on_delete=models.CASCADE, null=True, blank=True)
     ir_weekly_info_target = models.IntegerField(null=True, blank=True)
     ir_weekly_plan_target = models.IntegerField(null=True, blank=True)
-    ir_weekly_uv_target = models.IntegerField(null=True, blank=True)
+    ir_weekly_uv_target = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
 
     # Team targets (optional - only set if team target is being set)
     team = models.ForeignKey(Team, on_delete=models.CASCADE, null=True, blank=True)
     team_weekly_info_target = models.IntegerField(null=True, blank=True)
     team_weekly_plan_target = models.IntegerField(null=True, blank=True)
-    team_weekly_uv_target = models.IntegerField(null=True, blank=True)
+    team_weekly_uv_target = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
 
     # Pocket targets (optional - can split team targets to pockets)
     pocket = models.ForeignKey(Pocket, on_delete=models.CASCADE, null=True, blank=True, related_name='weekly_targets')
     pocket_weekly_info_target = models.IntegerField(null=True, blank=True)
     pocket_weekly_plan_target = models.IntegerField(null=True, blank=True)
-    pocket_weekly_uv_target = models.IntegerField(null=True, blank=True)
+    pocket_weekly_uv_target = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -706,13 +706,18 @@ class TeamWeeklyTargets(models.Model):
         if week_str in self.targets_data[year_str] and not allow_overwrite:
             return False, "Week targets already exist"
 
+        try:
+            uv_target_value = float(uv_target) if uv_target not in (None, "") else 0
+        except (TypeError, ValueError):
+            uv_target_value = 0
+
         # Set the week data
         self.targets_data[year_str][week_str] = {
             "week_start": week_start.isoformat() if hasattr(week_start, 'isoformat') else week_start,
             "week_end": week_end.isoformat() if hasattr(week_end, 'isoformat') else week_end,
             "team_weekly_info_target": int(info_target),
             "team_weekly_plan_target": int(plan_target),
-            "team_weekly_uv_target": int(uv_target)
+            "team_weekly_uv_target": uv_target_value,
         }
 
         return True, "Targets set successfully"

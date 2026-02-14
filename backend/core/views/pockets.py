@@ -10,6 +10,7 @@ from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils.dateparse import parse_datetime
 from django.utils import timezone
+from decimal import Decimal, InvalidOperation
 
 from core.models import (
     Ir, Team, Pocket, PocketMember, WeeklyTarget,
@@ -18,6 +19,15 @@ from core.models import (
 from core.serializers import (
     PocketSerializer, PocketDetailedSerializer, PocketMemberSerializer
 )
+
+
+def parse_decimal_value(value, field_name):
+    if value in (None, ""):
+        return Decimal("0")
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError(f"Invalid {field_name} format")
 
 
 class CreatePocket(APIView):
@@ -504,7 +514,7 @@ class SplitTargetToPockets(APIView):
             # Validate pocket_targets format and totals
             total_info = 0
             total_plan = 0
-            total_uv = 0
+            total_uv = Decimal("0")
             
             created_targets = []
             
@@ -513,7 +523,7 @@ class SplitTargetToPockets(APIView):
                     pocket_id = pocket_target.get("pocket_id")
                     info_target = int(pocket_target.get("info_target", 0) or 0)
                     plan_target = int(pocket_target.get("plan_target", 0) or 0)
-                    uv_target = float(pocket_target.get("uv_target", 0) or 0)
+                    uv_target = parse_decimal_value(pocket_target.get("uv_target", 0), "uv_target")
                     
                     pocket = get_object_or_404(Pocket, id=pocket_id)
                     
@@ -534,7 +544,7 @@ class SplitTargetToPockets(APIView):
                     
                     pocket_wt.pocket_weekly_info_target = int(info_target)
                     pocket_wt.pocket_weekly_plan_target = int(plan_target)
-                    pocket_wt.pocket_weekly_uv_target = int(uv_target)
+                    pocket_wt.pocket_weekly_uv_target = uv_target
                     pocket_wt.save()
                     
                     created_targets.append(pocket_wt)
@@ -547,7 +557,7 @@ class SplitTargetToPockets(APIView):
 					"team_target_uv": team_uv_target,
                     "allocated_info": total_info,
                     "allocated_plan": total_plan,
-                    "allocated_uv": total_uv,
+                    "allocated_uv": float(total_uv),
                     "pockets_updated": len(created_targets)
                 },
                 status=status.HTTP_200_OK

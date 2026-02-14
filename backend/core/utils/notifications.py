@@ -75,6 +75,11 @@ def create_notifications(
             title=title,
             message=message,
         )
+        send_fcm_notifications(
+            notifications=notifications_to_create,
+            title=title,
+            message=message,
+        )
 
 
 def send_push_notifications(notifications: Iterable[Notification], title: str, message: str) -> None:
@@ -114,3 +119,36 @@ def send_push_notifications(notifications: Iterable[Notification], title: str, m
             except WebPushException as exc:
                 if exc.response is not None and exc.response.status_code in [404, 410]:
                     PushSubscription.objects.filter(id=sub.id).delete()
+
+
+def send_fcm_notifications(notifications: Iterable[Notification], title: str, message: str) -> None:
+    try:
+        from core.utils.firebase_messaging import send_multicast, send_notification
+    except Exception:
+        return
+
+    notifications_list = list(notifications)
+    if not notifications_list:
+        return
+
+    sample = notifications_list[0]
+    data = {}
+    if sample.notification_type:
+        data["notification_type"] = sample.notification_type
+    if sample.related_object_id:
+        data["related_object_id"] = str(sample.related_object_id)
+
+    tokens = []
+    for notification in notifications_list:
+        recipient = notification.recipient
+        if recipient.fcm_tokens and isinstance(recipient.fcm_tokens, list):
+            tokens.extend(recipient.fcm_tokens)
+
+    if not tokens:
+        return
+
+    tokens = list(dict.fromkeys(tokens))
+    if len(tokens) == 1:
+        send_notification(tokens[0], title, message, data)
+    else:
+        send_multicast(tokens, title, message, data)

@@ -28,10 +28,20 @@ from core.serializers import (
     TeamSerializer,
 )
 from django.contrib.auth.hashers import make_password
+from decimal import Decimal, InvalidOperation
 
 import logging
 from datetime import datetime
 import pytz
+
+
+def parse_decimal_value(value, field_name):
+    if value in (None, ""):
+        return Decimal("0")
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError(f"Invalid {field_name} format")
 
 
 # ---------------------------------------------------
@@ -454,9 +464,12 @@ class UpdateWeeklyTargets(APIView):
                 # Update UV target (only for CTC and LDC)
                 if request.data.get("weekly_uv_target") is not None and ir.ir_access_level in [2, 3]:
                     try:
-                        weekly_target.ir_weekly_uv_target = int(request.data["weekly_uv_target"])
-                    except (ValueError, TypeError):
-                        weekly_target.ir_weekly_uv_target = request.data["weekly_uv_target"]
+                        weekly_target.ir_weekly_uv_target = parse_decimal_value(
+                            request.data["weekly_uv_target"],
+                            "weekly_uv_target",
+                        )
+                    except ValueError as exc:
+                        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
                 
                 weekly_target.save()
                 updated["ir_id"] = ir.ir_id
@@ -511,9 +524,12 @@ class UpdateWeeklyTargets(APIView):
                 # Update UV target for team
                 if request.data.get("team_weekly_uv_target") is not None:
                     try:
-                        weekly_target.team_weekly_uv_target = int(request.data["team_weekly_uv_target"])
-                    except (ValueError, TypeError):
-                        weekly_target.team_weekly_uv_target = request.data["team_weekly_uv_target"]
+                        weekly_target.team_weekly_uv_target = parse_decimal_value(
+                            request.data["team_weekly_uv_target"],
+                            "team_weekly_uv_target",
+                        )
+                    except ValueError as exc:
+                        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
                 
                 weekly_target.save()
                 updated["team_id"] = team.id

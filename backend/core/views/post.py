@@ -34,11 +34,21 @@ from core.serializers import (
 
 import logging
 from django.db import IntegrityError
+from decimal import Decimal, InvalidOperation
 
 from datetime import datetime, timedelta
 import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
+
+
+def parse_decimal_value(value, field_name):
+    if value in (None, ""):
+        return Decimal("0")
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError(f"Invalid {field_name} format")
 
 
 # ---------------------------------------------------
@@ -1070,9 +1080,12 @@ class SetTargets(APIView):
                     
                     if payload.get("weekly_uv_target") is not None and ir.ir_access_level in [2, 3]:
                         try:
-                            weekly_target.ir_weekly_uv_target = int(payload["weekly_uv_target"])
-                        except Exception:
-                            weekly_target.ir_weekly_uv_target = payload["weekly_uv_target"]
+                            weekly_target.ir_weekly_uv_target = parse_decimal_value(
+                                payload["weekly_uv_target"],
+                                "weekly_uv_target",
+                            )
+                        except ValueError as exc:
+                            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
                     
                     weekly_target.save()
                     updated["ir_id"] = ir.ir_id
@@ -1102,7 +1115,13 @@ class SetTargets(APIView):
                     # Extract target values
                     info_target = payload.get("team_weekly_info_target", 0)
                     plan_target = payload.get("team_weekly_plan_target", 0)
-                    uv_target = payload.get("team_weekly_uv_target", 0)
+                    try:
+                        uv_target = parse_decimal_value(
+                            payload.get("team_weekly_uv_target", 0),
+                            "team_weekly_uv_target",
+                        )
+                    except ValueError as exc:
+                        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
                     
                     # Try to set the week targets (will fail if week already exists)
                     success, message = team_targets.set_week_targets(
