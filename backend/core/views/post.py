@@ -933,23 +933,19 @@ class AddUV(APIView):
                 if not isinstance(payload, list):
                     payload = [payload]
                 
-                total_uvs_added = 0
+                total_uvs_added = Decimal("0")
                 uv_record_ids = []
                 
                 for item in payload:
-                    uv_count = item.get("uv_count", 1)  # Default to 1 UV if not specified
                     try:
-                        uv_count = int(uv_count)
+                        uv_count = parse_decimal_value(item.get("uv_count", 1), "uv_count")
                         if uv_count <= 0:
                             return Response(
-                                {"detail": "UV count must be a positive integer"},
+                                {"detail": "UV count must be a positive number"},
                                 status=status.HTTP_400_BAD_REQUEST
                             )
-                    except (ValueError, TypeError):
-                        return Response(
-                            {"detail": "Invalid UV count format"},
-                            status=status.HTTP_400_BAD_REQUEST
-                        )
+                    except ValueError as exc:
+                        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
                     
                     # Create UVDetail record for week-specific tracking with IR name and prospect name
                     uv_detail = UVDetail.objects.create(

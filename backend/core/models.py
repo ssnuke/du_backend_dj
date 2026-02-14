@@ -87,7 +87,7 @@ class Ir(models.Model):
     dr_count = models.IntegerField(default=0)
     info_count = models.IntegerField(default=0)
     name_list = models.IntegerField(default=0)
-    uv_count = models.IntegerField(default=0)
+    uv_count = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     weekly_info_target = models.IntegerField(default=0)
     weekly_plan_target = models.IntegerField(default=0)
     weekly_uv_target = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
