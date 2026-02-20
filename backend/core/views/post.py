@@ -1542,6 +1542,7 @@ class SendFCMNotification(APIView):
                     "irs_targeted": ir_count,
                     "tokens_sent": result['success'],
                     "tokens_failed": result['failure'],
+                    "failure_details": result.get('failure_details', []),
                     "target_devices": token_details
                 }, status=status.HTTP_200_OK)
             
