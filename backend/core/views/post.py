@@ -1443,12 +1443,10 @@ class SendFCMNotification(APIView):
                         status=status.HTTP_404_NOT_FOUND
                     )
             
-            # Check if requester has permission to send notifications (LDC/CTC/Admin - levels 1, 2, 3)
-            if requester and requester.ir_access_level not in [1, 2, 3]:  # ADMIN=1, CTC=2, LDC=3
-                return Response(
-                    {"detail": "Only LDC/CTC/Admin users can send notifications"},
-                    status=status.HTTP_403_FORBIDDEN
-                )
+            # All users can send notifications, but visibility is enforced below
+            # Admin can send to all users
+            # CTC/LDC can send to their visible downlines
+            # Other roles can send to their visible downlines
             
             # Prepare IR IDs list
             if not ir_ids:
@@ -1467,15 +1465,40 @@ class SendFCMNotification(APIView):
                 )
             
             # Collect all FCM tokens from target IRs
+            # Enforce visibility: users can only send to IRs they have access to
             all_fcm_tokens = []
             ir_count = 0
             
             for ir_id in ir_ids:
                 try:
-                    ir = Ir.objects.get(ir_id=ir_id)
-                    if ir.fcm_tokens and isinstance(ir.fcm_tokens, list):
-                        all_fcm_tokens.extend(ir.fcm_tokens)
+                    target_ir = Ir.objects.get(ir_id=ir_id)
+                    
+                    # Visibility check: Can requester send to this IR?
+                    can_send = False
+                    
+                    if not requester:
+                        # No requester info, allow sending (backward compatibility)
+                        can_send = True
+                    elif requester.ir_access_level == 1:  # ADMIN
+                        # Admin can send to anyone
+                        can_send = True
+                    elif requester.ir_access_level in [2, 3]:  # CTC, LDC
+                        # CTC/LDC can send to their downlines or themselves
+                        if requester.ir_id == target_ir.ir_id:
+                            can_send = True
+                        elif requester.can_view_user(target_ir):
+                            # Check if target is in their downline
+                            can_send = True
+                    else:
+                        # LS, GC, IR can send to themselves
+                        if requester.ir_id == target_ir.ir_id:
+                            can_send = True
+                    
+                    if can_send and target_ir.fcm_tokens and isinstance(target_ir.fcm_tokens, list):
+                        all_fcm_tokens.extend(target_ir.fcm_tokens)
                         ir_count += 1
+                    elif not can_send:
+                        logging.warning(f"SendFCMNotification: {requester.ir_id if requester else 'Unknown'} not authorized to send to {ir_id}")
                 except Ir.DoesNotExist:
                     logging.warning(f"IR {ir_id} not found")
                     continue
