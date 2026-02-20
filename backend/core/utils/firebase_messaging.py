@@ -122,6 +122,12 @@ def send_multicast(fcm_tokens, title, body, data=None):
         response = messaging.send_multicast(message)
         logger.info(f'Multicast notification sent. Success: {response.success_count}, Failure: {response.failure_count}')
         
+        # Log detailed error information for failed tokens
+        if response.failure_count > 0:
+            for idx, resp in enumerate(response.responses):
+                if not resp.success:
+                    logger.error(f'Failed to send to token {idx}: {resp.exception}')
+        
         return {
             'success': response.success_count,
             'failure': response.failure_count,
