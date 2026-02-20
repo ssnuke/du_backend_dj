@@ -1467,6 +1467,7 @@ class SendFCMNotification(APIView):
             # Collect all FCM tokens from target IRs
             # Enforce visibility: users can only send to IRs they have access to
             all_fcm_tokens = []
+            token_details = []  # Track tokens with their source IR and device info
             ir_count = 0
             
             for ir_id in ir_ids:
@@ -1495,7 +1496,15 @@ class SendFCMNotification(APIView):
                             can_send = True
                     
                     if can_send and target_ir.fcm_tokens and isinstance(target_ir.fcm_tokens, list):
-                        all_fcm_tokens.extend(target_ir.fcm_tokens)
+                        for token in target_ir.fcm_tokens:
+                            all_fcm_tokens.append(token)
+                            # Create masked token for response (last 8 chars only)
+                            masked = f"...{token[-8:]}" if len(token) > 8 else token
+                            token_details.append({
+                                "ir_id": ir_id,
+                                "masked_token": masked,
+                                "device_index": len(token_details) + 1
+                            })
                         ir_count += 1
                     elif not can_send:
                         logging.warning(f"SendFCMNotification: {requester.ir_id if requester else 'Unknown'} not authorized to send to {ir_id}")
@@ -1508,7 +1517,8 @@ class SendFCMNotification(APIView):
                     "status": "success",
                     "message": "No FCM tokens found for target IRs",
                     "irs_with_tokens": ir_count,
-                    "total_tokens": 0
+                    "total_tokens": 0,
+                    "target_devices": []
                 }, status=status.HTTP_200_OK)
             
             # Send notification
@@ -1521,7 +1531,8 @@ class SendFCMNotification(APIView):
                     "message": "Notification sent successfully" if response else "Failed to send notification",
                     "irs_targeted": ir_count,
                     "tokens_sent": 1,
-                    "response": str(response) if response else None
+                    "response": str(response) if response else None,
+                    "target_devices": token_details
                 }, status=status.HTTP_200_OK if response else status.HTTP_500_INTERNAL_SERVER_ERROR)
             else:
                 result = send_multicast(all_fcm_tokens, title, body, data)
@@ -1530,7 +1541,8 @@ class SendFCMNotification(APIView):
                     "message": f"Notification sent to {result['success']} device(s)",
                     "irs_targeted": ir_count,
                     "tokens_sent": result['success'],
-                    "tokens_failed": result['failure']
+                    "tokens_failed": result['failure'],
+                    "target_devices": token_details
                 }, status=status.HTTP_200_OK)
             
         except Exception as e:
