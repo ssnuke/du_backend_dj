@@ -154,9 +154,6 @@ def send_multicast(fcm_tokens, title, body, data=None):
                             body=body,
                             icon='/icons/Icon-192.png',
                             require_interaction=False
-                        ),
-                        fcm_options=messaging.WebpushFCMOptions(
-                            link='/'
                         )
                     ),
                     data=clean_data,
