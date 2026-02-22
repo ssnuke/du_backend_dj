@@ -166,13 +166,25 @@ def send_fcm_notifications(notifications: Iterable[Notification], title: str, me
     # Send notifications
     logger.info(f">>> [AUTO NOTIFICATION] ABOUT TO SEND PUSH TO DEVICES. Tokens: {tokens}, Title: {title}")
     
-    if len(tokens) == 1:
-        result = send_notification(tokens[0], title, message, data)
-        if result:
-            logger.info(f'send_fcm_notifications: Successfully sent single notification')
-        else:
-            logger.error(f'send_fcm_notifications: Failed to send single notification')
-    else:
-        logger.info(f">>> [AUTO NOTIFICATION] ABOUT TO SEND MULTICAST PUSH TO DEVICES. Tokens: {tokens}, Title: {title}")
-        result = send_multicast(tokens, title, message, data)
-        logger.info(f'send_fcm_notifications: Multicast result - Success: {result.get("success", 0)}, Failure: {result.get("failure", 0)}')
+    result = send_multicast(tokens, title, message, data)
+    logger.info(f'send_fcm_notifications: Multicast result - Success: {result.get("success", 0)}, Failure: {result.get("failure", 0)}')
+    
+    # Process failures and clean up invalid tokens
+    if result.get("failure", 0) > 0:
+        bad_tokens = set()
+        for detail in result.get("failure_details", []):
+            msg = str(detail.get("message", ""))
+            code = str(detail.get("code", ""))
+            if "NotRegistered" in msg or "invalid" in msg.lower() or code in ["registration-token-not-registered", "invalid-registration-token"]:
+                bad_tokens.add(detail.get("token"))
+                
+        if bad_tokens:
+            logger.info(f"Removing {len(bad_tokens)} invalid FCM tokens from database")
+            for notification in notifications_list:
+                recipient = notification.recipient
+                if recipient.fcm_tokens and isinstance(recipient.fcm_tokens, list):
+                    original_len = len(recipient.fcm_tokens)
+                    new_tokens = [t for t in recipient.fcm_tokens if t not in bad_tokens]
+                    if len(new_tokens) < original_len:
+                        recipient.fcm_tokens = new_tokens
+                        recipient.save(update_fields=['fcm_tokens'])

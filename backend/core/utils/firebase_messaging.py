@@ -156,7 +156,7 @@ def send_multicast(fcm_tokens, title, body, data=None):
                 err_msg = str(e)
                 failure_details.append({
                     'index': idx,
-                    'token': token[:20] + '...',
+                    'token': token,
                     'code': err_code,
                     'message': err_msg,
                 })

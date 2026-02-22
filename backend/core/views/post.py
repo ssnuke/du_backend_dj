@@ -947,13 +947,33 @@ class AddUV(APIView):
                     except ValueError as exc:
                         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
                     
+                    # Parse date to avoid naive datetime warning
+                    raw_date = item.get("uv_date")
+                    final_date = timezone.now()
+                    if raw_date and isinstance(raw_date, str):
+                        try:
+                            from django.utils.dateparse import parse_datetime, parse_date
+                            parsed = parse_datetime(raw_date)
+                            if not parsed:
+                                parsed = parse_date(raw_date)
+                                if parsed:
+                                    parsed = datetime.combine(parsed, datetime.min.time())
+                            if parsed:
+                                final_date = timezone.make_aware(parsed) if timezone.is_naive(parsed) else parsed
+                        except Exception:
+                            pass
+                    elif raw_date:
+                        final_date = raw_date
+                        if isinstance(final_date, datetime) and timezone.is_naive(final_date):
+                            final_date = timezone.make_aware(final_date)
+                    
                     # Create UVDetail record for week-specific tracking with IR name and prospect name
                     uv_detail = UVDetail.objects.create(
                         ir=ir,
                         ir_name=ir.ir_name,  # Store IR name for display
                         prospect_name=item.get("prospect_name", ""),  # Store prospect name
                         uv_count=uv_count,
-                        uv_date=item.get("uv_date", timezone.now()),
+                        uv_date=final_date,
                         comments=item.get("comments")
                     )
                     uv_record_ids.append(uv_detail.id)
