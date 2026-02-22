@@ -65,7 +65,7 @@ def send_notification(fcm_token, title, body, data=None):
         fcm_token: FCM device token
         title: Notification title
         body: Notification body
-        data: Optional dictionary of additional data
+        data: Optional dictionary of additional data (all values must be strings)
     
     Returns:
         message_id if successful, None otherwise
@@ -75,21 +75,30 @@ def send_notification(fcm_token, title, body, data=None):
             logger.warning('Firebase not initialized, cannot send notification')
             return None
         
+        # Ensure all data values are strings (FCM requirement)
+        clean_data = {}
+        if data:
+            for key, value in data.items():
+                clean_data[key] = str(value) if value is not None else ''
+        
+        logger.info(f'Sending FCM notification to token {fcm_token[:20]}... - Title: {title}')
+        
         message = messaging.Message(
             notification=messaging.Notification(
                 title=title,
                 body=body,
             ),
-            data=data or {},
+            data=clean_data,
             token=fcm_token,
         )
         
         response = messaging.send(message)
-        logger.info(f'Successfully sent FCM notification: {response}')
+        logger.info(f'Successfully sent FCM notification. Message ID: {response}')
         return response
         
     except Exception as e:
-        logger.error(f'Error sending FCM notification: {str(e)}')
+        logger.error(f'Error sending FCM notification to {fcm_token[:20]}...: {str(e)}')
+        logger.exception('Full traceback:')
         return None
 
 def send_multicast(fcm_tokens, title, body, data=None):
@@ -100,7 +109,7 @@ def send_multicast(fcm_tokens, title, body, data=None):
         fcm_tokens: List of FCM device tokens
         title: Notification title
         body: Notification body
-        data: Optional dictionary of additional data
+        data: Optional dictionary of additional data (all values must be strings)
     
     Returns:
         dict with success and failure counts
@@ -110,13 +119,28 @@ def send_multicast(fcm_tokens, title, body, data=None):
             logger.warning('Firebase not initialized, cannot send notifications')
             return {'success': 0, 'failure': len(fcm_tokens)}
         
+        # Filter out empty or invalid tokens
+        valid_tokens = [token for token in fcm_tokens if token and isinstance(token, str) and len(token) > 0]
+        
+        if not valid_tokens:
+            logger.warning('No valid FCM tokens to send to')
+            return {'success': 0, 'failure': 0}
+        
+        # Ensure all data values are strings (FCM requirement)
+        clean_data = {}
+        if data:
+            for key, value in data.items():
+                clean_data[key] = str(value) if value is not None else ''
+        
+        logger.info(f'Sending multicast FCM notification to {len(valid_tokens)} tokens - Title: {title}')
+        
         message = messaging.MulticastMessage(
             notification=messaging.Notification(
                 title=title,
                 body=body,
             ),
-            data=data or {},
-            tokens=fcm_tokens,
+            data=clean_data,
+            tokens=valid_tokens,
         )
         
         response = messaging.send_multicast(message)
@@ -132,10 +156,11 @@ def send_multicast(fcm_tokens, title, body, data=None):
                     err_msg = str(err)
                     failure_details.append({
                         'index': idx,
+                        'token': valid_tokens[idx][:20] + '...',
                         'code': err_code,
                         'message': err_msg,
                     })
-                    logger.error(f'Failed to send to token {idx}: {err_msg}')
+                    logger.error(f'Failed to send to token {idx} ({valid_tokens[idx][:20]}...): {err_msg}')
         
         return {
             'success': response.success_count,
@@ -146,4 +171,5 @@ def send_multicast(fcm_tokens, title, body, data=None):
         
     except Exception as e:
         logger.error(f'Error sending multicast FCM notification: {str(e)}')
+        logger.exception('Full traceback:')
         return {'success': 0, 'failure': len(fcm_tokens)}

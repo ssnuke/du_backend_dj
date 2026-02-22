@@ -124,31 +124,52 @@ def send_push_notifications(notifications: Iterable[Notification], title: str, m
 def send_fcm_notifications(notifications: Iterable[Notification], title: str, message: str) -> None:
     try:
         from core.utils.firebase_messaging import send_multicast, send_notification
-    except Exception:
+        import logging
+        logger = logging.getLogger(__name__)
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f'Failed to import firebase messaging: {str(e)}')
         return
 
     notifications_list = list(notifications)
     if not notifications_list:
+        logger.warning('send_fcm_notifications: No notifications to send')
         return
 
     sample = notifications_list[0]
+    # Ensure all data values are strings (FCM requirement)
     data = {}
     if sample.notification_type:
-        data["notification_type"] = sample.notification_type
+        data["notification_type"] = str(sample.notification_type)
     if sample.related_object_id:
         data["related_object_id"] = str(sample.related_object_id)
 
+    # Collect all FCM tokens from recipients
     tokens = []
     for notification in notifications_list:
         recipient = notification.recipient
         if recipient.fcm_tokens and isinstance(recipient.fcm_tokens, list):
-            tokens.extend(recipient.fcm_tokens)
+            # Filter out empty or invalid tokens
+            valid_tokens = [t for t in recipient.fcm_tokens if t and isinstance(t, str) and len(t) > 0]
+            tokens.extend(valid_tokens)
 
     if not tokens:
+        logger.warning(f'send_fcm_notifications: No FCM tokens found for {len(notifications_list)} notifications')
         return
 
+    # Remove duplicates while preserving order
     tokens = list(dict.fromkeys(tokens))
+    
+    logger.info(f'send_fcm_notifications: Sending to {len(tokens)} unique FCM tokens for {len(notifications_list)} notifications')
+    
+    # Send notifications
     if len(tokens) == 1:
-        send_notification(tokens[0], title, message, data)
+        result = send_notification(tokens[0], title, message, data)
+        if result:
+            logger.info(f'send_fcm_notifications: Successfully sent single notification')
+        else:
+            logger.error(f'send_fcm_notifications: Failed to send single notification')
     else:
-        send_multicast(tokens, title, message, data)
+        result = send_multicast(tokens, title, message, data)
+        logger.info(f'send_fcm_notifications: Multicast result - Success: {result.get("success", 0)}, Failure: {result.get("failure", 0)}')
