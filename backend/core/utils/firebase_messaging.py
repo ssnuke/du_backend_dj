@@ -145,6 +145,20 @@ def send_multicast(fcm_tokens, title, body, data=None):
                         title=title,
                         body=body,
                     ),
+                    webpush=messaging.WebpushConfig(
+                        headers={
+                            "Urgency": "high"
+                        },
+                        notification=messaging.WebpushNotification(
+                            title=title,
+                            body=body,
+                            icon='/icons/Icon-192.png',
+                            require_interaction=False
+                        ),
+                        fcm_options=messaging.WebpushFCMOptions(
+                            link='/'
+                        )
+                    ),
                     data=clean_data,
                     token=token,
                 )
