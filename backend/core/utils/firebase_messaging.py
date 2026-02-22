@@ -132,41 +132,43 @@ def send_multicast(fcm_tokens, title, body, data=None):
             for key, value in data.items():
                 clean_data[key] = str(value) if value is not None else ''
         
-        logger.info(f'Sending multicast FCM notification to {len(valid_tokens)} tokens - Title: {title}')
+        logger.info(f'Sending multicast FCM notification to {len(valid_tokens)} tokens sequentially - Title: {title}')
         
-        message = messaging.MulticastMessage(
-            notification=messaging.Notification(
-                title=title,
-                body=body,
-            ),
-            data=clean_data,
-            tokens=valid_tokens,
-        )
-        
-        response = messaging.send_multicast(message)
-        logger.info(f'Multicast notification sent. Success: {response.success_count}, Failure: {response.failure_count}')
-        
+        success_count = 0
+        failure_count = 0
         failure_details = []
-        # Log detailed error information for failed tokens
-        if response.failure_count > 0:
-            for idx, resp in enumerate(response.responses):
-                if not resp.success:
-                    err = resp.exception
-                    err_code = getattr(err, 'code', None)
-                    err_msg = str(err)
-                    failure_details.append({
-                        'index': idx,
-                        'token': valid_tokens[idx][:20] + '...',
-                        'code': err_code,
-                        'message': err_msg,
-                    })
-                    logger.error(f'Failed to send to token {idx} ({valid_tokens[idx][:20]}...): {err_msg}')
+        
+        for idx, token in enumerate(valid_tokens):
+            try:
+                single_message = messaging.Message(
+                    notification=messaging.Notification(
+                        title=title,
+                        body=body,
+                    ),
+                    data=clean_data,
+                    token=token,
+                )
+                messaging.send(single_message)
+                success_count += 1
+            except Exception as e:
+                failure_count += 1
+                err_code = getattr(e, 'code', None)
+                err_msg = str(e)
+                failure_details.append({
+                    'index': idx,
+                    'token': token[:20] + '...',
+                    'code': err_code,
+                    'message': err_msg,
+                })
+                logger.error(f'Failed to send to token {idx} ({token[:20]}...): {err_msg}')
+        
+        logger.info(f'Multicast notification sent sequentially. Success: {success_count}, Failure: {failure_count}')
         
         return {
-            'success': response.success_count,
-            'failure': response.failure_count,
+            'success': success_count,
+            'failure': failure_count,
             'failure_details': failure_details,
-            'resp': response
+            'resp': None
         }
         
     except Exception as e:
