@@ -164,6 +164,8 @@ def send_fcm_notifications(notifications: Iterable[Notification], title: str, me
     logger.info(f'send_fcm_notifications: Sending to {len(tokens)} unique FCM tokens for {len(notifications_list)} notifications')
     
     # Send notifications
+    logger.info(f">>> [AUTO NOTIFICATION] ABOUT TO SEND PUSH TO DEVICES. Tokens: {tokens}, Title: {title}")
+    
     if len(tokens) == 1:
         result = send_notification(tokens[0], title, message, data)
         if result:
@@ -171,5 +173,6 @@ def send_fcm_notifications(notifications: Iterable[Notification], title: str, me
         else:
             logger.error(f'send_fcm_notifications: Failed to send single notification')
     else:
+        logger.info(f">>> [AUTO NOTIFICATION] ABOUT TO SEND MULTICAST PUSH TO DEVICES. Tokens: {tokens}, Title: {title}")
         result = send_multicast(tokens, title, message, data)
         logger.info(f'send_fcm_notifications: Multicast result - Success: {result.get("success", 0)}, Failure: {result.get("failure", 0)}')

@@ -1523,6 +1523,7 @@ class SendFCMNotification(APIView):
             
             # Send notification
             logging.info(f"SendFCMNotification: Sending to {len(all_fcm_tokens)} tokens across {ir_count} IRs")
+            logging.info(f">>> ABOUT TO SEND NOTIFICATION TO DEVICE. Tokens: {all_fcm_tokens}, Title: {title}")
             
             if len(all_fcm_tokens) == 1:
                 response = send_notification(all_fcm_tokens[0], title, body, data)
@@ -1535,6 +1536,7 @@ class SendFCMNotification(APIView):
                     "target_devices": token_details
                 }, status=status.HTTP_200_OK if response else status.HTTP_500_INTERNAL_SERVER_ERROR)
             else:
+                logging.info(f">>> ABOUT TO SEND MULTICAST NOTIFICATION TO DEVICES. Tokens: {all_fcm_tokens}, Title: {title}")
                 result = send_multicast(all_fcm_tokens, title, body, data)
                 return Response({
                     "status": "success",
