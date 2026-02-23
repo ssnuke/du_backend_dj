@@ -10,10 +10,9 @@ from core.models import Notification, Ir, AccessLevel, TeamMember, TeamRole, Pus
 def get_notification_recipients(target_ir: Ir) -> set:
     """
     Build recipient list based on visibility rules.
-    - Always include Admins.
-    - Include upline CTCs (who manage branches).
-    - Include LDCs only if they specifically manage teams the IR belongs to.
-    - Filter non-admins to only those who can view the target IR.
+    - Admin: All updates.
+    - CTC: Any updates from visible teams (teams in their subtree or teams they are part of).
+    - LDC: Updates from teams they are a part of (as leader or member).
     """
     recipients = set()
 
@@ -22,34 +21,78 @@ def get_notification_recipients(target_ir: Ir) -> set:
     for admin in admins:
         recipients.add(admin)
 
-    # 2. CTCs get subtree notifications
-    ctc_uplines = target_ir.get_all_uplines().filter(ir_access_level=AccessLevel.CTC, status=True)
-    for ctc in ctc_uplines:
-        recipients.add(ctc)
-
-    # 3. LDCs only for teams they specifically manage
+    # 2. Get all teams the target IR belongs to
     team_memberships = TeamMember.objects.filter(ir=target_ir).select_related("team")
+    
+    # 3. Handle CTC and LDC recipients
     for membership in team_memberships:
         team = membership.team
         
-        # Members with LDC role in the team
-        ldc_members = TeamMember.objects.filter(team=team, role=TeamRole.LDC).select_related("ir")
-        for ldc_mem in ldc_members:
-            if ldc_mem.ir.status and ldc_mem.ir.ir_id != target_ir.ir_id:
-                recipients.add(ldc_mem.ir)
+        # A. CTCs for "visible teams"
+        # Include CTCs who are uplines of the team creator (subtree rule for teams)
+        if team.created_by:
+            ctc_uplines = team.created_by.get_all_uplines().filter(
+                ir_access_level=AccessLevel.CTC, 
+                status=True
+            )
+            for ctc in ctc_uplines:
+                recipients.add(ctc)
+            
+            # Team creator themselves if they are CTC
+            if team.created_by.ir_access_level == AccessLevel.CTC and team.created_by.status:
+                recipients.add(team.created_by)
+
+        # Include CTCs who are members of this team
+        ctc_members = TeamMember.objects.filter(
+            team=team, 
+            ir__ir_access_level=AccessLevel.CTC, 
+            ir__status=True
+        ).select_related("ir")
+        for mem in ctc_members:
+            recipients.add(mem.ir)
+
+        # B. LDCs for teams they are a part of
+        # Include members with LDC role in the team (specifically marked in team)
+        ldc_members = TeamMember.objects.filter(
+            team=team, 
+            role=TeamRole.LDC, 
+            ir__status=True
+        ).select_related("ir")
+        for mem in ldc_members:
+            if mem.ir.ir_id != target_ir.ir_id:
+                recipients.add(mem.ir)
+
+        # Include users with global LDC access level who are in the team
+        global_ldcs = TeamMember.objects.filter(
+            team=team,
+            ir__ir_access_level=AccessLevel.LDC,
+            ir__status=True
+        ).select_related("ir")
+        for mem in global_ldcs:
+            if mem.ir.ir_id != target_ir.ir_id:
+                recipients.add(mem.ir)
 
         # Team creator if they are an LDC
         if team.created_by and team.created_by.status and team.created_by.ir_access_level == AccessLevel.LDC:
             if team.created_by.ir_id != target_ir.ir_id:
                 recipients.add(team.created_by)
 
+    # 4. Standard hierarchy subtree rule (Legacy/Default)
+    # Include direct uplines who are CTCs
+    ctc_uplines = target_ir.get_all_uplines().filter(ir_access_level=AccessLevel.CTC, status=True)
+    for ctc in ctc_uplines:
+        recipients.add(ctc)
+
     # Filter by visibility for non-admin recipients
+    # This ensures that even if someone is added to recipients, they only get it if they can view the IR
     filtered = set()
     for recipient in recipients:
         if recipient.ir_access_level == AccessLevel.ADMIN:
             filtered.add(recipient)
             continue
-        if recipient.get_viewable_irs().filter(ir_id=target_ir.ir_id).exists():
+        
+        # Use our updated can_view_ir logic
+        if recipient.can_view_ir(target_ir):
             filtered.add(recipient)
 
     return filtered

@@ -214,9 +214,11 @@ class Ir(models.Model):
         if self.ir_access_level == AccessLevel.ADMIN:
             return True
         
-        # CTC and LDC can view their subtree
+        # CTC and LDC can view their subtree + team members
         if self.ir_access_level in [AccessLevel.CTC, AccessLevel.LDC]:
-            return self.is_in_subtree(target_ir)
+            if self.is_in_subtree(target_ir):
+                return True
+            return self._is_in_same_team(target_ir)
         
         # LS can view team members
         if self.ir_access_level == AccessLevel.LS:
@@ -377,9 +379,15 @@ class Ir(models.Model):
         if self.ir_access_level == AccessLevel.ADMIN:
             return Ir.objects.filter(status=True)
         
-        # CTC and LDC can view subtree
+        # CTC and LDC can view subtree + team members
         if self.ir_access_level in [AccessLevel.CTC, AccessLevel.LDC]:
-            return self.get_subtree_irs()
+            subtree_irs = self.get_subtree_irs()
+            my_teams = TeamMember.objects.filter(ir=self).values_list('team_id', flat=True)
+            team_member_ids = TeamMember.objects.filter(
+                team_id__in=my_teams
+            ).values_list('ir_id', flat=True)
+            team_members = Ir.objects.filter(ir_id__in=team_member_ids)
+            return (subtree_irs | team_members).distinct()
         
         # LS can view self + team members
         if self.ir_access_level == AccessLevel.LS:
