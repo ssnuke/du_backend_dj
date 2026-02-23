@@ -11,29 +11,35 @@ def get_notification_recipients(target_ir: Ir) -> set:
     """
     Build recipient list based on visibility rules.
     - Always include Admins.
-    - Include uplines (CTC/LDC).
-    - Include team LDCs for teams the IR belongs to.
+    - Include upline CTCs (who manage branches).
+    - Include LDCs only if they specifically manage teams the IR belongs to.
     - Filter non-admins to only those who can view the target IR.
     """
     recipients = set()
 
-    admins = Ir.objects.filter(ir_access_level=AccessLevel.ADMIN)
+    # 1. Admins get everything
+    admins = Ir.objects.filter(ir_access_level=AccessLevel.ADMIN, status=True)
     for admin in admins:
         recipients.add(admin)
 
-    uplines = target_ir.get_all_uplines().filter(ir_access_level__in=[AccessLevel.CTC, AccessLevel.LDC])
-    for upline in uplines:
-        recipients.add(upline)
+    # 2. CTCs get subtree notifications
+    ctc_uplines = target_ir.get_all_uplines().filter(ir_access_level=AccessLevel.CTC, status=True)
+    for ctc in ctc_uplines:
+        recipients.add(ctc)
 
+    # 3. LDCs only for teams they specifically manage
     team_memberships = TeamMember.objects.filter(ir=target_ir).select_related("team")
     for membership in team_memberships:
         team = membership.team
+        
+        # Members with LDC role in the team
         ldc_members = TeamMember.objects.filter(team=team, role=TeamRole.LDC).select_related("ir")
         for ldc_mem in ldc_members:
-            if ldc_mem.ir.ir_id != target_ir.ir_id:
+            if ldc_mem.ir.status and ldc_mem.ir.ir_id != target_ir.ir_id:
                 recipients.add(ldc_mem.ir)
 
-        if team.created_by and team.created_by.ir_access_level == AccessLevel.LDC:
+        # Team creator if they are an LDC
+        if team.created_by and team.created_by.status and team.created_by.ir_access_level == AccessLevel.LDC:
             if team.created_by.ir_id != target_ir.ir_id:
                 recipients.add(team.created_by)
 
