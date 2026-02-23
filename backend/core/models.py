@@ -732,9 +732,15 @@ class Notification(models.Model):
     class Type(models.TextChoices):
         UV_ADDED = 'UV_ADDED', 'UV Added'
         UV_UPDATED = 'UV_UPDATED', 'UV Updated'
+        UV_DELETED = 'UV_DELETED', 'UV Deleted'
         PLAN_ADDED = 'PLAN_ADDED', 'Plan Added'
         PLAN_UPDATED = 'PLAN_UPDATED', 'Plan Updated'
+        PLAN_DELETED = 'PLAN_DELETED', 'Plan Deleted'
+        INFO_ADDED = 'INFO_ADDED', 'Info Added'
+        INFO_UPDATED = 'INFO_UPDATED', 'Info Updated'
+        INFO_DELETED = 'INFO_DELETED', 'Info Deleted'
         NEW_IR = 'NEW_IR', 'New IR Registered'
+        IR_DELETED = 'IR_DELETED', 'IR Deleted'
         TEAM_CREATED = 'TEAM_CREATED', 'Team Created'
 
     recipient = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name='notifications')

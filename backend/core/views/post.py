@@ -877,15 +877,6 @@ class AddPlanDetail(APIView):
                         weekly_plan_done=F("weekly_plan_done") + 1
                     )
 
-            recipients = get_notification_recipients(ir)
-            for plan in created_plans:
-                create_notifications(
-                    recipients=recipients,
-                    title="Plan Added",
-                    message=f"{ir.ir_name} ({ir.ir_id}) added a new plan: {plan.plan_name or 'Plan'}.",
-                    notification_type=Notification.Type.PLAN_ADDED,
-                    related_object_id=str(plan.id),
-                )
 
         return Response(
             {"message": "Plan details added", "plan_ids": created_ids},
