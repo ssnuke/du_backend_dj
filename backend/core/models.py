@@ -750,6 +750,9 @@ class Notification(models.Model):
         NEW_IR = 'NEW_IR', 'New IR Registered'
         IR_DELETED = 'IR_DELETED', 'IR Deleted'
         TEAM_CREATED = 'TEAM_CREATED', 'Team Created'
+        MEMBER_ADDED = 'MEMBER_ADDED', 'Team Member Added'
+        MEMBER_UPDATED = 'MEMBER_UPDATED', 'Team Member Updated'
+        MEMBER_DELETED = 'MEMBER_DELETED', 'Team Member Deleted'
 
     recipient = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name='notifications')
     title = models.CharField(max_length=255)

@@ -1,6 +1,6 @@
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
-from .models import UVDetail, Ir, Notification, PlanDetail, InfoDetail
+from .models import UVDetail, Ir, Notification, PlanDetail, InfoDetail, TeamMember
 from core.utils.notifications import get_notification_recipients, create_notifications
 
 
@@ -86,45 +86,47 @@ def notify_plan_deleted(sender, instance, **kwargs):
     )
 
 
-@receiver(post_save, sender=InfoDetail)
-def notify_info_saved(sender, instance, created, **kwargs):
-    info = instance
-    ir = info.ir
-    recipients = get_notification_recipients(ir)
+# INFO notifications disabled per user request
+# @receiver(post_save, sender=InfoDetail)
+# def notify_info_saved(sender, instance, created, **kwargs):
+#     info = instance
+#     ir = info.ir
+#     recipients = get_notification_recipients(ir)
 
-    if created:
-        title = "New Info Added"
-        message = f"{ir.ir_name} ({ir.ir_id}) added new info: {info.info_name or 'Info'}."
-        notification_type = Notification.Type.INFO_ADDED
-    else:
-        title = "Info Updated"
-        message = f"{ir.ir_name} ({ir.ir_id}) updated info: {info.info_name or 'Info'}."
-        notification_type = Notification.Type.INFO_UPDATED
+#     if created:
+#         title = "New Info Added"
+#         message = f"{ir.ir_name} ({ir.ir_id}) added new info: {info.info_name or 'Info'}."
+#         notification_type = Notification.Type.INFO_ADDED
+#     else:
+#         title = "Info Updated"
+#         message = f"{ir.ir_name} ({ir.ir_id}) updated info: {info.info_name or 'Info'}."
+#         notification_type = Notification.Type.INFO_UPDATED
 
-    create_notifications(
-        recipients=recipients,
-        title=title,
-        message=message,
-        notification_type=notification_type,
-        related_object_id=str(info.id),
-    )
+#     create_notifications(
+#         recipients=recipients,
+#         title=title,
+#         message=message,
+#         notification_type=notification_type,
+#         related_object_id=str(info.id),
+#     )
 
 
-@receiver(post_delete, sender=InfoDetail)
-def notify_info_deleted(sender, instance, **kwargs):
-    info = instance
-    ir = info.ir
-    recipients = get_notification_recipients(ir)
-    title = "Info Deleted"
-    message = f"Info '{info.info_name or 'Info'}' was deleted for {ir.ir_name} ({ir.ir_id})."
+# INFO notifications disabled per user request
+# @receiver(post_delete, sender=InfoDetail)
+# def notify_info_deleted(sender, instance, **kwargs):
+#     info = instance
+#     ir = info.ir
+#     recipients = get_notification_recipients(ir)
+#     title = "Info Deleted"
+#     message = f"Info '{info.info_name or 'Info'}' was deleted for {ir.ir_name} ({ir.ir_id})."
     
-    create_notifications(
-        recipients=recipients,
-        title=title,
-        message=message,
-        notification_type=Notification.Type.INFO_DELETED,
-        related_object_id=str(info.id),
-    )
+#     create_notifications(
+#         recipients=recipients,
+#         title=title,
+#         message=message,
+#         notification_type=Notification.Type.INFO_DELETED,
+#         related_object_id=str(info.id),
+#     )
 
 
 @receiver(post_save, sender=Ir)
@@ -164,4 +166,47 @@ def notify_ir_deleted(sender, instance, **kwargs):
         message=message,
         notification_type=Notification.Type.IR_DELETED,
         related_object_id=str(ir.ir_id),
+    )
+
+
+@receiver(post_save, sender=TeamMember)
+def notify_member_saved(sender, instance, created, **kwargs):
+    team_member = instance
+    ir = team_member.ir
+    team = team_member.team
+    recipients = get_notification_recipients(ir)
+
+    if created:
+        title = "Team Member Added"
+        message = f"{ir.ir_name} ({ir.ir_id}) was added to team '{team.name}' as {team_member.role}."
+        notification_type = Notification.Type.MEMBER_ADDED
+    else:
+        title = "Team Member Updated"
+        message = f"{ir.ir_name} ({ir.ir_id})'s role in team '{team.name}' was updated to {team_member.role}."
+        notification_type = Notification.Type.MEMBER_UPDATED
+
+    create_notifications(
+        recipients=recipients,
+        title=title,
+        message=message,
+        notification_type=notification_type,
+        related_object_id=str(team_member.id),
+    )
+
+
+@receiver(post_delete, sender=TeamMember)
+def notify_member_deleted(sender, instance, **kwargs):
+    team_member = instance
+    ir = team_member.ir
+    team = team_member.team
+    recipients = get_notification_recipients(ir)
+    title = "Team Member Removed"
+    message = f"{ir.ir_name} ({ir.ir_id}) was removed from team '{team.name}'."
+    
+    create_notifications(
+        recipients=recipients,
+        title=title,
+        message=message,
+        notification_type=Notification.Type.MEMBER_DELETED,
+        related_object_id=str(team_member.id),
     )
