@@ -46,9 +46,12 @@ def _serialize_room(room, requester=None):
         "id": room.id,
         "room_type": room.room_type,
         "room_name": room.room_name,
+        "category": room.category,
         "created_by_ir_id": room.created_by.ir_id if room.created_by else None,
         "created_at": room.created_at,
         "updated_at": room.updated_at,
+        "is_pinned": room.is_pinned,
+        "pinned_at": room.pinned_at,
         "member_count": room.memberships.count(),
         "last_message_preview": (last_message.content[:80] if last_message else None),
         "last_message_at": (last_message.created_at if last_message else None),
@@ -405,3 +408,71 @@ class ChatCandidates(APIView):
                 ]
             }
         )
+
+
+class ChatRoomDelete(APIView):
+    def delete(self, request, room_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        room = get_object_or_404(ChatRoom, id=room_id)
+        
+        # Only room creator or admins can delete
+        if room.created_by != requester and requester.ir_access_level > AccessLevel.CTC:
+            return Response({"detail": "Not authorized to delete this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        room.delete()
+        return Response({"message": "Room deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
+
+
+class ChatRoomPin(APIView):
+    def post(self, request, room_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        room = get_object_or_404(ChatRoom, id=room_id)
+        if not _is_room_member(room, requester):
+            return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        from django.utils import timezone
+        room.is_pinned = True
+        room.pinned_at = timezone.now()
+        room.save(update_fields=["is_pinned", "pinned_at", "updated_at"])
+
+        return Response({
+            "message": "Room pinned",
+            "room": {
+                "id": room.id,
+                "is_pinned": room.is_pinned,
+                "pinned_at": room.pinned_at,
+            },
+        })
+
+
+class ChatRoomUnpin(APIView):
+    def post(self, request, room_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        room = get_object_or_404(ChatRoom, id=room_id)
+        if not _is_room_member(room, requester):
+            return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        room.is_pinned = False
+        room.pinned_at = None
+        room.save(update_fields=["is_pinned", "pinned_at", "updated_at"])
+
+        return Response({
+            "message": "Room unpinned",
+            "room": {
+                "id": room.id,
+                "is_pinned": room.is_pinned,
+                "pinned_at": room.pinned_at,
+            },
+        })

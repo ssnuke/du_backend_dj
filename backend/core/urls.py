@@ -82,6 +82,9 @@ from core.views.chat import (
     ChatRoomMembersRemove,
     ChatRoomMessages,
     ChatRoomUpdate,
+    ChatRoomDelete,
+    ChatRoomPin,
+    ChatRoomUnpin,
 )
 
 # Pocket views
@@ -189,6 +192,9 @@ urlpatterns = [
     # ============ CHAT ENDPOINTS ============
     path("chat_rooms/", ChatRoomListCreate.as_view()),
     path("chat_rooms/<int:room_id>/", ChatRoomUpdate.as_view()),
+    path("chat_rooms/<int:room_id>/delete/", ChatRoomDelete.as_view()),
+    path("chat_rooms/<int:room_id>/pin/", ChatRoomPin.as_view()),
+    path("chat_rooms/<int:room_id>/unpin/", ChatRoomUnpin.as_view()),
     path("chat_rooms/<int:room_id>/members/", ChatRoomMembers.as_view()),
     path("chat_rooms/<int:room_id>/members/add/", ChatRoomMembersAdd.as_view()),
     path("chat_rooms/<int:room_id>/members/remove/", ChatRoomMembersRemove.as_view()),

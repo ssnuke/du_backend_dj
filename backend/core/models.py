@@ -514,6 +514,15 @@ class ChatRoomType(models.TextChoices):
     GROUP = "group"
 
 
+class ChatCategory(models.TextChoices):
+    GROUP = "group", "Group"
+    ACTIVITIES = "activities", "Activities"
+    SPOCS = "spocs", "Spocs"
+    PERSONAL = "personal", "Personal"
+    RELENTLESS = "relentless", "Relentless"
+    GENERAL = "general", "General"
+
+
 class ChatMessageType(models.TextChoices):
     TEXT = "text"
 
@@ -521,12 +530,19 @@ class ChatMessageType(models.TextChoices):
 class ChatRoom(models.Model):
     room_type = models.CharField(max_length=20, choices=ChatRoomType.choices, default=ChatRoomType.GROUP)
     room_name = models.CharField(max_length=120)
+    category = models.CharField(max_length=50, choices=ChatCategory.choices, default=ChatCategory.GROUP)
     created_by = models.ForeignKey(Ir, on_delete=models.SET_NULL, null=True, related_name="chat_rooms_created")
+    is_pinned = models.BooleanField(default=False)
+    pinned_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ["-updated_at"]
+        ordering = ["-is_pinned", "-pinned_at", "-updated_at"]
+        indexes = [
+            models.Index(fields=["-is_pinned", "-pinned_at"]),
+            models.Index(fields=["category", "-updated_at"]),
+        ]
 
 
 class ChatRoomMember(models.Model):
