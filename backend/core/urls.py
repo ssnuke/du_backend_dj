@@ -73,6 +73,16 @@ from core.views.notifications import (
     unsubscribe_push,
 )
 from core.views.move_ir import MoveIrToTeam
+from core.views.chat import (
+    ChatCandidates,
+    ChatReadReceipts,
+    ChatRoomListCreate,
+    ChatRoomMembers,
+    ChatRoomMembersAdd,
+    ChatRoomMembersRemove,
+    ChatRoomMessages,
+    ChatRoomUpdate,
+)
 
 # Pocket views
 from core.views.pockets import (
@@ -175,4 +185,14 @@ urlpatterns = [
     path("notifications/unsubscribe/", unsubscribe_push),
     path("notifications/<int:notification_id>/read/", mark_notification_read),
     path("notifications/mark_all_read/", mark_all_read),
+
+    # ============ CHAT ENDPOINTS ============
+    path("chat_rooms/", ChatRoomListCreate.as_view()),
+    path("chat_rooms/<int:room_id>/", ChatRoomUpdate.as_view()),
+    path("chat_rooms/<int:room_id>/members/", ChatRoomMembers.as_view()),
+    path("chat_rooms/<int:room_id>/members/add/", ChatRoomMembersAdd.as_view()),
+    path("chat_rooms/<int:room_id>/members/remove/", ChatRoomMembersRemove.as_view()),
+    path("chat_rooms/<int:room_id>/messages/", ChatRoomMessages.as_view()),
+    path("chat_rooms/<int:room_id>/read_receipts/", ChatReadReceipts.as_view()),
+    path("chat_candidates/", ChatCandidates.as_view()),
 ]

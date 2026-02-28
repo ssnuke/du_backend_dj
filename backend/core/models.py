@@ -509,6 +509,68 @@ class TeamMember(models.Model):
         unique_together = ("team", "ir")
 
 
+class ChatRoomType(models.TextChoices):
+    DIRECT = "direct"
+    GROUP = "group"
+
+
+class ChatMessageType(models.TextChoices):
+    TEXT = "text"
+
+
+class ChatRoom(models.Model):
+    room_type = models.CharField(max_length=20, choices=ChatRoomType.choices, default=ChatRoomType.GROUP)
+    room_name = models.CharField(max_length=120)
+    created_by = models.ForeignKey(Ir, on_delete=models.SET_NULL, null=True, related_name="chat_rooms_created")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+
+class ChatRoomMember(models.Model):
+    room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name="memberships")
+    ir = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name="chat_memberships")
+    added_by = models.ForeignKey(Ir, on_delete=models.SET_NULL, null=True, blank=True, related_name="chat_members_added")
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("room", "ir")
+        indexes = [
+            models.Index(fields=["room", "ir"]),
+            models.Index(fields=["ir", "joined_at"]),
+        ]
+
+
+class ChatMessage(models.Model):
+    room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name="messages")
+    sender = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name="chat_messages")
+    message_type = models.CharField(max_length=20, choices=ChatMessageType.choices, default=ChatMessageType.TEXT)
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-id"]
+        indexes = [
+            models.Index(fields=["room", "id"]),
+            models.Index(fields=["room", "created_at"]),
+        ]
+
+
+class ChatMessageReceipt(models.Model):
+    message = models.ForeignKey(ChatMessage, on_delete=models.CASCADE, related_name="receipts")
+    reader = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name="chat_receipts")
+    read_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("message", "reader")
+        indexes = [
+            models.Index(fields=["message", "reader"]),
+            models.Index(fields=["reader", "read_at"]),
+        ]
+
+
 class Pocket(models.Model):
     """
     Represents a sub-group within a team.
