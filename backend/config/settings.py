@@ -14,6 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 import dj_database_url
 import os
+import ssl
 
 load_dotenv()
 
@@ -129,12 +130,16 @@ DATABASES = {
         )
 }
 
+import ssl
+
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")],
-            "ssl_cert_reqs": None,  # Required for Redis Labs SSL connection
+            "hosts": [{
+                "address": os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0"),
+                "ssl_cert_reqs": ssl.CERT_NONE,
+            }],
         },
     },
 }
