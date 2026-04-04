@@ -38,6 +38,7 @@ from core.views.post import (
     ChangeIRAccessLevel,
     SaveFCMToken,
     SendFCMNotification,
+    AdminSetTeamTargets,
 )
 
 from core.views.health import health_check
@@ -162,6 +163,8 @@ urlpatterns = [
     path("delete_ir/<str:ir_id>/", DeleteIr.as_view()),
     # Health Check endpoint
     path("health/", health_check),
+    # Hidden admin endpoint (secret key auth, no IR permissions)
+    path("admin/set_team_targets/", AdminSetTeamTargets.as_view()),
     
     # ============ POCKET ENDPOINTS ============
     # Pocket CRUD

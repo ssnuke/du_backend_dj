@@ -1172,6 +1172,109 @@ class SetTargets(APIView):
 
 
 # ---------------------------------------------------
+# HIDDEN ADMIN: SET TEAM TARGETS (secret key auth)
+# ---------------------------------------------------
+class AdminSetTeamTargets(APIView):
+    """
+    Hidden endpoint to set/overwrite team targets for any week.
+    Auth: X-Admin-Key header must match ADMIN_SECRET_KEY env var.
+    No IR permission checks — intended for developer/owner use only.
+
+    POST /api/admin/set_team_targets/
+    {
+        "team_id": 1,
+        "week_number": 14,
+        "year": 2026,
+        "info_target": 100,
+        "plan_target": 20,
+        "uv_target": 10
+    }
+    """
+    def post(self, request):
+        import os
+        import logging
+        from core.models import Team, TeamWeeklyTargets
+        from core.utils.dates import get_week_info_friday_to_friday
+
+        # --- Auth ---
+        secret = os.getenv("ADMIN_SECRET_KEY", "")
+        if not secret:
+            return Response({"detail": "Admin key not configured"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        provided_key = request.headers.get("X-Admin-Key", "").strip()
+        if not provided_key or provided_key != secret:
+            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+
+        # --- Validate required fields ---
+        team_id_raw = request.data.get("team_id")
+        week_number_raw = request.data.get("week_number")
+        year_raw = request.data.get("year")
+        info_target = request.data.get("info_target", 0)
+        plan_target = request.data.get("plan_target", 0)
+        uv_target = request.data.get("uv_target", 0)
+
+        if not team_id_raw or week_number_raw is None or year_raw is None:
+            return Response(
+                {"detail": "team_id, week_number, and year are required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            team_id = int(team_id_raw)
+            week_number = int(week_number_raw)
+            year = int(year_raw)
+        except (TypeError, ValueError):
+            return Response({"detail": "team_id, week_number, and year must be integers"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            info_target = int(info_target)
+            plan_target = int(plan_target)
+            uv_target = float(uv_target)
+        except (TypeError, ValueError):
+            return Response({"detail": "info_target and plan_target must be integers; uv_target must be a number"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            team = Team.objects.get(id=team_id)
+        except Team.DoesNotExist:
+            return Response({"detail": f"Team {team_id} not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            _, _, week_start, week_end = get_week_info_friday_to_friday(
+                week_number=week_number, year=year
+            )
+        except Exception:
+            return Response({"detail": "Invalid week_number or year"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            team_targets, _ = TeamWeeklyTargets.objects.get_or_create(team=team)
+            team_targets.set_week_targets(
+                year=year,
+                week_number=week_number,
+                week_start=week_start,
+                week_end=week_end,
+                info_target=info_target,
+                plan_target=plan_target,
+                uv_target=uv_target,
+                allow_overwrite=True,
+            )
+            team_targets.save()
+        except Exception:
+            logging.exception("AdminSetTeamTargets: error saving targets for team_id=%s", team_id)
+            return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({
+            "message": "Team targets updated",
+            "team_id": team_id,
+            "team_name": team.name,
+            "week_number": week_number,
+            "year": year,
+            "info_target": info_target,
+            "plan_target": plan_target,
+            "uv_target": uv_target,
+        }, status=status.HTTP_200_OK)
+
+
+# ---------------------------------------------------
 # CHANGE IR ACCESS LEVEL (PROMOTE/DEMOTE) - role-based
 # ---------------------------------------------------
 class ChangeIRAccessLevel(APIView):
