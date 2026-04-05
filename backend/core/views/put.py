@@ -129,6 +129,128 @@ class UpdateIrDetails(APIView):
 
 
 # ---------------------------------------------------
+# REMAP IR (with full subtree remapping) — CTC + LDC
+# ---------------------------------------------------
+class RemapIR(APIView):
+    """
+    Remap an IR to a new parent, moving its entire subtree with it.
+    All descendant hierarchy_path / hierarchy_level values are updated.
+
+    PUT /api/remap_ir/<ir_id>/
+    {
+        "acting_ir_id": "IM001",
+        "new_parent_ir_id": "IM005"   // or null to make root (CTC/ADMIN only)
+    }
+
+    Permission rules:
+    - Only CTC (2) and LDC (3) can call this endpoint
+    - Cannot remap yourself
+    - Cannot remap an IR with the same or higher access level
+    - Cannot set a descendant as the new parent (circular reference)
+    - LDC can only remap IRs that are within their own subtree
+    - LDC: new_parent_ir_id must also be within their subtree
+    - Making an IR a root node (null parent) is CTC-only
+    """
+    def put(self, request, ir_id):
+        acting_ir_id = request.data.get("acting_ir_id")
+        new_parent_ir_id = request.data.get("new_parent_ir_id")
+
+        if not acting_ir_id:
+            return Response({"detail": "acting_ir_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            actor = Ir.objects.get(ir_id=acting_ir_id)
+        except Ir.DoesNotExist:
+            return Response({"detail": "Acting IR not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Only CTC (2) and LDC (3)
+        if actor.ir_access_level not in [2, 3]:
+            return Response(
+                {"detail": "Not authorized. Only CTC and LDC can remap IRs"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        target = get_object_or_404(Ir, ir_id=ir_id)
+
+        # Cannot remap yourself
+        if actor.ir_id == target.ir_id:
+            return Response({"detail": "Cannot remap yourself"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Cannot remap an IR with equal or higher access level
+        if target.ir_access_level <= actor.ir_access_level:
+            return Response(
+                {"detail": "Cannot remap an IR with the same or higher access level"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # LDC: target must be within their subtree
+        if actor.ir_access_level == 3 and not actor.is_in_subtree(target):
+            return Response(
+                {"detail": "LDC can only remap IRs within their own subtree"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Resolve new parent
+        new_parent = None
+        if new_parent_ir_id:
+            try:
+                new_parent = Ir.objects.get(ir_id=new_parent_ir_id)
+            except Ir.DoesNotExist:
+                return Response({"detail": "New parent IR not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            # Cannot set to self
+            if new_parent.ir_id == target.ir_id:
+                return Response({"detail": "Cannot set an IR as its own parent"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Circular reference check — new parent cannot be in target's subtree
+            if target.is_in_subtree(new_parent):
+                return Response(
+                    {"detail": "Cannot set a descendant as the new parent (circular reference)"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # LDC: new parent must also be within their subtree
+            if actor.ir_access_level == 3 and not actor.is_in_subtree(new_parent):
+                return Response(
+                    {"detail": "LDC can only remap under a parent within their own subtree"},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+        else:
+            # Making an IR a root (no parent) — CTC only
+            if actor.ir_access_level == 3:
+                return Response(
+                    {"detail": "LDC cannot make an IR a root node. Only CTC can do this"},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        old_parent_id = target.parent_ir.ir_id if target.parent_ir else None
+        old_path = target.hierarchy_path
+        subtree_size = target.get_all_downlines().count()
+
+        with transaction.atomic():
+            # Update the parent — Ir.save() recalculates path + level for target only
+            target.parent_ir = new_parent
+            target.save()
+
+            # Now cascade the path update to every descendant
+            target._update_descendant_paths(target)
+
+        return Response(
+            {
+                "message": "IR remapped successfully",
+                "ir_id": target.ir_id,
+                "ir_name": target.ir_name,
+                "old_parent_ir_id": old_parent_id,
+                "new_parent_ir_id": new_parent.ir_id if new_parent else None,
+                "old_hierarchy_path": old_path,
+                "new_hierarchy_path": target.hierarchy_path,
+                "descendants_updated": subtree_size,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+# ---------------------------------------------------
 # UPDATE PARENT IR (without remapping children paths)
 # ---------------------------------------------------
 class UpdateParentIR(APIView):

@@ -54,6 +54,7 @@ from core.views.put import (
     UpdateIrName,
     UpdateIrId,
     UpdateUVCount,
+    RemapIR,
 )
 from core.views.delete import (
     ResetDatabase,
@@ -151,6 +152,7 @@ urlpatterns = [
     path("update_ir_name/<str:ir_id>/", UpdateIrName.as_view()),
     path("update_ir_id/", UpdateIrId.as_view()),
     path("update_parent_ir/<str:ir_id>/", UpdateParentIR.as_view()),
+    path("remap_ir/<str:ir_id>/", RemapIR.as_view()),
     path("update_weekly_targets/", UpdateWeeklyTargets.as_view()),
     path("update_uv_count/<int:uv_id>/", UpdateUVCount.as_view()),
     path("move_ir_to_team/", MoveIrToTeam.as_view()),

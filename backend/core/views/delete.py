@@ -20,12 +20,66 @@ from core.models import (
 
 class DeleteIr(APIView):
     """
-    Delete an IR completely from the database by IR ID.
+    Delete an IR completely from the database.
+    Requires requester_ir_id (query param). Only LDC (3) and above can delete.
+    Rules:
+      - Cannot delete yourself
+      - Cannot delete an IR with a higher access level (lower number) than yourself
+      - Must be able to view the target IR in your hierarchy
+      - LDC can only delete IRs in their own downline
+    Children are automatically reconnected to the grandparent (handled by Ir.delete()).
     """
     def delete(self, request, ir_id):
-        ir = get_object_or_404(Ir, ir_id=ir_id)
-        ir.delete()
-        return Response({"message": f"IR {ir_id} deleted successfully."}, status=status.HTTP_200_OK)
+        requester_ir_id = request.query_params.get("requester_ir_id")
+
+        if not requester_ir_id:
+            return Response(
+                {"detail": "requester_ir_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            requester = Ir.objects.get(ir_id=requester_ir_id)
+        except Ir.DoesNotExist:
+            return Response({"detail": "Requester IR not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Only LDC and above (access_level <= 3)
+        if requester.ir_access_level > 3:
+            return Response(
+                {"detail": "Not authorized. Only LDC and above can delete IRs"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        target_ir = get_object_or_404(Ir, ir_id=ir_id)
+
+        # Cannot delete yourself
+        if requester.ir_id == target_ir.ir_id:
+            return Response(
+                {"detail": "Cannot delete your own account"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Cannot delete an IR with equal or higher privilege (lower access_level number)
+        if target_ir.ir_access_level <= requester.ir_access_level:
+            return Response(
+                {"detail": "Cannot delete an IR with the same or higher access level"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Must be able to view the target IR (hierarchy/team membership check)
+        if not requester.can_view_ir(target_ir):
+            return Response(
+                {"detail": "Not authorized to delete this IR"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        ir_name = target_ir.ir_name
+        target_ir.delete()  # Ir.delete() reconnects children to grandparent automatically
+
+        return Response(
+            {"message": f"IR {ir_id} ({ir_name}) deleted successfully"},
+            status=status.HTTP_200_OK,
+        )
 
 # ---------------------------------------------------
 # RESET DATABASE
