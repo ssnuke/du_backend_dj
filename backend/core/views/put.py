@@ -235,6 +235,30 @@ class RemapIR(APIView):
             # Now cascade the path update to every descendant
             target._update_descendant_paths(target)
 
+            # --- Clean up stale team memberships ---
+            # After the remap, teams created by IRs outside the new hierarchy
+            # can no longer see the moved subtree, so remove those memberships.
+
+            # All IR IDs in the moved subtree (target + all descendants)
+            subtree_ir_ids = list(
+                Ir.objects.filter(
+                    hierarchy_path__startswith=target.hierarchy_path
+                ).values_list("ir_id", flat=True)
+            )
+
+            # IR IDs that are "safe" owners: new upline ancestors + the subtree itself
+            # (teams owned by someone inside the subtree move with it)
+            new_path_ids = set(p for p in target.hierarchy_path.split("/") if p)
+            safe_creator_ids = new_path_ids | set(subtree_ir_ids)
+
+            stale_memberships = TeamMember.objects.filter(
+                ir_id__in=subtree_ir_ids
+            ).exclude(
+                team__created_by_id__in=safe_creator_ids
+            )
+            removed_count = stale_memberships.count()
+            stale_memberships.delete()
+
         return Response(
             {
                 "message": "IR remapped successfully",
@@ -245,6 +269,7 @@ class RemapIR(APIView):
                 "old_hierarchy_path": old_path,
                 "new_hierarchy_path": target.hierarchy_path,
                 "descendants_updated": subtree_size,
+                "team_memberships_removed": removed_count,
             },
             status=status.HTTP_200_OK,
         )

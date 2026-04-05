@@ -1669,3 +1669,75 @@ class SendFCMNotification(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+
+# ---------------------------------------------------
+# HIDDEN ADMIN: CLEANUP STALE TEAM MEMBERSHIPS
+# ---------------------------------------------------
+class AdminCleanupTeamMemberships(APIView):
+    """
+    Scans every TeamMember record and removes any where the team's creator
+    can no longer see the member IR (member's hierarchy_path no longer sits
+    under the creator's hierarchy_path).
+
+    Use this to retroactively clean up memberships left behind by remaps that
+    happened before the automatic cleanup was in place.
+
+    Auth: X-Admin-Key header must match ADMIN_SECRET_KEY env var.
+
+    POST /api/admin/cleanup_team_memberships/
+    {
+        "dry_run": true   // optional — preview without deleting (default false)
+    }
+    """
+    def post(self, request):
+        import os
+
+        secret = os.getenv("ADMIN_SECRET_KEY", "")
+        if not secret:
+            return Response({"detail": "Admin key not configured"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        provided_key = request.headers.get("X-Admin-Key", "").strip()
+        if not provided_key or provided_key != secret:
+            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+
+        dry_run = str(request.data.get("dry_run", "false")).lower() in ("true", "1", "yes")
+
+        stale_ids = []
+        stale_details = []
+
+        memberships = (
+            TeamMember.objects
+            .select_related("ir", "team__created_by")
+            .all()
+        )
+
+        for membership in memberships:
+            creator = membership.team.created_by
+            if creator is None:
+                continue  # no owner — skip
+            if creator.ir_access_level <= 2:
+                continue  # ADMIN/CTC see everyone — always valid
+            member = membership.ir
+            if member.ir_id == creator.ir_id:
+                continue  # creator is always in their own team
+            # Valid if member's path sits under the creator's subtree
+            if not member.hierarchy_path.startswith(creator.hierarchy_path):
+                stale_ids.append(membership.pk)
+                stale_details.append({
+                    "team_id": membership.team_id,
+                    "team_name": membership.team.name,
+                    "member_ir_id": member.ir_id,
+                    "member_path": member.hierarchy_path,
+                    "creator_ir_id": creator.ir_id,
+                    "creator_path": creator.hierarchy_path,
+                })
+
+        if not dry_run and stale_ids:
+            TeamMember.objects.filter(pk__in=stale_ids).delete()
+
+        return Response({
+            "dry_run": dry_run,
+            "stale_memberships_found": len(stale_ids),
+            "stale_memberships_removed": 0 if dry_run else len(stale_ids),
+            "details": stale_details,
+        }, status=status.HTTP_200_OK)

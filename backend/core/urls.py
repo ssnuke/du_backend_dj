@@ -39,6 +39,7 @@ from core.views.post import (
     SaveFCMToken,
     SendFCMNotification,
     AdminSetTeamTargets,
+    AdminCleanupTeamMemberships,
 )
 
 from core.views.health import health_check
@@ -167,6 +168,7 @@ urlpatterns = [
     path("health/", health_check),
     # Hidden admin endpoint (secret key auth, no IR permissions)
     path("admin/set_team_targets/", AdminSetTeamTargets.as_view()),
+    path("admin/cleanup_team_memberships/", AdminCleanupTeamMemberships.as_view()),
     
     # ============ POCKET ENDPOINTS ============
     # Pocket CRUD
