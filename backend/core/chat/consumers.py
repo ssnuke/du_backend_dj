@@ -3,6 +3,7 @@ from urllib.parse import parse_qs
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+from django.utils import timezone
 
 from core.models import ChatMessage, ChatMessageReceipt, ChatRoom, ChatRoomMember, Ir
 
@@ -56,12 +57,20 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self._broadcast_typing(False)
         elif event_type == "mark_read":
             await self._handle_mark_read(payload)
+        elif event_type == "edit_message":
+            await self._handle_edit_message(payload)
+        elif event_type == "delete_message":
+            await self._handle_delete_message(payload)
         elif event_type == "rename_room":
             await self._handle_rename_room(payload)
         elif event_type == "add_members":
             await self._handle_add_members(payload)
         elif event_type == "remove_members":
             await self._handle_remove_members(payload)
+        elif event_type == "pin_message":
+            await self._handle_pin_message(payload)
+        elif event_type == "unpin_message":
+            await self._handle_unpin_message(payload)
         else:
             await self._send_error("Unsupported event type")
 
@@ -71,7 +80,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self._send_error("content is required")
             return
 
-        message = await self._create_message(self.room_id, self.user_ir.ir_id, content)
+        reply_to_id = payload.get("reply_to_id")
+
+        message = await self._create_message(self.room_id, self.user_ir.ir_id, content, reply_to_id)
 
         await self.channel_layer.group_send(
             self.group_name,
@@ -79,6 +90,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 "type": "message_created",
                 "message": message,
             },
+        )
+
+        # Fire FCM push notifications to members who are not in this WS session
+        await self._notify_room_members(
+            self.room_id,
+            self.user_ir.ir_id,
+            self.user_ir.ir_name,
+            content,
         )
 
     async def _broadcast_typing(self, is_typing):
@@ -106,6 +125,45 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 "message_ids": updated_ids,
                 "reader_ir_id": self.user_ir.ir_id,
                 "reader_name": self.user_ir.ir_name,
+            },
+        )
+
+    async def _handle_edit_message(self, payload):
+        message_id = payload.get("message_id")
+        new_content = (payload.get("content") or "").strip()
+        if not message_id or not new_content:
+            await self._send_error("message_id and content are required")
+            return
+
+        updated, error = await self._edit_message(message_id, self.user_ir.ir_id, new_content)
+        if error:
+            await self._send_error(error)
+            return
+
+        await self.channel_layer.group_send(
+            self.group_name,
+            {
+                "type": "message_edited",
+                "message": updated,
+            },
+        )
+
+    async def _handle_delete_message(self, payload):
+        message_id = payload.get("message_id")
+        if not message_id:
+            await self._send_error("message_id is required")
+            return
+
+        deleted, error = await self._delete_message(message_id, self.user_ir.ir_id)
+        if error:
+            await self._send_error(error)
+            return
+
+        await self.channel_layer.group_send(
+            self.group_name,
+            {
+                "type": "message_deleted",
+                "message_id": message_id,
             },
         )
 
@@ -168,6 +226,38 @@ class ChatConsumer(AsyncWebsocketConsumer):
             },
         )
 
+    async def _handle_pin_message(self, payload):
+        message_id = payload.get("message_id")
+        if not message_id:
+            await self._send_error("message_id is required")
+            return
+
+        pinned, error = await self._pin_message(self.room_id, message_id)
+        if error:
+            await self._send_error(error)
+            return
+
+        await self.channel_layer.group_send(
+            self.group_name,
+            {
+                "type": "message_pinned",
+                "pinned_message": pinned,
+                "by_ir_id": self.user_ir.ir_id,
+            },
+        )
+
+    async def _handle_unpin_message(self, payload):
+        await self._unpin_message(self.room_id)
+        await self.channel_layer.group_send(
+            self.group_name,
+            {
+                "type": "message_unpinned",
+                "by_ir_id": self.user_ir.ir_id,
+            },
+        )
+
+    # ── Channel layer event handlers (broadcast → client) ──────────────
+
     async def message_created(self, event):
         await self.send(text_data=json.dumps({"type": "message_created", "message": event["message"]}, default=str))
 
@@ -187,6 +277,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "reader_name": event["reader_name"],
         }))
 
+    async def message_edited(self, event):
+        await self.send(text_data=json.dumps({"type": "message_edited", "message": event["message"]}, default=str))
+
+    async def message_deleted(self, event):
+        await self.send(text_data=json.dumps({"type": "message_deleted", "message_id": event["message_id"]}))
+
     async def room_updated(self, event):
         await self.send(text_data=json.dumps({"type": "room_updated", "room": event["room"]}, default=str))
 
@@ -204,8 +300,23 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "by_ir_id": event["by_ir_id"],
         }))
 
+    async def message_pinned(self, event):
+        await self.send(text_data=json.dumps({
+            "type": "message_pinned",
+            "pinned_message": event["pinned_message"],
+            "by_ir_id": event["by_ir_id"],
+        }))
+
+    async def message_unpinned(self, event):
+        await self.send(text_data=json.dumps({
+            "type": "message_unpinned",
+            "by_ir_id": event["by_ir_id"],
+        }))
+
     async def _send_error(self, detail):
         await self.send(text_data=json.dumps({"type": "error", "detail": detail}))
+
+    # ── DB helpers ──────────────────────────────────────────────────────
 
     @database_sync_to_async
     def _get_ir(self, ir_id):
@@ -219,11 +330,32 @@ class ChatConsumer(AsyncWebsocketConsumer):
         return ChatRoomMember.objects.filter(room_id=room_id, ir_id=ir_id).exists()
 
     @database_sync_to_async
-    def _create_message(self, room_id, sender_ir_id, content):
+    def _create_message(self, room_id, sender_ir_id, content, reply_to_id=None):
         room = ChatRoom.objects.get(id=room_id)
         sender = Ir.objects.get(ir_id=sender_ir_id)
-        message = ChatMessage.objects.create(room=room, sender=sender, content=content)
+
+        reply_to = None
+        reply_to_data = None
+        if reply_to_id:
+            try:
+                reply_to = ChatMessage.objects.select_related("sender").get(id=reply_to_id, room_id=room_id)
+                reply_to_data = {
+                    "id": reply_to.id,
+                    "sender_name": reply_to.sender.ir_name,
+                    "content": reply_to.content if not reply_to.is_deleted else "",
+                    "is_deleted": reply_to.is_deleted,
+                }
+            except ChatMessage.DoesNotExist:
+                pass
+
+        message = ChatMessage.objects.create(
+            room=room,
+            sender=sender,
+            content=content,
+            reply_to=reply_to,
+        )
         room.save(update_fields=["updated_at"])
+        # Use isoformat() strings — channels_redis cannot serialize datetime objects
         return {
             "id": message.id,
             "room_id": message.room_id,
@@ -231,8 +363,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "sender_name": sender.ir_name,
             "message_type": message.message_type,
             "content": message.content,
-            "created_at": message.created_at,
+            "attachment_url": message.attachment_url,
+            "attachment_name": message.attachment_name,
+            "attachment_size": message.attachment_size,
+            "attachment_duration": message.attachment_duration,
+            "created_at": message.created_at.isoformat(),
             "read_count": 0,
+            "reply_to": reply_to_data,
+            "is_deleted": False,
+            "edited_at": None,
         }
 
     @database_sync_to_async
@@ -244,6 +383,45 @@ class ChatConsumer(AsyncWebsocketConsumer):
         return [message.id for message in messages]
 
     @database_sync_to_async
+    def _edit_message(self, message_id, sender_ir_id, new_content):
+        try:
+            message = ChatMessage.objects.select_related("sender").get(id=message_id)
+        except ChatMessage.DoesNotExist:
+            return None, "Message not found"
+
+        if message.sender.ir_id != sender_ir_id:
+            return None, "Not authorized to edit this message"
+
+        if message.is_deleted:
+            return None, "Cannot edit a deleted message"
+
+        message.content = new_content
+        message.edited_at = timezone.now()
+        message.save(update_fields=["content", "edited_at"])
+
+        return {
+            "id": message.id,
+            "content": message.content,
+            "edited_at": message.edited_at.isoformat(),
+        }, None
+
+    @database_sync_to_async
+    def _delete_message(self, message_id, sender_ir_id):
+        try:
+            message = ChatMessage.objects.select_related("sender").get(id=message_id)
+        except ChatMessage.DoesNotExist:
+            return None, "Message not found"
+
+        if message.sender.ir_id != sender_ir_id:
+            return None, "Not authorized to delete this message"
+
+        message.is_deleted = True
+        message.content = ""
+        message.save(update_fields=["is_deleted", "content"])
+
+        return message.id, None
+
+    @database_sync_to_async
     def _rename_room(self, room_id, room_name):
         room = ChatRoom.objects.get(id=room_id)
         room.room_name = room_name
@@ -251,7 +429,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         return {
             "id": room.id,
             "room_name": room.room_name,
-            "updated_at": room.updated_at,
+            "updated_at": room.updated_at.isoformat(),
         }
 
     @database_sync_to_async
@@ -282,6 +460,30 @@ class ChatConsumer(AsyncWebsocketConsumer):
         return [member.ir_id for member in to_add], None
 
     @database_sync_to_async
+    def _pin_message(self, room_id, message_id):
+        try:
+            message = ChatMessage.objects.select_related("sender").get(id=message_id, room_id=room_id)
+        except ChatMessage.DoesNotExist:
+            return None, "Message not found"
+        if message.is_deleted:
+            return None, "Cannot pin a deleted message"
+        room = ChatRoom.objects.get(id=room_id)
+        room.pinned_message = message
+        room.save(update_fields=["pinned_message"])
+        return {
+            "id": message.id,
+            "sender_name": message.sender.ir_name,
+            "content": message.content,
+            "message_type": message.message_type,
+            "attachment_url": message.attachment_url,
+            "attachment_name": message.attachment_name,
+        }, None
+
+    @database_sync_to_async
+    def _unpin_message(self, room_id):
+        ChatRoom.objects.filter(id=room_id).update(pinned_message=None)
+
+    @database_sync_to_async
     def _remove_members(self, room_id, requester_ir_id, member_ir_ids):
         room = ChatRoom.objects.get(id=room_id)
         requester = Ir.objects.get(ir_id=requester_ir_id)
@@ -298,3 +500,52 @@ class ChatConsumer(AsyncWebsocketConsumer):
         ChatRoomMember.objects.filter(room=room, ir_id__in=list(removable_ids)).delete()
         room.save(update_fields=["updated_at"])
         return sorted(list(removable_ids)), None
+
+    @database_sync_to_async
+    def _notify_room_members(self, room_id, sender_ir_id, sender_name, content):
+        """Send FCM push notifications to room members who are not actively watching this room."""
+        import logging
+        logger = logging.getLogger(__name__)
+        try:
+            from core.utils.firebase_messaging import send_multicast
+
+            room = ChatRoom.objects.get(id=room_id)
+
+            # Notification title: just sender name for DMs, "Name · Room" for groups
+            if room.room_type == "direct":
+                title = sender_name
+            else:
+                title = f"{sender_name} · {room.room_name}"
+
+            # Collect FCM tokens for all members except the sender
+            members = ChatRoomMember.objects.filter(
+                room_id=room_id
+            ).exclude(ir_id=sender_ir_id).select_related("ir")
+
+            tokens = []
+            for member in members:
+                ir = member.ir
+                if ir.fcm_tokens and isinstance(ir.fcm_tokens, list):
+                    valid = [t for t in ir.fcm_tokens if t and isinstance(t, str) and len(t) > 10]
+                    tokens.extend(valid)
+
+            if not tokens:
+                return
+
+            # Deduplicate while preserving order
+            tokens = list(dict.fromkeys(tokens))
+
+            # Truncate message preview to 100 chars
+            preview = content if len(content) <= 100 else content[:100] + "…"
+
+            send_multicast(
+                fcm_tokens=tokens,
+                title=title,
+                body=preview,
+                data={
+                    "notification_type": "chat_message",
+                    "room_id": str(room_id),
+                },
+            )
+        except Exception:
+            logger.exception("Failed to send chat FCM notifications for room %s", room_id)

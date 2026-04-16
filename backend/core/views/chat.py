@@ -1,6 +1,16 @@
+import mimetypes
+import os
+import uuid
+
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
+from django.conf import settings
+from django.core.files.storage import default_storage
+from django.core.files.base import ContentFile
 from django.db import transaction
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -12,6 +22,7 @@ from core.models import (
     ChatRoom,
     ChatRoomMember,
     ChatRoomType,
+    ChatMessageType,
     Ir,
 )
 
@@ -42,6 +53,37 @@ def _serialize_room(room, requester=None):
     if requester:
         unread_count = room.messages.exclude(receipts__reader=requester).exclude(sender=requester).count()
 
+    pinned_msg_data = None
+    if room.pinned_message_id:
+        try:
+            pm = room.pinned_message
+            pinned_msg_data = {
+                "id": pm.id,
+                "sender_name": pm.sender.ir_name,
+                "content": pm.content,
+                "message_type": pm.message_type,
+                "attachment_url": pm.attachment_url,
+                "attachment_name": pm.attachment_name,
+            }
+        except Exception:
+            pass
+
+    # Last-message preview: for non-text types show a label
+    preview = None
+    if last_message:
+        if last_message.is_deleted:
+            preview = "🚫 Message deleted"
+        elif last_message.message_type == ChatMessageType.IMAGE:
+            preview = "📷 Photo"
+        elif last_message.message_type == ChatMessageType.VIDEO:
+            preview = "🎥 Video"
+        elif last_message.message_type == ChatMessageType.FILE:
+            preview = f"📎 {last_message.attachment_name or 'File'}"
+        elif last_message.message_type == ChatMessageType.VOICE:
+            preview = "🎤 Voice message"
+        else:
+            preview = last_message.content[:80]
+
     return {
         "id": room.id,
         "room_type": room.room_type,
@@ -52,14 +94,33 @@ def _serialize_room(room, requester=None):
         "updated_at": room.updated_at,
         "is_pinned": room.is_pinned,
         "pinned_at": room.pinned_at,
+        "pinned_message": pinned_msg_data,
         "member_count": room.memberships.count(),
-        "last_message_preview": (last_message.content[:80] if last_message else None),
+        "last_message_preview": preview,
         "last_message_at": (last_message.created_at if last_message else None),
         "unread_count": unread_count,
     }
 
 
 def _serialize_message(message):
+    reply_to_data = None
+    if message.reply_to_id:
+        try:
+            rt = message.reply_to
+            reply_to_data = {
+                "id": rt.id,
+                "sender_name": rt.sender.ir_name,
+                "content": rt.content if not rt.is_deleted else "",
+                "is_deleted": rt.is_deleted,
+            }
+        except Exception:
+            pass
+
+    # Support both annotated read_count and live count
+    read_count = getattr(message, 'read_count', None)
+    if read_count is None:
+        read_count = message.receipts.count()
+
     return {
         "id": message.id,
         "room_id": message.room_id,
@@ -67,8 +128,16 @@ def _serialize_message(message):
         "sender_name": message.sender.ir_name,
         "message_type": message.message_type,
         "content": message.content,
-        "created_at": message.created_at,
-        "read_count": message.receipts.count(),
+        "attachment_url": message.attachment_url,
+        "attachment_name": message.attachment_name,
+        "attachment_size": message.attachment_size,
+        "attachment_duration": message.attachment_duration,
+        # Use isoformat strings — channel layer (Redis) cannot serialize datetime objects
+        "created_at": message.created_at.isoformat() if message.created_at else None,
+        "read_count": read_count,
+        "reply_to": reply_to_data,
+        "is_deleted": message.is_deleted,
+        "edited_at": message.edited_at.isoformat() if message.edited_at else None,
     }
 
 
@@ -295,7 +364,13 @@ class ChatRoomMessages(APIView):
         except (TypeError, ValueError):
             limit = PAGE_SIZE_DEFAULT
 
-        qs = ChatMessage.objects.filter(room=room).select_related("sender").annotate(read_count=Count("receipts"))
+        qs = (
+            ChatMessage.objects
+            .filter(room=room)
+            .select_related("sender", "reply_to", "reply_to__sender")
+            .annotate(read_count=Count("receipts"))
+            .order_by("-id")   # newest first; ensures [:limit] gives the most-recent page
+        )
 
         if before_id:
             try:
@@ -328,24 +403,54 @@ class ChatRoomMessages(APIView):
         if not _is_room_member(room, requester):
             return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
 
-        if message_type != "text":
-            return Response({"detail": "Only text messages are supported in phase 1"}, status=status.HTTP_400_BAD_REQUEST)
+        if message_type not in ChatMessageType.values:
+            return Response({"detail": "Invalid message_type"}, status=status.HTTP_400_BAD_REQUEST)
 
-        if not content:
-            return Response({"detail": "content is required"}, status=status.HTTP_400_BAD_REQUEST)
+        if message_type == ChatMessageType.TEXT and not content:
+            return Response({"detail": "content is required for text messages"}, status=status.HTTP_400_BAD_REQUEST)
+
+        attachment_url  = (request.data.get("attachment_url") or "").strip() or None
+        attachment_name = (request.data.get("attachment_name") or "").strip() or None
+        attachment_size = request.data.get("attachment_size")
+        try:
+            attachment_size = int(attachment_size) if attachment_size is not None else None
+        except (TypeError, ValueError):
+            attachment_size = None
+        attachment_duration = request.data.get("attachment_duration")
+        try:
+            attachment_duration = float(attachment_duration) if attachment_duration is not None else None
+        except (TypeError, ValueError):
+            attachment_duration = None
 
         message = ChatMessage.objects.create(
             room=room,
             sender=requester,
             message_type=message_type,
             content=content,
+            attachment_url=attachment_url,
+            attachment_name=attachment_name,
+            attachment_size=attachment_size,
+            attachment_duration=attachment_duration,
         )
         room.save(update_fields=["updated_at"])
+
+        serialized = _serialize_message(message)
+
+        # Broadcast to all WebSocket connections in the room so every client
+        # updates in real-time, not just on refresh.
+        try:
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                f"chat_room_{room_id}",
+                {"type": "message_created", "message": serialized},
+            )
+        except Exception:
+            pass  # never block the response if the channel layer is unavailable
 
         return Response(
             {
                 "message": "Message sent",
-                "chat_message": _serialize_message(message),
+                "chat_message": serialized,
             },
             status=status.HTTP_201_CREATED,
         )
@@ -386,26 +491,51 @@ class ChatCandidates(APIView):
     def get(self, request):
         requester_ir_id = request.GET.get("requester_ir_id")
         query = (request.GET.get("q") or "").strip()
+        exclude_room_id = request.GET.get("exclude_room_id")
+
+        try:
+            offset = max(0, int(request.GET.get("offset", 0)))
+        except (ValueError, TypeError):
+            offset = 0
+        try:
+            limit = min(max(1, int(request.GET.get("limit", 30))), 100)
+        except (ValueError, TypeError):
+            limit = 30
 
         requester = _get_ir(requester_ir_id)
         if not requester:
             return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
 
         candidates_qs = requester.get_viewable_irs().filter(status=True).exclude(ir_id=requester.ir_id)
+
         if query:
             candidates_qs = candidates_qs.filter(Q(ir_name__icontains=query) | Q(ir_id__icontains=query))
 
-        candidates = candidates_qs.order_by("ir_name")[:30]
+        # Exclude members already in the given room (used by "Add Members" dialog)
+        if exclude_room_id:
+            existing_ids = ChatRoomMember.objects.filter(
+                room_id=exclude_room_id
+            ).values_list("ir_id", flat=True)
+            candidates_qs = candidates_qs.exclude(ir_id__in=existing_ids)
+
+        candidates_qs = candidates_qs.order_by("ir_name")
+        total = candidates_qs.count()
+        page = list(candidates_qs[offset: offset + limit])
+
         return Response(
             {
                 "candidates": [
                     {
-                        "ir_id": candidate.ir_id,
-                        "ir_name": candidate.ir_name,
-                        "ir_access_level": candidate.ir_access_level,
+                        "ir_id": c.ir_id,
+                        "ir_name": c.ir_name,
+                        "ir_access_level": c.ir_access_level,
                     }
-                    for candidate in candidates
-                ]
+                    for c in page
+                ],
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+                "has_more": offset + limit < total,
             }
         )
 
@@ -476,3 +606,184 @@ class ChatRoomUnpin(APIView):
                 "pinned_at": room.pinned_at,
             },
         })
+
+
+class ChatMessageEdit(APIView):
+    def patch(self, request, room_id, message_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        new_content = (request.data.get("content") or "").strip()
+
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        room = get_object_or_404(ChatRoom, id=room_id)
+        if not _is_room_member(room, requester):
+            return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        if not new_content:
+            return Response({"detail": "content is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        message = get_object_or_404(ChatMessage, id=message_id, room=room)
+
+        if message.sender != requester:
+            return Response({"detail": "Not authorized to edit this message"}, status=status.HTTP_403_FORBIDDEN)
+
+        if message.is_deleted:
+            return Response({"detail": "Cannot edit a deleted message"}, status=status.HTTP_400_BAD_REQUEST)
+
+        message.content = new_content
+        message.edited_at = timezone.now()
+        message.save(update_fields=["content", "edited_at"])
+
+        return Response({
+            "message": "Message updated",
+            "chat_message": {
+                "id": message.id,
+                "content": message.content,
+                "edited_at": message.edited_at,
+            },
+        })
+
+
+class ChatMessageDelete(APIView):
+    def delete(self, request, room_id, message_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        room = get_object_or_404(ChatRoom, id=room_id)
+        if not _is_room_member(room, requester):
+            return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        message = get_object_or_404(ChatMessage, id=message_id, room=room)
+
+        if message.sender != requester:
+            return Response({"detail": "Not authorized to delete this message"}, status=status.HTTP_403_FORBIDDEN)
+
+        message.is_deleted = True
+        message.content = ""
+        message.save(update_fields=["is_deleted", "content"])
+
+        return Response({"message": "Message deleted", "message_id": message.id})
+
+
+# ── Allowed MIME types ────────────────────────────────────────────────────────
+
+_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp", "image/heic"}
+_VIDEO_TYPES = {"video/mp4", "video/quicktime", "video/webm", "video/x-matroska"}
+_VOICE_TYPES = {"audio/webm", "audio/ogg", "audio/mpeg", "audio/mp4", "audio/wav", "audio/x-m4a"}
+_FILE_TYPES   = {
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/plain",
+    "text/csv",
+    "application/zip",
+}
+
+def _detect_message_type(mime: str) -> str:
+    if mime in _IMAGE_TYPES:
+        return ChatMessageType.IMAGE
+    if mime in _VIDEO_TYPES:
+        return ChatMessageType.VIDEO
+    if mime in _VOICE_TYPES:
+        return ChatMessageType.VOICE
+    return ChatMessageType.FILE
+
+
+class ChatMessageUpload(APIView):
+    """Upload a file attachment; returns the stored URL and detected message_type."""
+
+    def post(self, request, room_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        room = get_object_or_404(ChatRoom, id=room_id)
+        if not _is_room_member(room, requester):
+            return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        uploaded = request.FILES.get("file")
+        if not uploaded:
+            return Response({"detail": "file is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        mime = uploaded.content_type or mimetypes.guess_type(uploaded.name)[0] or "application/octet-stream"
+        allowed = _IMAGE_TYPES | _VIDEO_TYPES | _VOICE_TYPES | _FILE_TYPES
+        if mime not in allowed:
+            return Response({"detail": f"File type '{mime}' is not allowed"}, status=status.HTTP_400_BAD_REQUEST)
+
+        max_size = 50 * 1024 * 1024  # 50 MB
+        if uploaded.size > max_size:
+            return Response({"detail": "File exceeds 50 MB limit"}, status=status.HTTP_400_BAD_REQUEST)
+
+        ext = os.path.splitext(uploaded.name)[1].lower()
+        filename = f"chat/{room_id}/{uuid.uuid4().hex}{ext}"
+        saved_path = default_storage.save(filename, ContentFile(uploaded.read()))
+        # default_storage.url() returns the Cloudinary CDN URL in production,
+        # or a local /media/ path in development — works for both.
+        file_url = default_storage.url(saved_path)
+
+        return Response({
+            "url": file_url,
+            "name": uploaded.name,
+            "size": uploaded.size,
+            "message_type": _detect_message_type(mime),
+        }, status=status.HTTP_201_CREATED)
+
+
+class ChatMessagePin(APIView):
+    """Pin a specific message in a room."""
+
+    def post(self, request, room_id, message_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        room = get_object_or_404(ChatRoom, id=room_id)
+        if not _is_room_member(room, requester):
+            return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        message = get_object_or_404(ChatMessage, id=message_id, room=room)
+        if message.is_deleted:
+            return Response({"detail": "Cannot pin a deleted message"}, status=status.HTTP_400_BAD_REQUEST)
+
+        room.pinned_message = message
+        room.save(update_fields=["pinned_message", "updated_at"])
+
+        return Response({
+            "message": "Message pinned",
+            "pinned_message": {
+                "id": message.id,
+                "sender_name": message.sender.ir_name,
+                "content": message.content,
+                "message_type": message.message_type,
+                "attachment_url": message.attachment_url,
+                "attachment_name": message.attachment_name,
+            },
+        })
+
+
+class ChatMessageUnpin(APIView):
+    """Remove the pinned message from a room."""
+
+    def delete(self, request, room_id, message_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        room = get_object_or_404(ChatRoom, id=room_id)
+        if not _is_room_member(room, requester):
+            return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        room.pinned_message = None
+        room.save(update_fields=["pinned_message", "updated_at"])
+
+        return Response({"message": "Message unpinned"})

@@ -78,6 +78,11 @@ from core.views.notifications import (
 from core.views.move_ir import MoveIrToTeam
 from core.views.chat import (
     ChatCandidates,
+    ChatMessageDelete,
+    ChatMessageEdit,
+    ChatMessagePin,
+    ChatMessageUnpin,
+    ChatMessageUpload,
     ChatReadReceipts,
     ChatRoomListCreate,
     ChatRoomMembers,
@@ -206,6 +211,11 @@ urlpatterns = [
     path("chat_rooms/<int:room_id>/members/add/", ChatRoomMembersAdd.as_view()),
     path("chat_rooms/<int:room_id>/members/remove/", ChatRoomMembersRemove.as_view()),
     path("chat_rooms/<int:room_id>/messages/", ChatRoomMessages.as_view()),
+    path("chat_rooms/<int:room_id>/messages/<int:message_id>/edit/", ChatMessageEdit.as_view()),
+    path("chat_rooms/<int:room_id>/messages/<int:message_id>/delete/", ChatMessageDelete.as_view()),
+    path("chat_rooms/<int:room_id>/messages/<int:message_id>/pin/", ChatMessagePin.as_view()),
+    path("chat_rooms/<int:room_id>/messages/<int:message_id>/unpin/", ChatMessageUnpin.as_view()),
+    path("chat_rooms/<int:room_id>/upload/", ChatMessageUpload.as_view()),
     path("chat_rooms/<int:room_id>/read_receipts/", ChatReadReceipts.as_view()),
     path("chat_candidates/", ChatCandidates.as_view()),
 ]

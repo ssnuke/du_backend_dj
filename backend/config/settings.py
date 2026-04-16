@@ -44,7 +44,9 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'channels',
     'corsheaders',
-    'rest_framework', 
+    'rest_framework',
+    'cloudinary',
+    'cloudinary_storage',
     'core'
 ]
 
@@ -176,6 +178,22 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+
+# ── Cloudinary (media / file uploads) ────────────────────────────────────────
+# Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET in env.
+CLOUDINARY_STORAGE = {
+    'CLOUD_NAME': os.getenv('CLOUDINARY_CLOUD_NAME'),
+    'API_KEY':    os.getenv('CLOUDINARY_API_KEY'),
+    'API_SECRET': os.getenv('CLOUDINARY_API_SECRET'),
+}
+DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.RawMediaCloudinaryStorage'
+
+MEDIA_URL = '/media/'   # kept for local fallback / admin compatibility
+MEDIA_ROOT = BASE_DIR / "media"
+
+# Max upload size: 50 MB
+DATA_UPLOAD_MAX_MEMORY_SIZE = 52428800
+FILE_UPLOAD_MAX_MEMORY_SIZE = 52428800
 
 # Web Push (VAPID)
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")

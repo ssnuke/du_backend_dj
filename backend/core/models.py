@@ -525,6 +525,10 @@ class ChatCategory(models.TextChoices):
 
 class ChatMessageType(models.TextChoices):
     TEXT = "text"
+    IMAGE = "image"
+    VIDEO = "video"
+    FILE = "file"
+    VOICE = "voice"
 
 
 class ChatRoom(models.Model):
@@ -534,6 +538,13 @@ class ChatRoom(models.Model):
     created_by = models.ForeignKey(Ir, on_delete=models.SET_NULL, null=True, related_name="chat_rooms_created")
     is_pinned = models.BooleanField(default=False)
     pinned_at = models.DateTimeField(null=True, blank=True)
+    pinned_message = models.ForeignKey(
+        "ChatMessage",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="pinned_in_rooms",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -563,7 +574,16 @@ class ChatMessage(models.Model):
     room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name="messages")
     sender = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name="chat_messages")
     message_type = models.CharField(max_length=20, choices=ChatMessageType.choices, default=ChatMessageType.TEXT)
-    content = models.TextField()
+    content = models.TextField(blank=True, default="")
+    attachment_url = models.URLField(max_length=1000, blank=True, null=True)
+    attachment_name = models.CharField(max_length=255, blank=True, null=True)
+    attachment_size = models.PositiveIntegerField(blank=True, null=True)   # bytes
+    attachment_duration = models.FloatField(blank=True, null=True)         # seconds (voice)
+    reply_to = models.ForeignKey(
+        "self", on_delete=models.SET_NULL, null=True, blank=True, related_name="replies"
+    )
+    is_deleted = models.BooleanField(default=False)
+    edited_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

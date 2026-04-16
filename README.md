@@ -1268,3 +1268,15 @@ Or for validation errors:
 | 403 | Forbidden - Insufficient permissions |
 | 404 | Not Found - Resource doesn't exist |
 | 500 | Internal Server Error |
+
+
+
+# Build
+npm run build
+
+# Deploy to a channel named "staging" (creates it if it doesn't exist)
+firebase hosting:channel:deploy staging --expires 30d
+
+# To redeploy to the same channel later just run the same command again. To delete it:
+firebase hosting:channel:delete staging
+
