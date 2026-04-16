@@ -39,7 +39,8 @@ def _get_ir(ir_id):
         return None
 
 
-def _can_create_room(ir):
+def _can_create_group(ir):
+    """Only LS and above can create group rooms."""
     return ir.ir_access_level <= AccessLevel.LS
 
 
@@ -163,14 +164,14 @@ class ChatRoomListCreate(APIView):
         if not requester:
             return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
 
-        if not _can_create_room(requester):
-            return Response({"detail": "Not authorized to create rooms. LS and above only."}, status=status.HTTP_403_FORBIDDEN)
-
         if room_type not in [ChatRoomType.DIRECT, ChatRoomType.GROUP]:
             return Response({"detail": "Invalid room_type"}, status=status.HTTP_400_BAD_REQUEST)
 
         if not room_name:
             return Response({"detail": "room_name is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if room_type == ChatRoomType.GROUP and not _can_create_group(requester):
+            return Response({"detail": "Not authorized to create group rooms. LS and above only."}, status=status.HTTP_403_FORBIDDEN)
 
         member_ids = set(initial_member_ir_ids)
         member_ids.add(requester.ir_id)
