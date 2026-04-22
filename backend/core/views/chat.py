@@ -18,6 +18,7 @@ from rest_framework.views import APIView
 from core.models import (
     AccessLevel,
     ChatMessage,
+    ChatMessageReaction,
     ChatMessageReceipt,
     ChatRoom,
     ChatRoomMember,
@@ -54,6 +55,15 @@ def _serialize_room(room, requester=None):
     if requester:
         unread_count = room.messages.exclude(receipts__reader=requester).exclude(sender=requester).count()
 
+    other_member = None
+    if room.room_type == ChatRoomType.DIRECT and requester:
+        other = ChatRoomMember.objects.filter(room=room).exclude(ir=requester).select_related("ir").first()
+        if other:
+            other_member = {
+                "ir_id": other.ir.ir_id,
+                "ir_name": other.ir.display_name or other.ir.ir_name,
+            }
+
     pinned_msg_data = None
     if room.pinned_message_id:
         try:
@@ -89,6 +99,7 @@ def _serialize_room(room, requester=None):
         "id": room.id,
         "room_type": room.room_type,
         "room_name": room.room_name,
+        "image_url": getattr(room, "image_url", None),
         "category": room.category,
         "created_by_ir_id": room.created_by.ir_id if room.created_by else None,
         "created_at": room.created_at,
@@ -100,6 +111,7 @@ def _serialize_room(room, requester=None):
         "last_message_preview": preview,
         "last_message_at": (last_message.created_at if last_message else None),
         "unread_count": unread_count,
+        "other_member": other_member,
     }
 
 
@@ -122,11 +134,18 @@ def _serialize_message(message):
     if read_count is None:
         read_count = message.receipts.count()
 
+    reactions = {}
+    for r in ChatMessageReaction.objects.filter(message_id=message.id).select_related("ir"):
+        reactions.setdefault(r.emoji, []).append({
+            "ir_id": r.ir.ir_id,
+            "ir_name": r.ir.chat_name,
+        })
+
     return {
         "id": message.id,
         "room_id": message.room_id,
         "sender_ir_id": message.sender.ir_id,
-        "sender_name": message.sender.ir_name,
+        "sender_name": message.sender.chat_name,
         "message_type": message.message_type,
         "content": message.content,
         "attachment_url": message.attachment_url,
@@ -139,6 +158,7 @@ def _serialize_message(message):
         "reply_to": reply_to_data,
         "is_deleted": message.is_deleted,
         "edited_at": message.edited_at.isoformat() if message.edited_at else None,
+        "reactions": reactions,
     }
 
 
@@ -369,6 +389,7 @@ class ChatRoomMessages(APIView):
             ChatMessage.objects
             .filter(room=room)
             .select_related("sender", "reply_to", "reply_to__sender")
+            .prefetch_related("reactions__ir")
             .annotate(read_count=Count("receipts"))
             .order_by("-id")   # newest first; ensures [:limit] gives the most-recent page
         )
@@ -762,7 +783,7 @@ class ChatMessagePin(APIView):
             "message": "Message pinned",
             "pinned_message": {
                 "id": message.id,
-                "sender_name": message.sender.ir_name,
+                "sender_name": message.sender.chat_name,
                 "content": message.content,
                 "message_type": message.message_type,
                 "attachment_url": message.attachment_url,
@@ -788,3 +809,171 @@ class ChatMessageUnpin(APIView):
         room.save(update_fields=["pinned_message", "updated_at"])
 
         return Response({"message": "Message unpinned"})
+
+
+class ChatRoomImageUpload(APIView):
+    """Upload or update a group room's avatar image."""
+
+    def post(self, request, room_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        room = get_object_or_404(ChatRoom, id=room_id)
+        if not _is_room_member(room, requester):
+            return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        uploaded = request.FILES.get("file")
+        if not uploaded:
+            return Response({"detail": "file is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        mime = uploaded.content_type or ""
+        if mime not in {"image/jpeg", "image/png", "image/gif", "image/webp"}:
+            return Response({"detail": "Only image files are allowed"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if uploaded.size > 5 * 1024 * 1024:
+            return Response({"detail": "Image must be under 5 MB"}, status=status.HTTP_400_BAD_REQUEST)
+
+        ext = os.path.splitext(uploaded.name)[1].lower() or ".jpg"
+        filename = f"chat/groups/{room_id}/{uuid.uuid4().hex}{ext}"
+        saved_path = default_storage.save(filename, ContentFile(uploaded.read()))
+        image_url = default_storage.url(saved_path)
+
+        room.image_url = image_url
+        room.save(update_fields=["image_url", "updated_at"])
+
+        try:
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                f"chat_room_{room_id}",
+                {"type": "room_updated", "room": {"id": room.id, "room_name": room.room_name, "image_url": image_url}},
+            )
+        except Exception:
+            pass
+
+        return Response({"image_url": image_url})
+
+
+class ChatMessageReceiptDetail(APIView):
+    """Return who has read a specific message and when."""
+
+    def get(self, request, room_id, message_id):
+        requester_ir_id = request.GET.get("requester_ir_id")
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        room = get_object_or_404(ChatRoom, id=room_id)
+        if not _is_room_member(room, requester):
+            return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        message = get_object_or_404(ChatMessage, id=message_id, room=room)
+        receipts = ChatMessageReceipt.objects.filter(message=message).select_related("reader").order_by("read_at")
+
+        return Response({
+            "receipts": [
+                {
+                    "ir_id": r.reader.ir_id,
+                    "ir_name": r.reader.chat_name,
+                    "read_at": r.read_at.isoformat(),
+                }
+                for r in receipts
+            ]
+        })
+
+
+class ChatMessageReactionView(APIView):
+    """Add or remove a reaction on a message."""
+
+    def post(self, request, room_id, message_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        emoji = (request.data.get("emoji") or "").strip()
+
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+        if not emoji:
+            return Response({"detail": "emoji is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        room = get_object_or_404(ChatRoom, id=room_id)
+        if not _is_room_member(room, requester):
+            return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        message = get_object_or_404(ChatMessage, id=message_id, room=room)
+        if message.is_deleted:
+            return Response({"detail": "Cannot react to a deleted message"}, status=status.HTTP_400_BAD_REQUEST)
+
+        reaction, created = ChatMessageReaction.objects.get_or_create(
+            message=message, ir=requester, emoji=emoji
+        )
+
+        reactions = {}
+        for r in ChatMessageReaction.objects.filter(message=message).select_related("ir"):
+            reactions.setdefault(r.emoji, []).append({"ir_id": r.ir.ir_id, "ir_name": r.ir.chat_name})
+
+        try:
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                f"chat_room_{room_id}",
+                {
+                    "type": "reaction_updated",
+                    "message_id": message_id,
+                    "reactions": reactions,
+                },
+            )
+        except Exception:
+            pass
+
+        return Response({"reactions": reactions}, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+    def delete(self, request, room_id, message_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        emoji = (request.data.get("emoji") or "").strip()
+
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        room = get_object_or_404(ChatRoom, id=room_id)
+        if not _is_room_member(room, requester):
+            return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        message = get_object_or_404(ChatMessage, id=message_id, room=room)
+        ChatMessageReaction.objects.filter(message=message, ir=requester, emoji=emoji).delete()
+
+        reactions = {}
+        for r in ChatMessageReaction.objects.filter(message=message).select_related("ir"):
+            reactions.setdefault(r.emoji, []).append({"ir_id": r.ir.ir_id, "ir_name": r.ir.chat_name})
+
+        try:
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                f"chat_room_{room_id}",
+                {
+                    "type": "reaction_updated",
+                    "message_id": message_id,
+                    "reactions": reactions,
+                },
+            )
+        except Exception:
+            pass
+
+        return Response({"reactions": reactions})
+
+
+class IrDisplayNameUpdate(APIView):
+    """Update the chat display name for a user."""
+
+    def patch(self, request, ir_id):
+        requester = _get_ir(ir_id)
+        if not requester:
+            return Response({"detail": "Invalid IR ID"}, status=status.HTTP_400_BAD_REQUEST)
+
+        display_name = (request.data.get("display_name") or "").strip() or None
+        if display_name and len(display_name) > 45:
+            return Response({"detail": "Display name must be 45 characters or fewer"}, status=status.HTTP_400_BAD_REQUEST)
+
+        requester.display_name = display_name
+        requester.save(update_fields=["display_name"])
+        return Response({"display_name": requester.display_name, "chat_name": requester.chat_name})

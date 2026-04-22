@@ -82,9 +82,12 @@ from core.views.chat import (
     ChatMessageEdit,
     ChatMessagePin,
     ChatMessageUnpin,
+    ChatMessageReactionView,
+    ChatMessageReceiptDetail,
     ChatMessageUpload,
     ChatReadReceipts,
     ChatRoomListCreate,
+    ChatRoomImageUpload,
     ChatRoomMembers,
     ChatRoomMembersAdd,
     ChatRoomMembersRemove,
@@ -93,6 +96,7 @@ from core.views.chat import (
     ChatRoomDelete,
     ChatRoomPin,
     ChatRoomUnpin,
+    IrDisplayNameUpdate,
 )
 
 # Pocket views
@@ -217,5 +221,9 @@ urlpatterns = [
     path("chat_rooms/<int:room_id>/messages/<int:message_id>/unpin/", ChatMessageUnpin.as_view()),
     path("chat_rooms/<int:room_id>/upload/", ChatMessageUpload.as_view()),
     path("chat_rooms/<int:room_id>/read_receipts/", ChatReadReceipts.as_view()),
+    path("chat_rooms/<int:room_id>/image/", ChatRoomImageUpload.as_view()),
+    path("chat_rooms/<int:room_id>/messages/<int:message_id>/receipts/", ChatMessageReceiptDetail.as_view()),
+    path("chat_rooms/<int:room_id>/messages/<int:message_id>/reactions/", ChatMessageReactionView.as_view()),
     path("chat_candidates/", ChatCandidates.as_view()),
+    path("ir/<str:ir_id>/display_name/", IrDisplayNameUpdate.as_view()),
 ]

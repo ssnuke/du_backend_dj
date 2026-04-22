@@ -97,6 +97,13 @@ class Ir(models.Model):
     fcm_tokens = models.JSONField(default=list, blank=True)  # Store multiple device tokens
     # ============================================
 
+    # Optional display name overrides ir_name in chat context
+    display_name = models.CharField(max_length=45, blank=True, null=True)
+
+    @property
+    def chat_name(self):
+        return self.display_name or self.ir_name
+
     def set_password(self, raw_password):
         self.ir_password = make_password(raw_password)
 
@@ -534,6 +541,7 @@ class ChatMessageType(models.TextChoices):
 class ChatRoom(models.Model):
     room_type = models.CharField(max_length=20, choices=ChatRoomType.choices, default=ChatRoomType.GROUP)
     room_name = models.CharField(max_length=120)
+    image_url = models.URLField(max_length=1000, blank=True, null=True)
     category = models.CharField(max_length=50, choices=ChatCategory.choices, default=ChatCategory.GROUP)
     created_by = models.ForeignKey(Ir, on_delete=models.SET_NULL, null=True, related_name="chat_rooms_created")
     is_pinned = models.BooleanField(default=False)
@@ -604,6 +612,19 @@ class ChatMessageReceipt(models.Model):
         indexes = [
             models.Index(fields=["message", "reader"]),
             models.Index(fields=["reader", "read_at"]),
+        ]
+
+
+class ChatMessageReaction(models.Model):
+    message = models.ForeignKey(ChatMessage, on_delete=models.CASCADE, related_name="reactions")
+    ir = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name="chat_reactions")
+    emoji = models.CharField(max_length=8)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("message", "ir", "emoji")
+        indexes = [
+            models.Index(fields=["message", "emoji"]),
         ]
 
 

@@ -5,7 +5,7 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.utils import timezone
 
-from core.models import ChatMessage, ChatMessageReceipt, ChatRoom, ChatRoomMember, Ir
+from core.models import ChatMessage, ChatMessageReaction, ChatMessageReceipt, ChatRoom, ChatRoomMember, Ir
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -96,7 +96,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self._notify_room_members(
             self.room_id,
             self.user_ir.ir_id,
-            self.user_ir.ir_name,
+            self.user_ir.chat_name,
             content,
         )
 
@@ -106,7 +106,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             {
                 "type": "typing_updated",
                 "ir_id": self.user_ir.ir_id,
-                "ir_name": self.user_ir.ir_name,
+                "ir_name": self.user_ir.chat_name,
                 "is_typing": is_typing,
             },
         )
@@ -313,6 +313,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "by_ir_id": event["by_ir_id"],
         }))
 
+    async def reaction_updated(self, event):
+        await self.send(text_data=json.dumps({
+            "type": "reaction_updated",
+            "message_id": event["message_id"],
+            "reactions": event["reactions"],
+        }))
+
     async def _send_error(self, detail):
         await self.send(text_data=json.dumps({"type": "error", "detail": detail}))
 
@@ -360,7 +367,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "id": message.id,
             "room_id": message.room_id,
             "sender_ir_id": sender.ir_id,
-            "sender_name": sender.ir_name,
+            "sender_name": sender.chat_name,
             "message_type": message.message_type,
             "content": message.content,
             "attachment_url": message.attachment_url,
@@ -372,6 +379,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "reply_to": reply_to_data,
             "is_deleted": False,
             "edited_at": None,
+            "reactions": {},
         }
 
     @database_sync_to_async
@@ -403,6 +411,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "id": message.id,
             "content": message.content,
             "edited_at": message.edited_at.isoformat(),
+            "reactions": {},
         }, None
 
     @database_sync_to_async
@@ -518,9 +527,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 title = f"{sender_name} · {room.room_name}"
 
             # Collect FCM tokens for all members except the sender
+            # NOTE: ChatRoomMember.ir_id is the integer FK PK; sender_ir_id is the
+            # string IR identifier (e.g. "IM064623"). Must traverse via ir__ir_id.
             members = ChatRoomMember.objects.filter(
                 room_id=room_id
-            ).exclude(ir_id=sender_ir_id).select_related("ir")
+            ).exclude(ir__ir_id=sender_ir_id).select_related("ir")
 
             tokens = []
             for member in members:
