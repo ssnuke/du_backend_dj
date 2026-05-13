@@ -378,6 +378,59 @@ class Ir(models.Model):
         my_created_teams = Team.objects.filter(created_by=self).values_list('id', flat=True)
         return TeamMember.objects.filter(ir=target_ir, team_id__in=my_created_teams).exists()
 
+    def can_view_name_list(self, target_ir):
+        """
+        Visibility rule for name_list / pipeline stats.
+        - ADMIN: all
+        - CTC / LDC: own subtree (downlines only)
+        - LS: team members who are NOT their hierarchical uplines
+        - GC / IR: self only
+        """
+        if self.ir_id == target_ir.ir_id:
+            return True
+
+        if self.ir_access_level == AccessLevel.ADMIN:
+            return True
+
+        if self.ir_access_level in [AccessLevel.CTC, AccessLevel.LDC]:
+            return self.is_in_subtree(target_ir)
+
+        if self.ir_access_level == AccessLevel.LS:
+            if not self._is_in_same_team(target_ir):
+                return False
+            # target is an upline when self's path starts with target's path
+            return not self.hierarchy_path.startswith(target_ir.hierarchy_path)
+
+        return False
+
+    def get_viewable_irs_for_name_list(self):
+        """
+        Queryset companion to can_view_name_list — used for the pipeline
+        member dropdown so the list only shows permitted IRs.
+        """
+        from core.models import TeamMember
+
+        if self.ir_access_level == AccessLevel.ADMIN:
+            return Ir.objects.filter(status=True)
+
+        if self.ir_access_level in [AccessLevel.CTC, AccessLevel.LDC]:
+            return self.get_subtree_irs()
+
+        if self.ir_access_level == AccessLevel.LS:
+            upline_ids = list(
+                self.get_all_uplines().values_list('ir_id', flat=True)
+            )
+            my_teams = TeamMember.objects.filter(ir=self).values_list('team_id', flat=True)
+            team_member_ids = TeamMember.objects.filter(
+                team_id__in=my_teams
+            ).values_list('ir_id', flat=True)
+            return (
+                Ir.objects.filter(ir_id__in=team_member_ids)
+                          .exclude(ir_id__in=upline_ids)
+            )
+
+        return Ir.objects.filter(ir_id=self.ir_id)
+
     def get_viewable_irs(self):
         """Get all IRs this user can view based on role"""
         from core.models import TeamMember

@@ -54,7 +54,7 @@ class GetPipelineStats(APIView):
         if err:
             return err
 
-        if not requester.can_view_ir(target_ir):
+        if not requester.can_view_name_list(target_ir):
             return Response({'message': 'You do not have permission to view this data'}, status=403)
 
         stats, _ = PipelineStats.objects.get_or_create(ir=target_ir)
@@ -122,5 +122,5 @@ class GetViewableIRsForPipeline(APIView):
         except Ir.DoesNotExist:
             return Response({'message': 'IR not found'}, status=404)
 
-        viewable = requester.get_viewable_irs().values('ir_id', 'ir_name').order_by('ir_name')
+        viewable = requester.get_viewable_irs_for_name_list().values('ir_id', 'ir_name').order_by('ir_name')
         return Response(list(viewable))
