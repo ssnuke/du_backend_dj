@@ -1348,15 +1348,33 @@ class GetDownlineData(APIView):
         viewable_irs = ir.get_viewable_irs()
         downlines = ir.get_all_downlines()
         direct_downlines = ir.get_direct_downlines()
-        
+
         # Aggregate stats
         total_info = sum(i.info_count or 0 for i in viewable_irs)
         total_plan = sum(i.plan_count or 0 for i in viewable_irs)
         total_uv = sum(i.uv_count or 0 for i in viewable_irs)
-        
+
         # Get teams created by viewable IRs
         viewable_teams = Team.objects.filter(created_by__in=viewable_irs)
-        
+
+        # Role-specific system count:
+        # CTC → total active IRs in the database (their entire network)
+        # LDC → members in teams they created/manage (excluding themselves)
+        # Others → generic viewable count
+        if ir.ir_access_level == AccessLevel.CTC:
+            system_count = Ir.objects.filter(status=True).count()
+        elif ir.ir_access_level == AccessLevel.LDC:
+            system_count = (
+                TeamMember.objects
+                .filter(team__created_by=ir)
+                .exclude(ir=ir)
+                .values('ir_id')
+                .distinct()
+                .count()
+            )
+        else:
+            system_count = viewable_irs.count()
+
         # Get current week info using Friday→Friday; accept optional week/year
         week_param = request.GET.get("week")
         year_param = request.GET.get("year")
@@ -1370,7 +1388,7 @@ class GetDownlineData(APIView):
         except Exception:
             logging.exception("Error computing week bounds for downline ir_id=%s", ir_id)
             return Response({"detail": "Invalid week parameters"}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         return Response({
             "ir_id": ir.ir_id,
             "ir_name": ir.ir_name,
@@ -1378,7 +1396,7 @@ class GetDownlineData(APIView):
             "week_number": week_number,
             "year": year,
             "counts": {
-                "total_viewable_irs": viewable_irs.count(),
+                "total_viewable_irs": system_count,
                 "total_downlines": downlines.count(),
                 "direct_downlines": direct_downlines.count(),
                 "teams_created_by_downlines": viewable_teams.count(),
