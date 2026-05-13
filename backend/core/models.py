@@ -891,6 +891,44 @@ class Notification(models.Model):
         return f"{self.title} -> {self.recipient.ir_name}"
 
 
+class PipelineStats(models.Model):
+    ir = models.OneToOneField(Ir, on_delete=models.CASCADE, related_name='pipeline_stats')
+
+    # Level 1: Name list
+    total_name_list = models.IntegerField(default=0)
+
+    # Level 2: Numbers breakdown
+    numbers_have = models.IntegerField(default=0)
+    numbers_dont_have = models.IntegerField(default=0)
+
+    # Level 3: Info status (under numbers_have)
+    infos_done = models.IntegerField(default=0)
+    infos_not_done = models.IntegerField(default=0)
+
+    # Level 4: Invite status (under infos_done)
+    invites_gone = models.IntegerField(default=0)
+    invites_not_gone = models.IntegerField(default=0)
+
+    # Level 5: Invite response (under invites_gone)
+    invite_yes = models.IntegerField(default=0)
+    invite_no = models.IntegerField(default=0)
+
+    # Level 6: Attendance (under invite_yes)
+    showed_up = models.IntegerField(default=0)
+    didnt_show_up = models.IntegerField(default=0)
+
+    # Level 7: Signup status (under showed_up)
+    signed_up_dr = models.IntegerField(default=0)
+    kiv = models.IntegerField(default=0)
+
+    updated_at = models.DateTimeField(auto_now=True)
+    last_sync = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Pipeline Stats"
+        verbose_name_plural = "Pipeline Stats"
+
+
 class PushSubscription(models.Model):
     ir = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name='push_subscriptions')
     endpoint = models.TextField()

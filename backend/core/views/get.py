@@ -1542,3 +1542,74 @@ class GetAvailableWeeks(APIView):
             "weeks": weeks
         })
 
+
+# ---------------------------------------------------
+# SEARCH PROSPECTS (across accessible InfoDetail + PlanDetail)
+# ---------------------------------------------------
+class SearchProspects(APIView):
+    """
+    Full-text name search across InfoDetail and PlanDetail for all IRs
+    the requester has permission to view.
+
+    GET /api/search_prospects/?q=<name>&requester_ir_id=<id>
+    """
+    def get(self, request):
+        query = request.query_params.get('q', '').strip()
+        requester_ir_id = request.query_params.get('requester_ir_id', '').strip()
+
+        if not requester_ir_id:
+            return Response({'message': 'requester_ir_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if len(query) < 2:
+            return Response({'infos': [], 'plans': [], 'query': query})
+
+        try:
+            requester = Ir.objects.get(ir_id=requester_ir_id)
+        except Ir.DoesNotExist:
+            return Response({'message': 'Requester IR not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        viewable_ir_ids = list(requester.get_viewable_irs().values_list('ir_id', flat=True))
+
+        infos = (
+            InfoDetail.objects
+            .filter(ir_id__in=viewable_ir_ids, info_name__icontains=query)
+            .select_related('ir')
+            .order_by('-info_date')[:50]
+        )
+
+        plans = (
+            PlanDetail.objects
+            .filter(ir_id__in=viewable_ir_ids, plan_name__icontains=query)
+            .select_related('ir')
+            .order_by('-plan_date')[:50]
+        )
+
+        return Response({
+            'query': query,
+            'infos': [
+                {
+                    'id': info.id,
+                    'info_name': info.info_name,
+                    'response': info.response,
+                    'info_type': info.info_type,
+                    'info_date': info.info_date.isoformat(),
+                    'comments': info.comments,
+                    'ir_id': info.ir.ir_id,
+                    'ir_name': info.ir.ir_name,
+                }
+                for info in infos
+            ],
+            'plans': [
+                {
+                    'id': plan.id,
+                    'plan_name': plan.plan_name,
+                    'status': plan.status,
+                    'plan_date': plan.plan_date.isoformat(),
+                    'comments': plan.comments,
+                    'ir_id': plan.ir.ir_id,
+                    'ir_name': plan.ir.ir_name,
+                }
+                for plan in plans
+            ],
+        })
+

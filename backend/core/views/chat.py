@@ -297,6 +297,9 @@ class ChatRoomMembersAdd(APIView):
         if not _is_room_member(room, requester):
             return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
 
+        if room.room_type == ChatRoomType.GROUP and room.created_by_id != requester.ir_id:
+            return Response({"detail": "Only the group owner can add members"}, status=status.HTTP_403_FORBIDDEN)
+
         if not member_ir_ids:
             return Response({"detail": "member_ir_ids is required"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -343,6 +346,9 @@ class ChatRoomMembersRemove(APIView):
         room = get_object_or_404(ChatRoom, id=room_id)
         if not _is_room_member(room, requester):
             return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        if room.room_type == ChatRoomType.GROUP and room.created_by_id != requester.ir_id:
+            return Response({"detail": "Only the group owner can remove members"}, status=status.HTTP_403_FORBIDDEN)
 
         if not member_ir_ids:
             return Response({"detail": "member_ir_ids is required"}, status=status.HTTP_400_BAD_REQUEST)
@@ -570,10 +576,13 @@ class ChatRoomDelete(APIView):
             return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
 
         room = get_object_or_404(ChatRoom, id=room_id)
-        
-        # Only room creator or admins can delete
-        if room.created_by != requester and requester.ir_access_level > AccessLevel.CTC:
-            return Response({"detail": "Not authorized to delete this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        if not _is_room_member(room, requester):
+            return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        # Only the group creator can delete a group; anyone can delete their own direct chat
+        if room.room_type == ChatRoomType.GROUP and room.created_by_id != requester.ir_id:
+            return Response({"detail": "Only the group owner can delete this group"}, status=status.HTTP_403_FORBIDDEN)
 
         room.delete()
         return Response({"message": "Room deleted successfully"}, status=status.HTTP_204_NO_CONTENT)

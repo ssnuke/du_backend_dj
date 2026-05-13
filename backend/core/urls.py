@@ -21,6 +21,7 @@ from core.views.get import (
     GetDirectDownlines,
     GetHierarchyTree,
     GetAvailableWeeks,
+    SearchProspects,
 )
 from core.views.post import (
     AddIrId,
@@ -99,6 +100,13 @@ from core.views.chat import (
     IrDisplayNameUpdate,
 )
 
+from core.views.pipeline import (
+    GetPipelineStats,
+    UpdatePipelineStats,
+    AutoFetchPipelineStats,
+    GetViewableIRsForPipeline,
+)
+
 # Pocket views
 from core.views.pockets import (
     CreatePocket,
@@ -137,6 +145,7 @@ urlpatterns = [
     path("direct_downlines/<str:ir_id>/", GetDirectDownlines.as_view()),
     path("hierarchy_tree/<str:ir_id>/", GetHierarchyTree.as_view()),
     path("available_weeks/", GetAvailableWeeks.as_view()),
+    path("search_prospects/", SearchProspects.as_view()),
     #POST endpoints
     path("add_ir_id/", AddIrId.as_view()),
     path("register_new_ir/", RegisterIR.as_view()),
@@ -173,6 +182,12 @@ urlpatterns = [
     path("delete_plan_detail/<int:plan_id>/", DeletePlanDetail.as_view()),
     path("delete_uv_detail/<int:uv_id>/", DeleteUVDetail.as_view()),
     path("delete_ir/<str:ir_id>/", DeleteIr.as_view()),
+    # ============ PIPELINE STATS ENDPOINTS ============
+    path("pipeline_stats/<str:ir_id>/", GetPipelineStats.as_view()),
+    path("pipeline_stats/<str:ir_id>/update/", UpdatePipelineStats.as_view()),
+    path("pipeline_stats/<str:ir_id>/auto_fetch/", AutoFetchPipelineStats.as_view()),
+    path("pipeline_viewable_irs/<str:ir_id>/", GetViewableIRsForPipeline.as_view()),
+
     # Health Check endpoint
     path("health/", health_check),
     # Hidden admin endpoint (secret key auth, no IR permissions)

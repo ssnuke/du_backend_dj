@@ -443,11 +443,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _add_members(self, room_id, requester_ir_id, member_ir_ids):
+        from core.models import ChatRoomType
         room = ChatRoom.objects.get(id=room_id)
         requester = Ir.objects.get(ir_id=requester_ir_id)
 
         if not ChatRoomMember.objects.filter(room=room, ir=requester).exists():
             return [], "Not authorized for this room"
+
+        if room.room_type == ChatRoomType.GROUP and room.created_by_id != requester_ir_id:
+            return [], "Only the group owner can add members"
 
         candidates = list(Ir.objects.filter(ir_id__in=member_ir_ids, status=True))
         found_ids = {candidate.ir_id for candidate in candidates}
@@ -494,11 +498,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _remove_members(self, room_id, requester_ir_id, member_ir_ids):
+        from core.models import ChatRoomType
         room = ChatRoom.objects.get(id=room_id)
         requester = Ir.objects.get(ir_id=requester_ir_id)
 
         if not ChatRoomMember.objects.filter(room=room, ir=requester).exists():
             return [], "Not authorized for this room"
+
+        if room.room_type == ChatRoomType.GROUP and room.created_by_id != requester_ir_id:
+            return [], "Only the group owner can remove members"
 
         current_ids = set(ChatRoomMember.objects.filter(room=room).values_list("ir_id", flat=True))
         removable_ids = set(member_ir_ids) & current_ids
