@@ -1566,14 +1566,18 @@ class GetAvailableWeeks(APIView):
 # ---------------------------------------------------
 class SearchProspects(APIView):
     """
-    Full-text name search across InfoDetail and PlanDetail for all IRs
-    the requester has permission to view.
+    Full-text name search across InfoDetail and PlanDetail.
 
-    GET /api/search_prospects/?q=<name>&requester_ir_id=<id>
+    GET /api/search_prospects/?q=<name>&requester_ir_id=<id>[&target_ir_id=<id>]
+
+    When target_ir_id is provided the search is scoped to that single IR
+    (provided the requester has permission to view it).  Without it the
+    search covers all IRs the requester can view.
     """
     def get(self, request):
         query = request.query_params.get('q', '').strip()
         requester_ir_id = request.query_params.get('requester_ir_id', '').strip()
+        target_ir_id = request.query_params.get('target_ir_id', '').strip()
 
         if not requester_ir_id:
             return Response({'message': 'requester_ir_id is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1586,7 +1590,16 @@ class SearchProspects(APIView):
         except Ir.DoesNotExist:
             return Response({'message': 'Requester IR not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        viewable_ir_ids = list(requester.get_viewable_irs().values_list('ir_id', flat=True))
+        if target_ir_id:
+            viewable_ir_ids = list(
+                requester.get_viewable_irs()
+                .filter(ir_id=target_ir_id)
+                .values_list('ir_id', flat=True)
+            )
+            if not viewable_ir_ids:
+                return Response({'infos': [], 'plans': [], 'query': query})
+        else:
+            viewable_ir_ids = list(requester.get_viewable_irs().values_list('ir_id', flat=True))
 
         infos = (
             InfoDetail.objects
