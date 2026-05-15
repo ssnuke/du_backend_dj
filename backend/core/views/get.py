@@ -145,34 +145,37 @@ class GetAllTeams(APIView):
             # No filter - return all (backward compatible)
             teams = Team.objects.all()
         
-        result = []
-        # Get current week bounds for UV calculation
+        # Prefetch all memberships + IRs in a single query instead of N queries
+        teams = list(teams.prefetch_related('memberships__ir').select_related('created_by'))
+
         _, _, week_start, week_end = get_week_info_friday_to_friday()
 
+        # Collect all member IR IDs across all teams for a single UV batch query
+        team_member_ids_map = {}  # team_id -> [ir_id, ...]
+        all_member_ir_ids = set()
         for team in teams:
-            members = TeamMember.objects.filter(team=team).select_related("ir")
+            ids = [m.ir.ir_id for m in team.memberships.all()]
+            team_member_ids_map[team.id] = ids
+            all_member_ir_ids.update(ids)
 
-            info_total = 0
-            plan_total = 0
-            uv_total = 0
-
-            member_ir_ids = []
-            for member in members:
-                ir = member.ir
-                info_total += ir.info_count or 0
-                plan_total += ir.plan_count or 0
-                member_ir_ids.append(ir.ir_id)
-
-            # Calculate week-specific UV progress
-            try:
-                uv_total = UVDetail.objects.filter(
-                    ir_id__in=member_ir_ids,
+        # Single UV aggregate query for all teams
+        try:
+            uv_by_ir = dict(
+                UVDetail.objects.filter(
+                    ir_id__in=all_member_ir_ids,
                     uv_date__gte=week_start,
-                    uv_date__lte=week_end
-                ).aggregate(total=Sum('uv_count'))['total'] or 0
-            except Exception:
-                # UVDetail table may not exist yet due to pending migrations
-                uv_total = 0
+                    uv_date__lte=week_end,
+                ).values('ir_id').annotate(total=Sum('uv_count')).values_list('ir_id', 'total')
+            )
+        except Exception:
+            uv_by_ir = {}
+
+        result = []
+        for team in teams:
+            members = list(team.memberships.all())  # from prefetch cache, no DB hit
+            info_total = sum(m.ir.info_count or 0 for m in members)
+            plan_total = sum(m.ir.plan_count or 0 for m in members)
+            uv_total = sum(float(uv_by_ir.get(ir_id, 0)) for ir_id in team_member_ids_map[team.id])
 
             result.append({
                 **TeamSerializer(team).data,
@@ -219,63 +222,124 @@ class GetLDCs(APIView):
         now = datetime.now(ist)
         current_week_number, current_year, _, _ = get_week_info_friday_to_friday(now)
 
+        # ── Build member maps for all LDCs in bulk ───────────────────────────
+        ldc_ids_list = [ldc.ir_id for ldc in ldcs]
+
+        # All teams managed/created by these LDCs (2 queries total)
+        ldc_team_memberships = list(
+            TeamMember.objects.filter(ir_id__in=ldc_ids_list, role=TeamRole.LDC)
+                              .values_list('ir_id', 'team_id')
+        )
+        ldc_created_teams = list(
+            Team.objects.filter(created_by_id__in=ldc_ids_list)
+                        .values_list('created_by_id', 'id')
+        )
+
+        ldc_managed_team_ids = {}
+        for ldc_ir_id, team_id in ldc_team_memberships:
+            ldc_managed_team_ids.setdefault(ldc_ir_id, set()).add(team_id)
+
+        ldc_created_team_ids = {}
+        for ldc_ir_id, team_id in ldc_created_teams:
+            ldc_created_team_ids.setdefault(ldc_ir_id, set()).add(team_id)
+
+        # All members for all relevant teams (1 query)
+        all_team_ids = set(t for ids in ldc_created_team_ids.values() for t in ids)
+        all_team_members = list(
+            TeamMember.objects.filter(team_id__in=all_team_ids)
+                              .values_list('team_id', 'ir_id')
+        )
+        team_to_members = {}
+        for team_id, ir_id in all_team_members:
+            team_to_members.setdefault(team_id, set()).add(ir_id)
+
+        # Build ldc_ir_id -> set of member ir_ids
+        ldc_member_map = {}
+        for ldc in ldcs:
+            created = ldc_created_team_ids.get(ldc.ir_id, set())
+            members = set()
+            for tid in created:
+                members.update(team_to_members.get(tid, set()))
+            members.discard(ldc.ir_id)
+            ldc_member_map[ldc.ir_id] = members
+
+        # managed-teams member count
+        ldc_managed_member_map = {}
+        for ldc in ldcs:
+            managed = ldc_managed_team_ids.get(ldc.ir_id, set())
+            members = set()
+            for tid in managed:
+                members.update(team_to_members.get(tid, set()))
+            members.discard(ldc.ir_id)
+            ldc_managed_member_map[ldc.ir_id] = members
+
+        all_member_ids = set(ir_id for ids in ldc_member_map.values() for ir_id in ids)
+
+        # Compute week date ranges once for all weeks
+        week_ranges = {}
+        for week_num in range(1, current_week_number + 1):
+            _, yr, ws, we = get_week_info_friday_to_friday(week_number=week_num, year=current_year)
+            _, _, pws, pwe = get_week_info_monday_to_sunday(week_number=week_num, year=current_year)
+            week_ranges[week_num] = (ws, we, pws, pwe)
+
+        year_start = week_ranges[1][0]
+        year_end   = week_ranges[current_week_number][1]
+        plan_year_start = week_ranges[1][2]
+        plan_year_end   = week_ranges[current_week_number][3]
+
+        # Bulk fetch raw info/plan/uv rows (3 queries for ALL LDCs and ALL weeks)
+        info_rows = list(
+            InfoDetail.objects.filter(
+                ir_id__in=all_member_ids,
+                info_date__gte=year_start,
+                info_date__lte=year_end,
+            ).values_list('ir_id', 'info_date')
+        ) if all_member_ids else []
+
+        plan_rows = list(
+            PlanDetail.objects.filter(
+                ir_id__in=all_member_ids,
+                plan_date__gte=plan_year_start,
+                plan_date__lte=plan_year_end,
+            ).values_list('ir_id', 'plan_date')
+        ) if all_member_ids else []
+
+        try:
+            uv_rows = list(
+                UVDetail.objects.filter(
+                    ir_id__in=all_member_ids,
+                    uv_date__gte=year_start,
+                    uv_date__lte=year_end,
+                ).values_list('ir_id', 'uv_date', 'uv_count')
+            ) if all_member_ids else []
+        except Exception:
+            uv_rows = []
+
         data = []
         for ldc in ldcs:
-            # Find all teams where this LDC is a member with role LDC
-            teams_managed = TeamMember.objects.filter(ir_id=ldc.ir_id, role=TeamRole.LDC).values_list('team_id', flat=True)
-            # Find all unique IRs in those teams, excluding the LDC
-            member_ids = TeamMember.objects.filter(team_id__in=teams_managed).exclude(ir_id=ldc.ir_id).values_list('ir_id', flat=True).distinct()
-            member_count = len(member_ids)
-
-            # Find all teams created by this LDC
-            teams_created = Team.objects.filter(created_by=ldc)
-            team_ids = teams_created.values_list('id', flat=True)
-            # Get all members in these teams, excluding the LDC
-            team_member_ids = TeamMember.objects.filter(team_id__in=team_ids).exclude(ir_id=ldc.ir_id).values_list('ir_id', flat=True).distinct()
+            members = ldc_member_map[ldc.ir_id]
+            managed_members = ldc_managed_member_map[ldc.ir_id]
+            member_count = len(managed_members)
 
             week_data = {}
             for week_num in range(1, current_week_number + 1):
-                # Reset values for each week iteration
-                total_infos_done = 0
-                total_plans_done = 0
-                uvs_fallen = 0
-                
-                # Get week date ranges with explicit year parameter
-                _, year, week_start, week_end = get_week_info_friday_to_friday(week_number=week_num, year=current_year)
-                logging.info(f"LDC {ldc.ir_id} Week {week_num}: week_start={week_start}, week_end={week_end}")
-                
-                if (year < current_year) or (year == current_year and week_num <= current_week_number):
-                    # Count infos for this specific week
-                    total_infos_done = InfoDetail.objects.filter(
-                        ir_id__in=team_member_ids,
-                        info_date__gte=week_start,
-                        info_date__lte=week_end
-                    ).count()
-                    
-                    # Count plans for this specific week
-                    _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday(week_number=week_num, year=current_year)
-                    logging.info(f"LDC {ldc.ir_id} Week {week_num}: plan_week_start={plan_week_start}, plan_week_end={plan_week_end}")
-                    total_plans_done = PlanDetail.objects.filter(
-                        ir_id__in=team_member_ids,
-                        plan_date__gte=plan_week_start,
-                        plan_date__lte=plan_week_end
-                    ).count()
-                    
-                    # Get week-specific UV progress from UVDetail records
-                    try:
-                        uvs_fallen = UVDetail.objects.filter(
-                            ir_id__in=team_member_ids,
-                            uv_date__gte=week_start,
-                            uv_date__lte=week_end
-                        ).aggregate(total=Sum('uv_count'))['total'] or 0
-                    except Exception:
-                        # UVDetail table may not exist yet due to pending migrations
-                        uvs_fallen = 0
-                
+                ws, we, pws, pwe = week_ranges[week_num]
+                total_infos_done = sum(
+                    1 for ir_id, dt in info_rows
+                    if ir_id in members and ws <= dt <= we
+                )
+                total_plans_done = sum(
+                    1 for ir_id, dt in plan_rows
+                    if ir_id in members and pws <= dt <= pwe
+                )
+                uvs_fallen = sum(
+                    float(cnt) for ir_id, dt, cnt in uv_rows
+                    if ir_id in members and ws <= dt <= we
+                )
                 week_data[week_num] = {
                     "total_infos_done": total_infos_done,
                     "total_plans_done": total_plans_done,
-                    "uvs_fallen": uvs_fallen
+                    "uvs_fallen": uvs_fallen,
                 }
 
             data.append({
@@ -284,7 +348,7 @@ class GetLDCs(APIView):
                 "id": ldc.ir_id,
                 "ir_access_level": ldc.ir_access_level,
                 "team_member_count": member_count,
-                "week": week_data
+                "week": week_data,
             })
         return Response(data)
 
@@ -1253,58 +1317,83 @@ class GetVisibleTeams(APIView):
             week_number, year, info_week_start, info_week_end = get_week_info_friday_to_friday()
             _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday()
         
+        # ── Batch all per-team queries into bulk lookups ──────────────────────
+        viewable_teams = list(
+            viewable_teams.select_related('created_by')
+                          .prefetch_related('memberships__ir')
+        )
+        team_ids = [t.id for t in viewable_teams]
+
+        # Build team → member IR ids map (single prefetch, no extra queries)
+        team_member_map = {}   # team_id -> [ir_id, ...]
+        team_raw_members = {}  # team_id -> [TeamMember] (unfiltered, for is_member check)
+        all_member_ids = set()
+        for team in viewable_teams:
+            all_ms = list(team.memberships.all())
+            team_raw_members[team.id] = all_ms
+            filtered = [
+                m for m in all_ms
+                if not (m.role == TeamRole.LDC and m.ir == team.created_by)
+            ]
+            ids = [m.ir_id for m in filtered]
+            team_member_map[team.id] = ids
+            all_member_ids.update(ids)
+
+        # Bulk InfoDetail counts per IR id (1 query)
+        info_by_ir = dict(
+            InfoDetail.objects.filter(
+                ir_id__in=all_member_ids,
+                info_date__gte=info_week_start,
+                info_date__lte=info_week_end,
+            ).values('ir_id').annotate(c=Count('id')).values_list('ir_id', 'c')
+        )
+
+        # Bulk PlanDetail counts per IR id (1 query)
+        plan_by_ir = dict(
+            PlanDetail.objects.filter(
+                ir_id__in=all_member_ids,
+                plan_date__gte=plan_week_start,
+                plan_date__lte=plan_week_end,
+            ).values('ir_id').annotate(c=Count('id')).values_list('ir_id', 'c')
+        )
+
+        # Bulk UV sums per IR id (1 query)
+        try:
+            uv_by_ir = dict(
+                UVDetail.objects.filter(
+                    ir_id__in=all_member_ids,
+                    uv_date__gte=info_week_start,
+                    uv_date__lte=info_week_end,
+                ).values('ir_id').annotate(total=Sum('uv_count')).values_list('ir_id', 'total')
+            )
+        except Exception:
+            uv_by_ir = {}
+
+        # Bulk WeeklyTarget fetch for all teams (1 query)
+        target_map = {
+            t.team_id: t
+            for t in WeeklyTarget.objects.filter(
+                team_id__in=team_ids, week_number=week_number, year=year
+            )
+        }
+
         teams_data = []
         for team in viewable_teams:
-            # Get team members
-            members = TeamMember.objects.filter(team=team).select_related('ir')
-            # Exclude LDCs who are the owner (TeamRole.LDC) of the team
-            filtered_members = [m for m in members if not (m.role == TeamRole.LDC and m.ir == team.created_by)]
-            member_irs = [m.ir for m in filtered_members]
-            member_ir_ids = [m.ir_id for m in member_irs]
+            member_ids = team_member_map[team.id]
+            info_achieved = sum(info_by_ir.get(i, 0) for i in member_ids)
+            plan_achieved = sum(plan_by_ir.get(i, 0) for i in member_ids)
+            uv_achieved   = float(sum(uv_by_ir.get(i, 0) or 0 for i in member_ids))
 
-            # Calculate achieved for selected week (Infos use Friday-Friday range)
-            info_achieved = InfoDetail.objects.filter(
-                ir_id__in=member_ir_ids,
-                info_date__gte=info_week_start,
-                info_date__lte=info_week_end
-            ).count()
-
-            # Calculate achieved for selected week (Plans use Monday-Sunday range)
-            plan_achieved = PlanDetail.objects.filter(
-                ir_id__in=member_ir_ids,
-                plan_date__gte=plan_week_start,
-                plan_date__lte=plan_week_end
-            ).count()
-
-            try:
-                uv_achieved = UVDetail.objects.filter(
-                    ir_id__in=member_ir_ids,
-                    uv_date__gte=info_week_start,
-                    uv_date__lte=info_week_end
-                ).aggregate(total=Sum('uv_count'))['total'] or 0
-            except Exception:
-                # UVDetail table may not exist yet due to pending migrations
-                uv_achieved = 0
-
-            # Get weekly targets for selected week
-            team_target = WeeklyTarget.objects.filter(
-                team=team, week_number=week_number, year=year
-            ).first()
-
-            # Check if requester can edit this team
-            can_edit = False
-            if team.created_by:
-                can_edit = ir.can_view_ir(team.created_by)
-
-            # Check if IR is a member
-            is_member = any(m.ir_id == ir.ir_id for m in members)
+            team_target = target_map.get(team.id)
+            can_edit = bool(team.created_by and ir.can_view_ir(team.created_by))
+            is_member = any(m.ir_id == ir.ir_id for m in team_raw_members[team.id])
 
             teams_data.append({
                 "team_id": team.id,
                 "team_name": team.name,
                 "created_by_id": team.created_by.ir_id if team.created_by else None,
                 "created_by_name": team.created_by.ir_name if team.created_by else None,
-                "member_count": len(member_irs),
+                "member_count": len(member_ids),
                 "is_member": is_member,
                 "can_edit": can_edit,
                 "targets": {

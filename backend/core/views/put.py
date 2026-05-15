@@ -1097,3 +1097,65 @@ class UpdateUVCount(APIView):
                 {"detail": "Internal server error"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+# ---------------------------------------------------
+# ADJUST IR COUNTERS (hidden feature: LDC+ direct edit)
+# ---------------------------------------------------
+class AdjustIrCounters(APIView):
+    """
+    Directly set info_count, plan_count, uv_count, dr_count, name_list
+    on an IR record. Restricted to LDC and above acting on their own
+    downlines (or self). Intended as a correction tool when individual
+    detail records are missing.
+    """
+    def put(self, request, ir_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        if not requester_ir_id:
+            return Response({"detail": "requester_ir_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            requester = Ir.objects.get(ir_id=requester_ir_id)
+            target = Ir.objects.get(ir_id=ir_id)
+        except Ir.DoesNotExist:
+            return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Only LDC and above can use this
+        if requester.ir_access_level > AccessLevel.LDC:
+            return Response({"detail": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
+
+        # LDC can only adjust for themselves or their own team members
+        if requester.ir_access_level == AccessLevel.LDC and requester.ir_id != target.ir_id:
+            if not requester._is_member_of_own_team(target):
+                return Response({"detail": "Not authorized to adjust counts for this IR"}, status=status.HTTP_403_FORBIDDEN)
+
+        ALLOWED = ('info_count', 'plan_count', 'uv_count', 'dr_count', 'name_list')
+        updates = {}
+        for field in ALLOWED:
+            if field in request.data:
+                try:
+                    val = request.data[field]
+                    if field == 'uv_count':
+                        updates[field] = max(0.0, float(val))
+                    else:
+                        updates[field] = max(0, int(val))
+                except (TypeError, ValueError):
+                    return Response({"detail": f"Invalid value for {field}"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not updates:
+            return Response({"detail": "No valid fields provided"}, status=status.HTTP_400_BAD_REQUEST)
+
+        Ir.objects.filter(ir_id=ir_id).update(**updates)
+        target.refresh_from_db()
+
+        return Response({
+            "message": "Counts adjusted successfully",
+            "ir_id": target.ir_id,
+            "ir_name": target.ir_name,
+            "info_count": target.info_count,
+            "plan_count": target.plan_count,
+            "uv_count": float(target.uv_count),
+            "dr_count": target.dr_count,
+            "name_list": target.name_list,
+        }, status=status.HTTP_200_OK)
+

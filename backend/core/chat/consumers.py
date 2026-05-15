@@ -71,6 +71,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self._handle_pin_message(payload)
         elif event_type == "unpin_message":
             await self._handle_unpin_message(payload)
+        elif event_type == "buzz":
+            await self._handle_buzz()
+        elif event_type == "ping":
+            await self.send(text_data=json.dumps({"type": "pong"}))
         else:
             await self._send_error("Unsupported event type")
 
@@ -318,6 +322,24 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "type": "reaction_updated",
             "message_id": event["message_id"],
             "reactions": event["reactions"],
+        }))
+
+    async def _handle_buzz(self):
+        """Broadcast an ephemeral buzz event to all room members — no DB record created."""
+        await self.channel_layer.group_send(
+            self.group_name,
+            {
+                "type": "buzz_received",
+                "sender_ir_id": self.user_ir.ir_id,
+                "sender_name": self.user_ir.ir_name,
+            },
+        )
+
+    async def buzz_received(self, event):
+        await self.send(text_data=json.dumps({
+            "type": "buzz_received",
+            "sender_ir_id": event["sender_ir_id"],
+            "sender_name": event["sender_name"],
         }))
 
     async def _send_error(self, detail):
