@@ -741,6 +741,7 @@ class AddInfoDetail(APIView):
                     info_type=item.get("info_type", InfoType.FRESH),
                     comments=item.get("comments"),
                     info_name=item["info_name"],
+                    monitored_by=item.get("monitored_by", "Self"),
                 )
                 created_ids.append(info.id)
 

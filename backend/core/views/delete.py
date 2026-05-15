@@ -1,7 +1,6 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from core.models import Ir
 from django.shortcuts import get_object_or_404
 from django.db import transaction
 import logging
@@ -9,6 +8,7 @@ import logging
 from core.models import (
     IrId,
     Ir,
+    AccessLevel,
     Team,
     TeamMember,
     InfoDetail,
@@ -198,13 +198,18 @@ class DeleteInfoDetail(APIView):
     """
     def delete(self, request, info_id):
         info = get_object_or_404(InfoDetail, id=info_id)
-        
+
         # Role-based check if requester provided
         requester_ir_id = request.query_params.get("requester_ir_id")
         if requester_ir_id:
             try:
                 requester = Ir.objects.get(ir_id=requester_ir_id)
-                # Requester must be able to add data for this IR (same permissions for delete)
+                # LDC can only delete their own info details
+                if requester.ir_access_level == AccessLevel.LDC and info.ir.ir_id != requester.ir_id:
+                    return Response(
+                        {"detail": "LDC cannot delete info details belonging to other IRs"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
                 if not requester.can_add_data_for_ir(info.ir):
                     return Response(
                         {"detail": "Not authorized to delete this info detail"},
@@ -234,13 +239,18 @@ class DeletePlanDetail(APIView):
     def delete(self, request, plan_id):
         try:
             plan = get_object_or_404(PlanDetail, id=plan_id)
-            
+
             # Role-based check if requester provided
             requester_ir_id = request.query_params.get("requester_ir_id")
             if requester_ir_id:
                 try:
                     requester = Ir.objects.get(ir_id=requester_ir_id)
-                    # Requester must be able to add data for this IR (same permissions for delete)
+                    # LDC can only delete their own plan details
+                    if requester.ir_access_level == AccessLevel.LDC and plan.ir.ir_id != requester.ir_id:
+                        return Response(
+                            {"detail": "LDC cannot delete plan details belonging to other IRs"},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
                     if not requester.can_add_data_for_ir(plan.ir):
                         return Response(
                             {"detail": "Not authorized to delete this plan detail"},

@@ -765,6 +765,7 @@ class InfoDetail(models.Model):
     info_type = models.CharField(max_length=10, choices=InfoType.choices, default=InfoType.FRESH, null=True, blank=True)
     comments = models.TextField(null=True, blank=True)
     info_name = models.CharField(max_length=100)
+    monitored_by = models.CharField(max_length=100, default='Self', null=True, blank=True)
 
 
 class PlanDetail(models.Model):

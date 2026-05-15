@@ -100,15 +100,32 @@ class AutoFetchPipelineStats(APIView):
 
         stats, _ = PipelineStats.objects.get_or_create(ir=target_ir)
 
-        stats.total_name_list = target_ir.name_list
-        stats.infos_done = InfoDetail.objects.filter(ir=target_ir).count()
-        stats.showed_up = PlanDetail.objects.filter(ir=target_ir).count()
-        stats.signed_up_dr = target_ir.dr_count
+        # add_mode=True: add DB-computed values on top of existing (manually edited) values
+        add_mode = request.data.get('add_mode', False)
+
+        db_name_list = target_ir.name_list
+        db_infos_done = InfoDetail.objects.filter(ir=target_ir).count()
+        db_showed_up = PlanDetail.objects.filter(ir=target_ir).count()
+        db_signed_up_dr = target_ir.dr_count
+
+        if add_mode:
+            stats.total_name_list = stats.total_name_list + db_name_list
+            stats.infos_done = stats.infos_done + db_infos_done
+            stats.showed_up = stats.showed_up + db_showed_up
+            stats.signed_up_dr = stats.signed_up_dr + db_signed_up_dr
+            message = 'Sync complete. DB values added to your manual entries.'
+        else:
+            stats.total_name_list = db_name_list
+            stats.infos_done = db_infos_done
+            stats.showed_up = db_showed_up
+            stats.signed_up_dr = db_signed_up_dr
+            message = 'Auto-fetch complete. Synced: Total Name List, Infos Done, Showed Up, Signed Up (DR).'
+
         stats.last_sync = timezone.now()
         stats.save()
 
         return Response({
-            'message': 'Auto-fetch complete. Synced: Total Name List, Infos Done, Showed Up, Signed Up (DR).',
+            'message': message,
             'synced_fields': ['total_name_list', 'infos_done', 'showed_up', 'signed_up_dr'],
             **_serialize(stats, target_ir),
         })
