@@ -137,6 +137,7 @@ def create_notifications(
     message: str,
     notification_type: str,
     related_object_id: str | None = None,
+    metadata: dict | None = None,
 ) -> None:
     notifications_to_create = []
     for recipient in recipients:
@@ -147,6 +148,7 @@ def create_notifications(
                 message=message,
                 notification_type=notification_type,
                 related_object_id=related_object_id,
+                metadata=metadata,
             )
         )
 

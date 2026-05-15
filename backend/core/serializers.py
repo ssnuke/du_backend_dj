@@ -138,5 +138,5 @@ class WeeklyTargetSerializer(serializers.ModelSerializer):
 class NotificationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Notification
-        fields = ['id', 'recipient', 'title', 'message', 'notification_type', 'is_read', 'related_object_id', 'created_at']
+        fields = ['id', 'recipient', 'title', 'message', 'notification_type', 'is_read', 'related_object_id', 'metadata', 'created_at']
         read_only_fields = ['created_at']

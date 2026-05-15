@@ -935,7 +935,9 @@ class Notification(models.Model):
     
     # Optional: Link to the related object (e.g., the UV ID or New IR ID) for navigation
     related_object_id = models.CharField(max_length=50, null=True, blank=True)
-    
+    # Navigation context: {"ir_id": "...", "ir_name": "...", "team_id": 5, "team_name": "..."}
+    metadata = models.JSONField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:

@@ -25,6 +25,7 @@ def notify_uv_saved(sender, instance, created, **kwargs):
         message=message,
         notification_type=notification_type,
         related_object_id=str(uv_record.id),
+        metadata={"ir_id": added_by_ir.ir_id, "ir_name": added_by_ir.ir_name},
     )
 
 
@@ -35,13 +36,14 @@ def notify_uv_deleted(sender, instance, **kwargs):
     recipients = get_notification_recipients(added_by_ir)
     title = "UV Record Deleted"
     message = f"A UV record for prospect '{uv_record.prospect_name}' was deleted for {added_by_ir.ir_name} ({added_by_ir.ir_id})."
-    
+
     create_notifications(
         recipients=recipients,
         title=title,
         message=message,
         notification_type=Notification.Type.UV_DELETED,
         related_object_id=str(uv_record.id),
+        metadata={"ir_id": added_by_ir.ir_id, "ir_name": added_by_ir.ir_name},
     )
 
 
@@ -66,6 +68,7 @@ def notify_plan_saved(sender, instance, created, **kwargs):
         message=message,
         notification_type=notification_type,
         related_object_id=str(plan.id),
+        metadata={"ir_id": ir.ir_id, "ir_name": ir.ir_name},
     )
 
 
@@ -76,13 +79,14 @@ def notify_plan_deleted(sender, instance, **kwargs):
     recipients = get_notification_recipients(ir)
     title = "Plan Deleted"
     message = f"Plan '{plan.plan_name or 'Plan'}' was deleted for {ir.ir_name} ({ir.ir_id})."
-    
+
     create_notifications(
         recipients=recipients,
         title=title,
         message=message,
         notification_type=Notification.Type.PLAN_DELETED,
         related_object_id=str(plan.id),
+        metadata={"ir_id": ir.ir_id, "ir_name": ir.ir_name},
     )
 
 
@@ -145,6 +149,7 @@ def notify_ir_saved(sender, instance, created, **kwargs):
         message=message,
         notification_type=Notification.Type.NEW_IR,
         related_object_id=str(new_ir.ir_id),
+        metadata={"ir_id": new_ir.ir_id, "ir_name": new_ir.ir_name},
     )
 
 
@@ -153,8 +158,7 @@ def notify_ir_deleted(sender, instance, **kwargs):
     ir = instance
     title = "IR Deleted"
     message = f"IR deleted: {ir.ir_name} ({ir.ir_id})."
-    
-    # Try to notify parent since IR is being deleted
+
     if ir.parent_ir:
         recipients = get_notification_recipients(ir.parent_ir)
     else:
@@ -166,6 +170,7 @@ def notify_ir_deleted(sender, instance, **kwargs):
         message=message,
         notification_type=Notification.Type.IR_DELETED,
         related_object_id=str(ir.ir_id),
+        metadata=None,  # IR is gone — no valid navigation target
     )
 
 
@@ -191,6 +196,7 @@ def notify_member_saved(sender, instance, created, **kwargs):
         message=message,
         notification_type=notification_type,
         related_object_id=str(team_member.id),
+        metadata={"team_id": team.id, "team_name": team.name, "ir_id": ir.ir_id, "ir_name": ir.ir_name},
     )
 
 
@@ -202,11 +208,12 @@ def notify_member_deleted(sender, instance, **kwargs):
     recipients = get_notification_recipients(ir)
     title = "Team Member Removed"
     message = f"{ir.ir_name} ({ir.ir_id}) was removed from team '{team.name}'."
-    
+
     create_notifications(
         recipients=recipients,
         title=title,
         message=message,
         notification_type=Notification.Type.MEMBER_DELETED,
         related_object_id=str(team_member.id),
+        metadata={"team_id": team.id, "team_name": team.name, "ir_id": ir.ir_id, "ir_name": ir.ir_name},
     )
