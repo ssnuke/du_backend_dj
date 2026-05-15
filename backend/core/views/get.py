@@ -146,7 +146,7 @@ class GetAllTeams(APIView):
             teams = Team.objects.all()
         
         # Prefetch all memberships + IRs in a single query instead of N queries
-        teams = list(teams.prefetch_related('memberships__ir').select_related('created_by'))
+        teams = list(teams.prefetch_related('teammember_set__ir').select_related('created_by'))
 
         _, _, week_start, week_end = get_week_info_friday_to_friday()
 
@@ -154,7 +154,7 @@ class GetAllTeams(APIView):
         team_member_ids_map = {}  # team_id -> [ir_id, ...]
         all_member_ir_ids = set()
         for team in teams:
-            ids = [m.ir.ir_id for m in team.memberships.all()]
+            ids = [m.ir.ir_id for m in team.teammember_set.all()]
             team_member_ids_map[team.id] = ids
             all_member_ir_ids.update(ids)
 
@@ -172,7 +172,7 @@ class GetAllTeams(APIView):
 
         result = []
         for team in teams:
-            members = list(team.memberships.all())  # from prefetch cache, no DB hit
+            members = list(team.teammember_set.all())  # from prefetch cache, no DB hit
             info_total = sum(m.ir.info_count or 0 for m in members)
             plan_total = sum(m.ir.plan_count or 0 for m in members)
             uv_total = sum(float(uv_by_ir.get(ir_id, 0)) for ir_id in team_member_ids_map[team.id])
@@ -1320,7 +1320,7 @@ class GetVisibleTeams(APIView):
         # ── Batch all per-team queries into bulk lookups ──────────────────────
         viewable_teams = list(
             viewable_teams.select_related('created_by')
-                          .prefetch_related('memberships__ir')
+                          .prefetch_related('teammember_set__ir')
         )
         team_ids = [t.id for t in viewable_teams]
 
@@ -1329,7 +1329,7 @@ class GetVisibleTeams(APIView):
         team_raw_members = {}  # team_id -> [TeamMember] (unfiltered, for is_member check)
         all_member_ids = set()
         for team in viewable_teams:
-            all_ms = list(team.memberships.all())
+            all_ms = list(team.teammember_set.all())
             team_raw_members[team.id] = all_ms
             filtered = [
                 m for m in all_ms
