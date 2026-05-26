@@ -7,9 +7,14 @@ from core.models import Ir, InfoDetail, PlanDetail, PipelineStats
 
 PIPELINE_FIELDS = [
     'total_name_list',
+    'new_contacts',
     'numbers_have',
+    'numbers_extracted',
     'numbers_dont_have',
     'infos_done',
+    'infos_a',
+    'infos_b',
+    'infos_c',
     'infos_not_done',
     'invites_gone',
     'invites_not_gone',

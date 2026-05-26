@@ -614,13 +614,20 @@ class GetPocketTargets(APIView):
                 )
             
             pocket = get_object_or_404(Pocket, id=pocket_id)
-            
+
             # Permission check: Can user view the team?
             if not requester.can_view_team(pocket.team):
-                return Response(
-                    {"error": "Not authorized to view this pocket"},
-                    status=status.HTTP_403_FORBIDDEN
-                )
+                # Allow GC/IR if they are the pocket head
+                is_pocket_head = PocketMember.objects.filter(
+                    pocket=pocket,
+                    ir=requester,
+                    is_head=True
+                ).exists()
+                if not is_pocket_head:
+                    return Response(
+                        {"error": "Not authorized to view this pocket"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
             
             targets = WeeklyTarget.objects.filter(
                 pocket=pocket,

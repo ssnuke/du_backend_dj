@@ -952,13 +952,18 @@ class PipelineStats(models.Model):
 
     # Level 1: Name list
     total_name_list = models.IntegerField(default=0)
+    new_contacts = models.IntegerField(default=0)       # New contacts added — feeds into total_name_list
 
     # Level 2: Numbers breakdown
     numbers_have = models.IntegerField(default=0)
+    numbers_extracted = models.IntegerField(default=0)  # Numbers extracted from don't-have → have
     numbers_dont_have = models.IntegerField(default=0)
 
     # Level 3: Info status (under numbers_have)
     infos_done = models.IntegerField(default=0)
+    infos_a = models.IntegerField(default=0)            # Info A responses (breakdown of infos_done)
+    infos_b = models.IntegerField(default=0)            # Info B responses (breakdown of infos_done)
+    infos_c = models.IntegerField(default=0)            # Info C responses (breakdown of infos_done)
     infos_not_done = models.IntegerField(default=0)
 
     # Level 4: Invite status (under infos_done)
