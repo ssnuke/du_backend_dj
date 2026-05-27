@@ -107,6 +107,10 @@ from core.views.pipeline import (
     AutoFetchPipelineStats,
     GetViewableIRsForPipeline,
 )
+from core.views.learn import (
+    GetLearnVideos,
+    GetLearnVideoStream,
+)
 
 # Pocket views
 from core.views.pockets import (
@@ -243,4 +247,8 @@ urlpatterns = [
     path("chat_rooms/<int:room_id>/messages/<int:message_id>/reactions/", ChatMessageReactionView.as_view()),
     path("chat_candidates/", ChatCandidates.as_view()),
     path("ir/<str:ir_id>/display_name/", IrDisplayNameUpdate.as_view()),
+
+    # ============ LEARN ENDPOINTS ============
+    path("learn/<str:ir_id>/videos/", GetLearnVideos.as_view()),
+    path("learn/<str:ir_id>/videos/<int:video_id>/stream/", GetLearnVideoStream.as_view()),
 ]

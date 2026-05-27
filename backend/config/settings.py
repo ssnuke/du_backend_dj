@@ -200,6 +200,12 @@ VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
 VAPID_SUBJECT = os.getenv("VAPID_SUBJECT", "mailto:admin@example.com")
 
+# Bunny.net Stream (video delivery)
+BUNNY_STREAM_API_KEY = os.getenv("BUNNY_STREAM_API_KEY", "")
+BUNNY_STREAM_LIBRARY_ID = os.getenv("BUNNY_STREAM_LIBRARY_ID", "")
+BUNNY_STREAM_CDN_HOSTNAME = os.getenv("BUNNY_STREAM_CDN_HOSTNAME", "")  # e.g. vz-abc123.b-cdn.net
+BUNNY_STREAM_TOKEN_KEY = os.getenv("BUNNY_STREAM_TOKEN_KEY", "")        # token auth key from Bunny dashboard
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/6.0/ref/settings/#default-auto-field
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

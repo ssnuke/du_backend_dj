@@ -990,6 +990,28 @@ class PipelineStats(models.Model):
         verbose_name_plural = "Pipeline Stats"
 
 
+class LearnVideo(models.Model):
+    """A training/learning video hosted on Bunny.net Stream."""
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    bunny_video_id = models.CharField(max_length=100, unique=True)
+    bunny_library_id = models.CharField(max_length=100)
+    thumbnail_url = models.URLField(blank=True)
+    duration_seconds = models.IntegerField(default=0)
+    order = models.IntegerField(default=0, help_text='Sort order in the list')
+    is_published = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order', 'created_at']
+        verbose_name = "Learn Video"
+        verbose_name_plural = "Learn Videos"
+
+    def __str__(self):
+        return self.title
+
+
 class PushSubscription(models.Model):
     ir = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name='push_subscriptions')
     endpoint = models.TextField()
