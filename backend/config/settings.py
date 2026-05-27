@@ -71,6 +71,11 @@ CORS_ALLOWED_ORIGINS = [
     "https://yourdomain.com",  # Your GoDaddy domain when you set it up
 ]
 
+# Required for Django admin (and any POST) when accessed via HTTPS on Render
+CSRF_TRUSTED_ORIGINS = [
+    "https://du-backend-dj.onrender.com",
+]
+
 CORS_ALLOW_METHODS = [
     'DELETE',
     'GET',
