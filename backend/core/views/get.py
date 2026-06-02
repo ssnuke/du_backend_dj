@@ -1446,16 +1446,24 @@ class GetDownlineData(APIView):
         # Get teams created by viewable IRs
         viewable_teams = Team.objects.filter(created_by__in=viewable_irs)
 
-        # Role-specific system count:
-        # CTC → total active IRs in the database (their entire network)
-        # LDC → members in teams they created/manage (excluding themselves)
+        # Role-specific system count (no duplicates in any case):
+        # ADMIN → every active IR in the database
+        # CTC   → everyone in their downline (subtree below them)
+        # LDC   → everyone in the teams they are a member of (excl. themselves)
         # Others → generic viewable count
-        if ir.ir_access_level == AccessLevel.CTC:
+        if ir.ir_access_level == AccessLevel.ADMIN:
             system_count = Ir.objects.filter(status=True).count()
+        elif ir.ir_access_level == AccessLevel.CTC:
+            system_count = ir.get_all_downlines().count()
         elif ir.ir_access_level == AccessLevel.LDC:
+            ldc_team_ids = (
+                TeamMember.objects
+                .filter(ir=ir)
+                .values_list('team_id', flat=True)
+            )
             system_count = (
                 TeamMember.objects
-                .filter(team__created_by=ir)
+                .filter(team_id__in=ldc_team_ids)
                 .exclude(ir=ir)
                 .values('ir_id')
                 .distinct()
