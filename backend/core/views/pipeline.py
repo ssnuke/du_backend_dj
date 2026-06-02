@@ -108,7 +108,8 @@ class AutoFetchPipelineStats(APIView):
         # add_mode=True: add DB-computed values on top of existing (manually edited) values
         add_mode = request.data.get('add_mode', False)
 
-        db_name_list   = target_ir.name_list
+        # total_name_list is manual-only — never overwrite it from Ir.name_list
+        # (Ir.name_list is not maintained and is always 0)
         db_infos_done  = InfoDetail.objects.filter(ir=target_ir).count()
         db_infos_a     = InfoDetail.objects.filter(ir=target_ir, response='A').count()
         db_infos_b     = InfoDetail.objects.filter(ir=target_ir, response='B').count()
@@ -117,7 +118,6 @@ class AutoFetchPipelineStats(APIView):
         db_signed_up_dr = target_ir.dr_count
 
         if add_mode:
-            stats.total_name_list = stats.total_name_list + db_name_list
             stats.infos_done  = stats.infos_done  + db_infos_done
             stats.infos_a     = stats.infos_a     + db_infos_a
             stats.infos_b     = stats.infos_b     + db_infos_b
@@ -126,21 +126,20 @@ class AutoFetchPipelineStats(APIView):
             stats.signed_up_dr = stats.signed_up_dr + db_signed_up_dr
             message = 'Sync complete. DB values added to your manual entries.'
         else:
-            stats.total_name_list = db_name_list
             stats.infos_done  = db_infos_done
             stats.infos_a     = db_infos_a
             stats.infos_b     = db_infos_b
             stats.infos_c     = db_infos_c
             stats.showed_up   = db_showed_up
             stats.signed_up_dr = db_signed_up_dr
-            message = 'Auto-fetch complete. Synced: Total Name List, Infos Done (A/B/C), Showed Up, Signed Up (DR).'
+            message = 'Auto-fetch complete. Synced: Infos Done (A/B/C), Showed Up, Signed Up (DR).'
 
         stats.last_sync = timezone.now()
         stats.save()
 
         return Response({
             'message': message,
-            'synced_fields': ['total_name_list', 'infos_done', 'infos_a', 'infos_b', 'infos_c', 'showed_up', 'signed_up_dr'],
+            'synced_fields': ['infos_done', 'infos_a', 'infos_b', 'infos_c', 'showed_up', 'signed_up_dr'],
             **_serialize(stats, target_ir),
         })
 
