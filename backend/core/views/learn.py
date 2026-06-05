@@ -33,13 +33,21 @@ def _generate_bunny_token(video_id: str, expires_in_seconds: int = 7200) -> tupl
     return token_b64, expiry
 
 
+def _bunny_thumbnail_url(video: LearnVideo) -> str:
+    """Return the Bunny Stream auto-generated thumbnail URL, falling back to any manually set URL."""
+    if video.thumbnail_url:
+        return video.thumbnail_url
+    cdn = settings.BUNNY_STREAM_CDN_HOSTNAME
+    return f"https://{cdn}/{video.bunny_video_id}/thumbnail.jpg"
+
+
 def _video_list_item(video: LearnVideo) -> dict:
     """Serialise a video for the list view (no stream URL)."""
     return {
         "id": video.id,
         "title": video.title,
         "description": video.description,
-        "thumbnail_url": video.thumbnail_url,
+        "thumbnail_url": _bunny_thumbnail_url(video),
         "duration_seconds": video.duration_seconds,
         "order": video.order,
     }
