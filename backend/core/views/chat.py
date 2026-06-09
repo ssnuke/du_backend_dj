@@ -515,6 +515,19 @@ class ChatReadReceipts(APIView):
         )
 
 
+def _get_upline_irs(requester, allowed_levels):
+    """Walk up the parent_ir chain and return active Ir objects at the given access levels."""
+    upline_ids = []
+    current = requester.parent_ir
+    seen = set()
+    while current and current.ir_id not in seen:
+        seen.add(current.ir_id)
+        if current.ir_access_level in allowed_levels:
+            upline_ids.append(current.ir_id)
+        current = current.parent_ir
+    return Ir.objects.filter(ir_id__in=upline_ids, status=True)
+
+
 class ChatCandidates(APIView):
     def get(self, request):
         requester_ir_id = request.GET.get("requester_ir_id")
@@ -534,7 +547,18 @@ class ChatCandidates(APIView):
         if not requester:
             return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
 
-        candidates_qs = requester.get_viewable_irs().filter(status=True).exclude(ir_id=requester.ir_id)
+        base_qs = requester.get_viewable_irs().filter(status=True).exclude(ir_id=requester.ir_id)
+
+        # LS can also message their upline LDCs and CTCs
+        # LDC can also message their upline CTCs and Admin
+        if requester.ir_access_level == AccessLevel.LS:
+            upline_qs = _get_upline_irs(requester, [AccessLevel.LDC, AccessLevel.CTC])
+            candidates_qs = (base_qs | upline_qs).distinct()
+        elif requester.ir_access_level == AccessLevel.LDC:
+            upline_qs = _get_upline_irs(requester, [AccessLevel.CTC, AccessLevel.ADMIN])
+            candidates_qs = (base_qs | upline_qs).distinct()
+        else:
+            candidates_qs = base_qs
 
         if query:
             candidates_qs = candidates_qs.filter(Q(ir_name__icontains=query) | Q(ir_id__icontains=query))
