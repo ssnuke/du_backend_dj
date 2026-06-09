@@ -773,14 +773,25 @@ class PlanDetail(models.Model):
         ('closing_pending', 'Closing Pending'),
         ('closed', 'Closed'),
         ('rejected', 'Rejected'),
+        ('kiv', 'KIV'),
         ('uvs_on_counter', "UV's on Counter"),
     ]
-    
+
+    REJECTION_REASON_CHOICES = [
+        ('no_money', 'No Money'),
+        ('no_mindset', 'No Mindset'),
+        ('timing', 'Timing'),
+        ('other', 'Other'),
+    ]
+
     ir = models.ForeignKey(Ir, on_delete=models.CASCADE)
     plan_date = models.DateTimeField(default=timezone.now)
     plan_name = models.CharField(max_length=255, null=True, blank=True)
     comments = models.TextField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='closing_pending', null=True, blank=True)
+    rejection_reason = models.CharField(max_length=20, choices=REJECTION_REASON_CHOICES, null=True, blank=True)
+    follow_up_date = models.DateField(null=True, blank=True)
+    uv_value = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
 
 
 class UVDetail(models.Model):

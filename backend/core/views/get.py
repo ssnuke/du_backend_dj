@@ -599,10 +599,23 @@ class GetPlanDetails(APIView):
         
         try:
             status_filter = request.GET.get("status")
+            overdue_followups = request.GET.get("overdue_followups")
+
+            # Overdue follow-ups mode: ignore week filter, return plans with past follow_up_date
+            if overdue_followups == "true":
+                ist = pytz.timezone('Asia/Kolkata')
+                today = datetime.now(ist).date()
+                qs = PlanDetail.objects.filter(
+                    ir_id=ir_id,
+                    follow_up_date__lte=today,
+                    status__in=['closing_pending', 'kiv'],
+                ).order_by('follow_up_date')
+                return Response(PlanDetailSerializer(qs, many=True).data)
+
             # Check for week/year parameters first
             week_param = request.GET.get("week")
             year_param = request.GET.get("year")
-            
+
             if week_param and year_param:
                 try:
                     ist = pytz.timezone('Asia/Kolkata')
@@ -620,7 +633,7 @@ class GetPlanDetails(APIView):
             else:
                 from_date = request.GET.get("from_date")
                 to_date = request.GET.get("to_date")
-                
+
                 qs = PlanDetail.objects.filter(ir_id=ir_id)
                 if from_date:
                     qs = qs.filter(plan_date__date__gte=parse_date(from_date))

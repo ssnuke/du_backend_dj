@@ -837,6 +837,9 @@ class AddPlanDetail(APIView):
                     plan_name=item.get("plan_name"),
                     comments=item.get("comments"),
                     status=item.get("status") or "closing_pending",
+                    rejection_reason=item.get("rejection_reason") or None,
+                    follow_up_date=item.get("follow_up_date") or None,
+                    uv_value=item.get("uv_value") or None,
                 )
                 created_ids.append(plan.id)
                 created_plans.append(plan)
