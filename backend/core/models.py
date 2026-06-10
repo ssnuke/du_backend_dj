@@ -204,33 +204,54 @@ class Ir(models.Model):
         """Check if this IR can create teams"""
         return self.ir_access_level in [AccessLevel.ADMIN, AccessLevel.CTC, AccessLevel.LDC]
 
+    def _is_upline_at_levels(self, target_ir, allowed_levels):
+        """Check if target_ir is a direct upline ancestor at one of the given access levels."""
+        current = self.parent_ir
+        seen = set()
+        while current and current.ir_id not in seen:
+            seen.add(current.ir_id)
+            if current.ir_id == target_ir.ir_id:
+                return current.ir_access_level in allowed_levels
+            current = current.parent_ir
+        return False
+
     def can_view_ir(self, target_ir):
         """
         Check if this IR can view target_ir's data based on role
         - ADMIN: Can view everyone
         - CTC: Can view subtree
-        - LDC: Can view self + subtree
-        - LS: Can view self + team members
+        - LDC: Can view self + subtree + upline CTC/Admin
+        - LS: Can view self + team members + upline LDC/CTC
         - GC/IR: Can view only self
         """
         # Can always view own data
         if self.ir_id == target_ir.ir_id:
             return True
-        
+
         # ADMIN can view everyone
         if self.ir_access_level == AccessLevel.ADMIN:
             return True
-        
-        # CTC and LDC can view their subtree + team members
-        if self.ir_access_level in [AccessLevel.CTC, AccessLevel.LDC]:
+
+        # CTC can view their subtree + team members
+        if self.ir_access_level == AccessLevel.CTC:
             if self.is_in_subtree(target_ir):
                 return True
             return self._is_in_same_team(target_ir)
-        
-        # LS can view team members
+
+        # LDC can view subtree + team members + upline CTC/Admin
+        if self.ir_access_level == AccessLevel.LDC:
+            if self.is_in_subtree(target_ir):
+                return True
+            if self._is_in_same_team(target_ir):
+                return True
+            return self._is_upline_at_levels(target_ir, [AccessLevel.CTC, AccessLevel.ADMIN])
+
+        # LS can view team members + upline LDC/CTC
         if self.ir_access_level == AccessLevel.LS:
-            return self._is_in_same_team(target_ir)
-        
+            if self._is_in_same_team(target_ir):
+                return True
+            return self._is_upline_at_levels(target_ir, [AccessLevel.LDC, AccessLevel.CTC])
+
         # GC/IR can only view themselves
         return False
 
