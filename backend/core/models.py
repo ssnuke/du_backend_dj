@@ -1060,3 +1060,15 @@ class PushSubscription(models.Model):
 
     def __str__(self):
         return f"{self.ir.ir_id} -> {self.endpoint[:35]}"
+
+
+class ChatTabsConfig(models.Model):
+    ir = models.OneToOneField(Ir, on_delete=models.CASCADE, related_name='chat_tabs_config')
+    config = models.JSONField(default=dict)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["ir"])]
+
+    def __str__(self):
+        return f"ChatTabsConfig({self.ir.ir_id})"

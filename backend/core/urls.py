@@ -99,6 +99,7 @@ from core.views.chat import (
     ChatRoomPin,
     ChatRoomUnpin,
     IrDisplayNameUpdate,
+    ChatTabsConfigView,
 )
 
 from core.views.pipeline import (
@@ -246,6 +247,7 @@ urlpatterns = [
     path("chat_rooms/<int:room_id>/messages/<int:message_id>/receipts/", ChatMessageReceiptDetail.as_view()),
     path("chat_rooms/<int:room_id>/messages/<int:message_id>/reactions/", ChatMessageReactionView.as_view()),
     path("chat_candidates/", ChatCandidates.as_view()),
+    path("chat_tabs_config/", ChatTabsConfigView.as_view()),
     path("ir/<str:ir_id>/display_name/", IrDisplayNameUpdate.as_view()),
 
     # ============ LEARN ENDPOINTS ============

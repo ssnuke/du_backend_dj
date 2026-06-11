@@ -24,6 +24,7 @@ from core.models import (
     ChatRoomMember,
     ChatRoomType,
     ChatMessageType,
+    ChatTabsConfig,
     Ir,
 )
 
@@ -1015,3 +1016,29 @@ class IrDisplayNameUpdate(APIView):
         requester.display_name = display_name
         requester.save(update_fields=["display_name"])
         return Response({"display_name": requester.display_name, "chat_name": requester.chat_name})
+
+
+class ChatTabsConfigView(APIView):
+    """Per-user chat tab configuration — custom tabs, assignments, order, hidden defaults."""
+
+    def get(self, request):
+        ir_id = request.GET.get("ir_id")
+        ir = _get_ir(ir_id)
+        if not ir:
+            return Response({"detail": "ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            cfg = ir.chat_tabs_config
+            return Response({"config": cfg.config})
+        except ChatTabsConfig.DoesNotExist:
+            return Response({"config": {}})
+
+    def put(self, request):
+        ir_id = request.data.get("ir_id")
+        config = request.data.get("config")
+        if not isinstance(config, dict):
+            return Response({"detail": "config must be an object"}, status=status.HTTP_400_BAD_REQUEST)
+        ir = _get_ir(ir_id)
+        if not ir:
+            return Response({"detail": "ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+        ChatTabsConfig.objects.update_or_create(ir=ir, defaults={"config": config})
+        return Response({"config": config})
