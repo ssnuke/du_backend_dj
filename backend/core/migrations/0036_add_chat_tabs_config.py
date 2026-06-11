@@ -17,17 +17,8 @@ class Migration(migrations.Migration):
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('config', models.JSONField(default=dict)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
+                ('ir', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, related_name='chat_tabs_config', to='core.ir')),
             ],
-        ),
-        migrations.RenameIndex(
-            model_name='chatmessagereaction',
-            new_name='core_chatme_message_d4ca49_idx',
-            old_name='core_chatme_message_emoji_idx',
-        ),
-        migrations.AddField(
-            model_name='chattabsconfig',
-            name='ir',
-            field=models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, related_name='chat_tabs_config', to='core.ir'),
         ),
         migrations.AddIndex(
             model_name='chattabsconfig',
