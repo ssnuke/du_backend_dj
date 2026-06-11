@@ -558,8 +558,9 @@ class ChatCandidates(APIView):
             # Use subtree directly rather than get_viewable_irs() to avoid queryset
             # union chaining issues; then add upline contacts.
             downline_qs = requester.get_subtree_irs().filter(status=True).exclude(ir_id=requester.ir_id)
-            upline_qs = _get_upline_irs(requester, [AccessLevel.CTC, AccessLevel.ADMIN])
-            candidates_qs = (downline_qs | upline_qs).distinct()
+            upline_qs = _get_upline_irs(requester, [AccessLevel.CTC])
+            admin_qs = Ir.objects.filter(ir_access_level=AccessLevel.ADMIN, status=True)
+            candidates_qs = (downline_qs | upline_qs | admin_qs).distinct()
         else:
             candidates_qs = base_qs
 
