@@ -553,7 +553,8 @@ class ChatCandidates(APIView):
         # LDC can also message their upline CTCs and Admin
         if requester.ir_access_level == AccessLevel.LS:
             upline_qs = _get_upline_irs(requester, [AccessLevel.LDC, AccessLevel.CTC])
-            candidates_qs = (base_qs | upline_qs).distinct()
+            admin_qs = Ir.objects.filter(ir_access_level=AccessLevel.ADMIN, status=True)
+            candidates_qs = (base_qs | upline_qs | admin_qs).distinct()
         elif requester.ir_access_level == AccessLevel.LDC:
             # Use subtree directly rather than get_viewable_irs() to avoid queryset
             # union chaining issues; then add upline contacts.
