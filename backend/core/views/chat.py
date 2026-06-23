@@ -563,6 +563,9 @@ class ChatCandidates(APIView):
             upline_qs = _get_upline_irs(requester, [AccessLevel.CTC])
             admin_qs = Ir.objects.filter(ir_access_level=AccessLevel.ADMIN, status=True)
             candidates_qs = (downline_qs | upline_qs | admin_qs).distinct()
+        elif requester.ir_access_level == AccessLevel.CTC:
+            admin_qs = Ir.objects.filter(ir_access_level=AccessLevel.ADMIN, status=True)
+            candidates_qs = (base_qs | admin_qs).distinct()
         else:
             candidates_qs = base_qs
 

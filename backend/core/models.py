@@ -219,7 +219,7 @@ class Ir(models.Model):
         """
         Check if this IR can view target_ir's data based on role
         - ADMIN: Can view everyone
-        - CTC: Can view subtree
+        - CTC: Can view subtree + admins
         - LDC: Can view self + subtree + upline CTC/Admin
         - LS: Can view self + team members + upline LDC/CTC
         - GC/IR: Can view only self
@@ -232,8 +232,10 @@ class Ir(models.Model):
         if self.ir_access_level == AccessLevel.ADMIN:
             return True
 
-        # CTC can view their subtree + team members
+        # CTC can view their subtree + team members + admins
         if self.ir_access_level == AccessLevel.CTC:
+            if target_ir.ir_access_level == AccessLevel.ADMIN:
+                return True
             if self.is_in_subtree(target_ir):
                 return True
             return self._is_in_same_team(target_ir)
