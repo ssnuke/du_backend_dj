@@ -31,11 +31,6 @@ class Migration(migrations.Migration):
                 'ordering': ['order', 'created_at'],
             },
         ),
-        migrations.RenameIndex(
-            model_name='chatmessagereaction',
-            new_name='core_chatme_message_d4ca49_idx',
-            old_name='core_chatme_message_emoji_idx',
-        ),
         migrations.AddField(
             model_name='chatmessage',
             name='forwarded_from',
