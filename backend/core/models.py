@@ -706,7 +706,7 @@ class ChatMessageReaction(models.Model):
     class Meta:
         unique_together = ("message", "ir", "emoji")
         indexes = [
-            models.Index(fields=["message", "emoji"]),
+            models.Index(fields=["message", "emoji"], name="core_chatme_message_emoji_idx"),
         ]
 
 
