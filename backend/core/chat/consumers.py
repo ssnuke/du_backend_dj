@@ -35,6 +35,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self.accept()
 
     async def disconnect(self, close_code):
+        if hasattr(self, 'user_ir') and self.user_ir:
+            await self._update_last_seen(self.user_ir.ir_id)
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive(self, text_data=None, bytes_data=None):
@@ -355,6 +357,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return None
 
     @database_sync_to_async
+    def _update_last_seen(self, ir_id):
+        Ir.objects.filter(ir_id=ir_id).update(last_seen=timezone.now())
+
+    @database_sync_to_async
     def _is_room_member(self, room_id, ir_id):
         return ChatRoomMember.objects.filter(room_id=room_id, ir_id=ir_id).exists()
 
@@ -556,15 +562,23 @@ class ChatConsumer(AsyncWebsocketConsumer):
             else:
                 title = f"{sender_name} · {room.room_name}"
 
-            # Collect FCM tokens for all members except the sender
-            # NOTE: ChatRoomMember.ir_id is the integer FK PK; sender_ir_id is the
-            # string IR identifier (e.g. "IM064623"). Must traverse via ir__ir_id.
+            # Collect FCM tokens for all members except the sender, skipping muted members
             members = ChatRoomMember.objects.filter(
                 room_id=room_id
             ).exclude(ir__ir_id=sender_ir_id).select_related("ir")
 
+            now = timezone.now()
             tokens = []
             for member in members:
+                # Skip muted members (muted_until=None means muted forever)
+                if member.is_muted:
+                    if member.muted_until is None or member.muted_until > now:
+                        continue
+                    # Mute expired — clear it
+                    member.is_muted = False
+                    member.muted_until = None
+                    member.save(update_fields=["is_muted", "muted_until"])
+
                 ir = member.ir
                 if ir.fcm_tokens and isinstance(ir.fcm_tokens, list):
                     valid = [t for t in ir.fcm_tokens if t and isinstance(t, str) and len(t) > 10]

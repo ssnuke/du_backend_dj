@@ -28,6 +28,8 @@ from core.models import (
     Ir,
 )
 
+from datetime import timedelta
+
 
 PAGE_SIZE_DEFAULT = 50
 
@@ -56,6 +58,19 @@ def _serialize_room(room, requester=None):
     if requester:
         unread_count = room.messages.exclude(receipts__reader=requester).exclude(sender=requester).count()
 
+    is_muted = False
+    muted_until = None
+    if requester:
+        membership = ChatRoomMember.objects.filter(room=room, ir=requester).first()
+        if membership:
+            # Auto-expire mutes
+            if membership.is_muted and membership.muted_until and membership.muted_until <= timezone.now():
+                membership.is_muted = False
+                membership.muted_until = None
+                membership.save(update_fields=["is_muted", "muted_until"])
+            is_muted = membership.is_muted
+            muted_until = membership.muted_until
+
     other_member = None
     if room.room_type == ChatRoomType.DIRECT and requester:
         other = ChatRoomMember.objects.filter(room=room).exclude(ir=requester).select_related("ir").first()
@@ -63,6 +78,7 @@ def _serialize_room(room, requester=None):
             other_member = {
                 "ir_id": other.ir.ir_id,
                 "ir_name": other.ir.display_name or other.ir.ir_name,
+                "last_seen": other.ir.last_seen.isoformat() if other.ir.last_seen else None,
             }
 
     pinned_msg_data = None
@@ -113,6 +129,8 @@ def _serialize_room(room, requester=None):
         "last_message_at": (last_message.created_at if last_message else None),
         "unread_count": unread_count,
         "other_member": other_member,
+        "is_muted": is_muted,
+        "muted_until": muted_until.isoformat() if muted_until else None,
     }
 
 
@@ -159,6 +177,7 @@ def _serialize_message(message):
         "reply_to": reply_to_data,
         "is_deleted": message.is_deleted,
         "edited_at": message.edited_at.isoformat() if message.edited_at else None,
+        "forwarded_from": message.forwarded_from,
         "reactions": reactions,
     }
 
@@ -278,6 +297,7 @@ class ChatRoomMembers(APIView):
                         "ir_name": membership.ir.ir_name,
                         "ir_access_level": membership.ir.ir_access_level,
                         "joined_at": membership.joined_at,
+                        "last_seen": membership.ir.last_seen.isoformat() if membership.ir.last_seen else None,
                     }
                     for membership in memberships
                 ]
@@ -451,6 +471,8 @@ class ChatRoomMessages(APIView):
         except (TypeError, ValueError):
             attachment_duration = None
 
+        forwarded_from = (request.data.get("forwarded_from") or "").strip() or None
+
         message = ChatMessage.objects.create(
             room=room,
             sender=requester,
@@ -460,6 +482,7 @@ class ChatRoomMessages(APIView):
             attachment_name=attachment_name,
             attachment_size=attachment_size,
             attachment_duration=attachment_duration,
+            forwarded_from=forwarded_from,
         )
         room.save(update_fields=["updated_at"])
 
@@ -1046,3 +1069,142 @@ class ChatTabsConfigView(APIView):
             return Response({"detail": "ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
         ChatTabsConfig.objects.update_or_create(ir=ir, defaults={"config": config})
         return Response({"config": config})
+
+
+class ChatMessageSearch(APIView):
+    """Search messages across all rooms or within a specific room."""
+
+    def get(self, request):
+        requester_ir_id = request.GET.get("requester_ir_id")
+        room_id = request.GET.get("room_id")
+        query = (request.GET.get("q") or "").strip()
+        limit = min(int(request.GET.get("limit", 30)), 100)
+
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+        if not query:
+            return Response({"detail": "q is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if room_id:
+            room = get_object_or_404(ChatRoom, id=room_id)
+            if not _is_room_member(room, requester):
+                return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
+            qs = ChatMessage.objects.filter(room_id=room_id)
+        else:
+            member_room_ids = ChatRoomMember.objects.filter(ir=requester).values_list("room_id", flat=True)
+            qs = ChatMessage.objects.filter(room_id__in=member_room_ids)
+
+        qs = (
+            qs.filter(is_deleted=False, content__icontains=query)
+            .select_related("sender", "room")
+            .order_by("-created_at")[:limit]
+        )
+
+        results = []
+        for msg in qs:
+            results.append({
+                "id": msg.id,
+                "room_id": msg.room_id,
+                "room_name": msg.room.room_name,
+                "sender_ir_id": msg.sender.ir_id,
+                "sender_name": msg.sender.chat_name,
+                "content": msg.content,
+                "message_type": msg.message_type,
+                "created_at": msg.created_at.isoformat(),
+            })
+
+        return Response({"results": results, "count": len(results)})
+
+
+class ChatRoomMediaGallery(APIView):
+    """Return all media attachments for a room, grouped by type."""
+
+    def get(self, request, room_id):
+        requester_ir_id = request.GET.get("requester_ir_id")
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        room = get_object_or_404(ChatRoom, id=room_id)
+        if not _is_room_member(room, requester):
+            return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        media_types = [ChatMessageType.IMAGE, ChatMessageType.VIDEO, ChatMessageType.FILE, ChatMessageType.VOICE]
+        qs = (
+            ChatMessage.objects.filter(room=room, message_type__in=media_types, is_deleted=False)
+            .select_related("sender")
+            .order_by("-created_at")
+        )
+
+        grouped = {"images": [], "videos": [], "files": [], "voice": []}
+        for msg in qs:
+            item = {
+                "id": msg.id,
+                "sender_name": msg.sender.chat_name,
+                "attachment_url": msg.attachment_url,
+                "attachment_name": msg.attachment_name,
+                "attachment_size": msg.attachment_size,
+                "attachment_duration": msg.attachment_duration,
+                "created_at": msg.created_at.isoformat(),
+            }
+            if msg.message_type == ChatMessageType.IMAGE:
+                grouped["images"].append(item)
+            elif msg.message_type == ChatMessageType.VIDEO:
+                grouped["videos"].append(item)
+            elif msg.message_type == ChatMessageType.FILE:
+                grouped["files"].append(item)
+            elif msg.message_type == ChatMessageType.VOICE:
+                grouped["voice"].append(item)
+
+        return Response({"media": grouped})
+
+
+class ChatRoomMute(APIView):
+    """Mute or unmute a room for the requesting user."""
+
+    def post(self, request, room_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        duration = request.data.get("duration")  # "1h", "8h", "forever", or null to unmute
+
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        room = get_object_or_404(ChatRoom, id=room_id)
+        membership = ChatRoomMember.objects.filter(room=room, ir=requester).first()
+        if not membership:
+            return Response({"detail": "Not a member of this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        if not duration:
+            membership.is_muted = False
+            membership.muted_until = None
+        else:
+            membership.is_muted = True
+            if duration == "forever":
+                membership.muted_until = None
+            elif duration == "8h":
+                membership.muted_until = timezone.now() + timedelta(hours=8)
+            else:
+                membership.muted_until = timezone.now() + timedelta(hours=1)
+
+        membership.save(update_fields=["is_muted", "muted_until"])
+
+        return Response({
+            "is_muted": membership.is_muted,
+            "muted_until": membership.muted_until.isoformat() if membership.muted_until else None,
+        })
+
+
+class ChatPresenceUpdate(APIView):
+    """Update last_seen timestamp for a user (called on app focus/blur)."""
+
+    def post(self, request):
+        ir_id = request.data.get("ir_id")
+        ir = _get_ir(ir_id)
+        if not ir:
+            return Response({"detail": "ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        ir.last_seen = timezone.now()
+        ir.save(update_fields=["last_seen"])
+        return Response({"last_seen": ir.last_seen.isoformat()})

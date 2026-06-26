@@ -100,6 +100,9 @@ class Ir(models.Model):
     # Optional display name overrides ir_name in chat context
     display_name = models.CharField(max_length=45, blank=True, null=True)
 
+    # Online / last-seen presence
+    last_seen = models.DateTimeField(null=True, blank=True)
+
     @property
     def chat_name(self):
         return self.display_name or self.ir_name
@@ -645,6 +648,8 @@ class ChatRoomMember(models.Model):
     ir = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name="chat_memberships")
     added_by = models.ForeignKey(Ir, on_delete=models.SET_NULL, null=True, blank=True, related_name="chat_members_added")
     joined_at = models.DateTimeField(auto_now_add=True)
+    is_muted = models.BooleanField(default=False)
+    muted_until = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         unique_together = ("room", "ir")
@@ -666,6 +671,7 @@ class ChatMessage(models.Model):
     reply_to = models.ForeignKey(
         "self", on_delete=models.SET_NULL, null=True, blank=True, related_name="replies"
     )
+    forwarded_from = models.CharField(max_length=100, blank=True, null=True)
     is_deleted = models.BooleanField(default=False)
     edited_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -1041,6 +1047,28 @@ class LearnVideo(models.Model):
         ordering = ['order', 'created_at']
         verbose_name = "Learn Video"
         verbose_name_plural = "Learn Videos"
+
+    def __str__(self):
+        return self.title
+
+
+class DreamVideo(models.Model):
+    """A dream tick / success story video hosted on Bunny.net Stream."""
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    bunny_video_id = models.CharField(max_length=100, unique=True)
+    bunny_library_id = models.CharField(max_length=100)
+    thumbnail_url = models.URLField(blank=True)
+    duration_seconds = models.IntegerField(default=0)
+    order = models.IntegerField(default=0, help_text='Sort order in the list')
+    is_published = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order', 'created_at']
+        verbose_name = "Dream Video"
+        verbose_name_plural = "Dream Videos"
 
     def __str__(self):
         return self.title

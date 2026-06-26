@@ -86,14 +86,18 @@ from core.views.chat import (
     ChatMessageUnpin,
     ChatMessageReactionView,
     ChatMessageReceiptDetail,
+    ChatMessageSearch,
     ChatMessageUpload,
+    ChatPresenceUpdate,
     ChatReadReceipts,
     ChatRoomListCreate,
     ChatRoomImageUpload,
+    ChatRoomMediaGallery,
     ChatRoomMembers,
     ChatRoomMembersAdd,
     ChatRoomMembersRemove,
     ChatRoomMessages,
+    ChatRoomMute,
     ChatRoomUpdate,
     ChatRoomDelete,
     ChatRoomPin,
@@ -111,6 +115,10 @@ from core.views.pipeline import (
 from core.views.learn import (
     GetLearnVideos,
     GetLearnVideoStream,
+)
+from core.views.dreams import (
+    GetDreamVideos,
+    GetDreamVideoStream,
 )
 
 # Pocket views
@@ -248,9 +256,17 @@ urlpatterns = [
     path("chat_rooms/<int:room_id>/messages/<int:message_id>/reactions/", ChatMessageReactionView.as_view()),
     path("chat_candidates/", ChatCandidates.as_view()),
     path("chat_tabs_config/", ChatTabsConfigView.as_view()),
+    path("chat_messages/search/", ChatMessageSearch.as_view()),
+    path("chat_rooms/<int:room_id>/media/", ChatRoomMediaGallery.as_view()),
+    path("chat_rooms/<int:room_id>/mute/", ChatRoomMute.as_view()),
+    path("chat_presence/", ChatPresenceUpdate.as_view()),
     path("ir/<str:ir_id>/display_name/", IrDisplayNameUpdate.as_view()),
 
     # ============ LEARN ENDPOINTS ============
     path("learn/<str:ir_id>/videos/", GetLearnVideos.as_view()),
     path("learn/<str:ir_id>/videos/<int:video_id>/stream/", GetLearnVideoStream.as_view()),
+
+    # ============ DREAMS ENDPOINTS ============
+    path("dreams/<str:ir_id>/videos/", GetDreamVideos.as_view()),
+    path("dreams/<str:ir_id>/videos/<int:video_id>/stream/", GetDreamVideoStream.as_view()),
 ]

@@ -1503,10 +1503,18 @@ class SaveFCMToken(APIView):
                 ir.fcm_tokens.append(fcm_token)
                 logging.info(f"SaveFCMToken: Added new token for ir_id={ir_id}")
             else:
+                # Move existing token to end (most recent)
+                ir.fcm_tokens.remove(fcm_token)
+                ir.fcm_tokens.append(fcm_token)
                 logging.info(f"SaveFCMToken: Token already exists for ir_id={ir_id}")
-            
+
+            # Keep only the last 5 tokens to prevent unbounded growth
+            MAX_TOKENS = 5
+            if len(ir.fcm_tokens) > MAX_TOKENS:
+                ir.fcm_tokens = ir.fcm_tokens[-MAX_TOKENS:]
+
             # Save the IR with updated FCM tokens
-            ir.save()
+            ir.save(update_fields=["fcm_tokens"])
             
             return Response({
                 "status": "success",
