@@ -21,6 +21,7 @@ from core.views.get import (
     GetDirectDownlines,
     GetHierarchyTree,
     GetAvailableWeeks,
+    GetTeamAggregatedPlans,
     SearchProspects,
 )
 from core.views.post import (
@@ -147,6 +148,7 @@ urlpatterns = [
     path("team_members/<int:team_id>/", GetTeamMembers.as_view()),
     path("info_details/<str:ir_id>/", GetInfoDetails.as_view()),
     path("plan_details/<str:ir_id>/", GetPlanDetails.as_view()),
+    path("team_plans/<str:ir_id>/", GetTeamAggregatedPlans.as_view()),
     path("uv_count/<str:ir_id>/", GetUVCount.as_view()),
     path("targets_dashboard/<str:ir_id>/", GetTargetsDashboard.as_view()),
     path("get_targets/", GetTargets.as_view()),

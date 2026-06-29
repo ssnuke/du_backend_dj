@@ -651,6 +651,85 @@ class GetPlanDetails(APIView):
 
 
 # ---------------------------------------------------
+# TEAM-AGGREGATED PLANS (all plans across visible teams)
+# ---------------------------------------------------
+class GetTeamAggregatedPlans(APIView):
+    def get(self, request, ir_id):
+        try:
+            ir = Ir.objects.get(ir_id=ir_id)
+        except Ir.DoesNotExist:
+            return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        week_param = request.GET.get("week")
+        year_param = request.GET.get("year")
+
+        if week_param and year_param:
+            try:
+                week_number = int(week_param)
+                year = int(year_param)
+                _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday(
+                    week_number=week_number, year=year
+                )
+            except (ValueError, Exception):
+                return Response({"detail": "Invalid week or year"}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday()
+
+        viewable_teams = list(
+            get_viewable_teams_for_ir(ir).prefetch_related('teammember_set__ir')
+        )
+
+        all_member_ids = set()
+        for team in viewable_teams:
+            for m in team.teammember_set.all():
+                all_member_ids.add(m.ir_id)
+
+        if not all_member_ids:
+            return Response({"plans": [], "summary": {"total_plans": 0, "closed_count": 0, "total_positive_uvs": 0}})
+
+        plans_qs = (
+            PlanDetail.objects.filter(
+                ir_id__in=list(all_member_ids),
+                plan_date__gte=plan_week_start,
+                plan_date__lte=plan_week_end,
+            )
+            .select_related('ir')
+            .order_by('-plan_date')
+        )
+
+        plans = []
+        closed_count = 0
+        total_positive_uvs = 0
+        for p in plans_qs:
+            uv = float(p.uv_value) if p.uv_value else 0
+            if p.status == 'closed':
+                closed_count += 1
+            if uv > 0:
+                total_positive_uvs += uv
+            plans.append({
+                "id": p.id,
+                "ir_id": p.ir_id,
+                "ir_name": p.ir.ir_name if p.ir else "",
+                "plan_name": p.plan_name or "",
+                "plan_date": p.plan_date.isoformat() if p.plan_date else None,
+                "status": p.status or "closing_pending",
+                "follow_up_date": p.follow_up_date.isoformat() if p.follow_up_date else None,
+                "uv_value": str(p.uv_value) if p.uv_value is not None else None,
+                "comments": p.comments or "",
+                "rejection_reason": p.rejection_reason,
+            })
+
+        return Response({
+            "plans": plans,
+            "summary": {
+                "total_plans": len(plans),
+                "closed_count": closed_count,
+                "total_positive_uvs": round(total_positive_uvs, 2),
+            },
+        })
+
+
+# ---------------------------------------------------
 # DASHBOARD TARGETS (with hierarchy-based team filtering)
 # ---------------------------------------------------
 class GetTargetsDashboard(APIView):
