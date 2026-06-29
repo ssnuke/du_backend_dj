@@ -685,7 +685,7 @@ class GetTeamAggregatedPlans(APIView):
                 all_member_ids.add(m.ir_id)
 
         if not all_member_ids:
-            return Response({"plans": [], "summary": {"total_plans": 0, "closed_count": 0, "total_positive_uvs": 0}})
+            return Response({"plans": [], "presenters": [], "summary": {"total_plans": 0, "closed_count": 0, "total_positive_uvs": 0}})
 
         plans_qs = (
             PlanDetail.objects.filter(
@@ -693,19 +693,31 @@ class GetTeamAggregatedPlans(APIView):
                 plan_date__gte=plan_week_start,
                 plan_date__lte=plan_week_end,
             )
-            .select_related('ir')
+            .select_related('ir', 'presented_by')
             .order_by('-plan_date')
         )
+
+        # Optional filter by presenter (UL2)
+        presented_by_filter = request.GET.get("presented_by")
+        if presented_by_filter:
+            plans_qs = plans_qs.filter(presented_by__ir_id=presented_by_filter)
 
         plans = []
         closed_count = 0
         total_positive_uvs = 0
+        presenters_set = {}
         for p in plans_qs:
             uv = float(p.uv_value) if p.uv_value else 0
             if p.status == 'closed':
                 closed_count += 1
             if uv > 0:
                 total_positive_uvs += uv
+
+            presenter_id = p.presented_by.ir_id if p.presented_by else None
+            presenter_name = p.presented_by.ir_name if p.presented_by else None
+            if presenter_id and presenter_id not in presenters_set:
+                presenters_set[presenter_id] = presenter_name
+
             plans.append({
                 "id": p.id,
                 "ir_id": p.ir_id,
@@ -717,10 +729,15 @@ class GetTeamAggregatedPlans(APIView):
                 "uv_value": str(p.uv_value) if p.uv_value is not None else None,
                 "comments": p.comments or "",
                 "rejection_reason": p.rejection_reason,
+                "presented_by_id": presenter_id,
+                "presented_by_name": presenter_name,
             })
+
+        presenters = [{"ir_id": k, "ir_name": v} for k, v in presenters_set.items()]
 
         return Response({
             "plans": plans,
+            "presenters": presenters,
             "summary": {
                 "total_plans": len(plans),
                 "closed_count": closed_count,

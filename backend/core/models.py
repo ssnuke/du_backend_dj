@@ -813,7 +813,8 @@ class PlanDetail(models.Model):
         ('other', 'Other'),
     ]
 
-    ir = models.ForeignKey(Ir, on_delete=models.CASCADE)
+    ir = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name='plan_details')
+    presented_by = models.ForeignKey(Ir, on_delete=models.SET_NULL, null=True, blank=True, related_name='plans_presented')
     plan_date = models.DateTimeField(default=timezone.now)
     plan_name = models.CharField(max_length=255, null=True, blank=True)
     comments = models.TextField(null=True, blank=True)

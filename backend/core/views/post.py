@@ -831,8 +831,17 @@ class AddPlanDetail(APIView):
                 if not isinstance(item, dict):
                     continue
                     
+                presented_by_ir = None
+                presented_by_id = item.get("presented_by")
+                if presented_by_id:
+                    try:
+                        presented_by_ir = Ir.objects.get(ir_id=presented_by_id)
+                    except Ir.DoesNotExist:
+                        pass
+
                 plan = PlanDetail.objects.create(
                     ir=ir,
+                    presented_by=presented_by_ir,
                     plan_date=item.get("plan_date", timezone.now()),
                     plan_name=item.get("plan_name"),
                     comments=item.get("comments"),
