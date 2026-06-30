@@ -675,14 +675,13 @@ class GetTeamAggregatedPlans(APIView):
         else:
             _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday()
 
-        viewable_teams = list(
-            get_viewable_teams_for_ir(ir).prefetch_related('teammember_set__ir')
-        )
-
-        all_member_ids = set()
-        for team in viewable_teams:
-            for m in team.teammember_set.all():
-                all_member_ids.add(m.ir_id)
+        # Plan visibility follows each person's own downline (hierarchy subtree),
+        # never other branches/lines they merely share a team with. Admin alone
+        # sees the whole org.
+        if ir.ir_access_level == AccessLevel.ADMIN:
+            all_member_ids = set(Ir.objects.filter(status=True).values_list('ir_id', flat=True))
+        else:
+            all_member_ids = set(ir.get_subtree_irs().values_list('ir_id', flat=True))
 
         if not all_member_ids:
             return Response({"plans": [], "presenters": [], "summary": {"total_plans": 0, "closed_count": 0, "total_positive_uvs": 0}})

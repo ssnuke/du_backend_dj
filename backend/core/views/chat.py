@@ -219,6 +219,24 @@ class ChatRoomListCreate(APIView):
         if room_type == ChatRoomType.DIRECT and len(member_ids) != 2:
             return Response({"detail": "Direct room must have exactly 2 members"}, status=status.HTTP_400_BAD_REQUEST)
 
+        if room_type == ChatRoomType.DIRECT:
+            other_ir_id = next(iter(member_ids - {requester.ir_id}))
+            existing_room = (
+                ChatRoom.objects.filter(room_type=ChatRoomType.DIRECT, memberships__ir=requester)
+                .filter(memberships__ir_id=other_ir_id)
+                .annotate(member_count=Count("memberships"))
+                .filter(member_count=2)
+                .first()
+            )
+            if existing_room:
+                return Response(
+                    {
+                        "message": "Room already exists",
+                        "room": _serialize_room(existing_room, requester=requester),
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
         members = list(Ir.objects.filter(ir_id__in=member_ids, status=True))
         found_ids = {member.ir_id for member in members}
         missing = sorted(list(member_ids - found_ids))
