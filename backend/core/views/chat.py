@@ -221,11 +221,13 @@ class ChatRoomListCreate(APIView):
 
         if room_type == ChatRoomType.DIRECT:
             other_ir_id = next(iter(member_ids - {requester.ir_id}))
+            # Direct rooms always have exactly 2 members (enforced above at creation
+            # time), so matching on "has a membership for requester" AND (separately)
+            # "has a membership for the other person" uniquely identifies the room
+            # between these two people — no extra count check needed.
             existing_room = (
                 ChatRoom.objects.filter(room_type=ChatRoomType.DIRECT, memberships__ir=requester)
                 .filter(memberships__ir_id=other_ir_id)
-                .annotate(member_count=Count("memberships"))
-                .filter(member_count=2)
                 .first()
             )
             if existing_room:
@@ -336,8 +338,9 @@ class ChatRoomMembersAdd(APIView):
         if not _is_room_member(room, requester):
             return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
 
-        if room.room_type == ChatRoomType.GROUP and room.created_by_id != requester.ir_id:
-            return Response({"detail": "Only the group owner can add members"}, status=status.HTTP_403_FORBIDDEN)
+        is_elevated = requester.ir_access_level in (AccessLevel.ADMIN, AccessLevel.CTC, AccessLevel.LDC, AccessLevel.LS)
+        if room.room_type == ChatRoomType.GROUP and room.created_by_id != requester.ir_id and not is_elevated:
+            return Response({"detail": "Only the group owner or an LDC/CTC/Admin can add members"}, status=status.HTTP_403_FORBIDDEN)
 
         if not member_ir_ids:
             return Response({"detail": "member_ir_ids is required"}, status=status.HTTP_400_BAD_REQUEST)
