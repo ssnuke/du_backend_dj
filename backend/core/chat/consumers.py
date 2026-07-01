@@ -5,7 +5,7 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.utils import timezone
 
-from core.models import ChatMessage, ChatMessageReaction, ChatMessageReceipt, ChatRoom, ChatRoomMember, Ir
+from core.models import AccessLevel, ChatMessage, ChatMessageReaction, ChatMessageReceipt, ChatRoom, ChatRoomMember, Ir
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -478,8 +478,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if not ChatRoomMember.objects.filter(room=room, ir=requester).exists():
             return [], "Not authorized for this room"
 
-        if room.room_type == ChatRoomType.GROUP and room.created_by_id != requester_ir_id:
-            return [], "Only the group owner can add members"
+        is_elevated = requester.ir_access_level in (AccessLevel.ADMIN, AccessLevel.CTC, AccessLevel.LDC, AccessLevel.LS)
+        if room.room_type == ChatRoomType.GROUP and room.created_by_id != requester_ir_id and not is_elevated:
+            return [], "Only the group owner or an LDC/CTC/Admin/LS can add members"
 
         candidates = list(Ir.objects.filter(ir_id__in=member_ir_ids, status=True))
         found_ids = {candidate.ir_id for candidate in candidates}
