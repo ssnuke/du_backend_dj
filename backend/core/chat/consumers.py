@@ -98,6 +98,22 @@ class ChatConsumer(AsyncWebsocketConsumer):
             },
         )
 
+        # Push a lightweight room-preview update to every other member's inbox
+        # channel so their room list refreshes in real time even when they have
+        # a different room open (or no room open at all).
+        member_ir_ids = await self._get_room_member_ir_ids(self.room_id, exclude_ir_id=self.user_ir.ir_id)
+        for member_ir_id in member_ir_ids:
+            await self.channel_layer.group_send(
+                f"user_inbox_{member_ir_id}",
+                {
+                    "type": "room_preview_updated",
+                    "room_id": message["room_id"],
+                    "last_message_preview": message["content"],
+                    "last_message_at": message["created_at"],
+                    "sender_ir_id": message["sender_ir_id"],
+                },
+            )
+
         # Fire FCM push notifications to members who are not in this WS session
         await self._notify_room_members(
             self.room_id,
@@ -548,6 +564,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
         return sorted(list(removable_ids)), None
 
     @database_sync_to_async
+    def _get_room_member_ir_ids(self, room_id, exclude_ir_id=None):
+        qs = ChatRoomMember.objects.filter(room_id=room_id).values_list("ir_id", flat=True)
+        if exclude_ir_id:
+            qs = qs.exclude(ir_id=exclude_ir_id)
+        return list(qs)
+
+    @database_sync_to_async
     def _notify_room_members(self, room_id, sender_ir_id, sender_name, content):
         """Send FCM push notifications to room members who are not actively watching this room."""
         import logging
@@ -605,3 +628,54 @@ class ChatConsumer(AsyncWebsocketConsumer):
             )
         except Exception:
             logger.exception("Failed to send chat FCM notifications for room %s", room_id)
+
+
+class UserInboxConsumer(AsyncWebsocketConsumer):
+    """
+    Per-user always-on WebSocket that delivers cross-room inbox events
+    (new message previews, unread increments) so the room list updates
+    in real time without the user needing to open each room.
+    """
+
+    async def connect(self):
+        query_string = self.scope.get("query_string", b"").decode()
+        params = parse_qs(query_string)
+        ir_id = (params.get("ir_id") or [None])[0]
+
+        if not ir_id:
+            await self.close(code=4001)
+            return
+
+        user = await self._get_ir(ir_id)
+        if not user:
+            await self.close(code=4002)
+            return
+
+        self.ir_id = ir_id
+        self.group_name = f"user_inbox_{ir_id}"
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.accept()
+
+    async def disconnect(self, close_code):
+        if hasattr(self, "group_name"):
+            await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    async def receive(self, text_data=None, bytes_data=None):
+        # Inbox socket is receive-only for the server — ignore client messages
+        pass
+
+    async def room_preview_updated(self, event):
+        await self.send(text_data=json.dumps({
+            "type": "room_preview_updated",
+            "room_id": event["room_id"],
+            "last_message_preview": event["last_message_preview"],
+            "last_message_at": event["last_message_at"],
+            "sender_ir_id": event["sender_ir_id"],
+        }))
+
+    @database_sync_to_async
+    def _get_ir(self, ir_id):
+        try:
+            return Ir.objects.get(ir_id=ir_id, status=True)
+        except Ir.DoesNotExist:
+            return None
