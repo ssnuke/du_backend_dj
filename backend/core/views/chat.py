@@ -48,6 +48,46 @@ def _can_create_group(ir):
     return ir.ir_access_level <= AccessLevel.LS
 
 
+def _can_chat_with(requester, target):
+    """
+    Return True if requester is allowed to open a DM with target.
+    Mirrors the candidate-list logic in ChatCandidates so the two stay in sync.
+    """
+    if requester.ir_id == target.ir_id:
+        return False  # can't DM yourself
+
+    level = requester.ir_access_level
+
+    if level == AccessLevel.ADMIN:
+        return True
+
+    if level == AccessLevel.CTC:
+        if target.ir_access_level == AccessLevel.ADMIN:
+            return True
+        return requester.can_view_ir(target)
+
+    if level == AccessLevel.LDC:
+        if target.ir_access_level == AccessLevel.ADMIN:
+            return True
+        if requester.is_in_subtree(target):
+            return True
+        return requester._is_upline_at_levels(target, [AccessLevel.CTC])
+
+    if level == AccessLevel.LS:
+        if target.ir_access_level == AccessLevel.ADMIN:
+            return True
+        return requester.can_view_ir(target)
+
+    if level == AccessLevel.GC:
+        # GC can chat with their own downline (team members) and their upline LDC(s)
+        if requester.is_in_subtree(target):
+            return True
+        return requester._is_upline_at_levels(target, [AccessLevel.LDC])
+
+    # IR — only with people who can already view them (handled by can_view_ir on the other side)
+    return requester.can_view_ir(target)
+
+
 def _is_room_member(room, ir):
     return ChatRoomMember.objects.filter(room=room, ir=ir).exists()
 
@@ -246,7 +286,7 @@ class ChatRoomListCreate(APIView):
             return Response({"detail": f"Invalid member IDs: {', '.join(missing)}"}, status=status.HTTP_400_BAD_REQUEST)
 
         for member in members:
-            if not requester.can_view_ir(member):
+            if member.ir_id != requester.ir_id and not _can_chat_with(requester, member):
                 return Response({"detail": f"Not authorized to add {member.ir_id} to room"}, status=status.HTTP_403_FORBIDDEN)
 
         with transaction.atomic():
@@ -329,6 +369,7 @@ class ChatRoomMembersAdd(APIView):
     def post(self, request, room_id):
         requester_ir_id = request.data.get("requester_ir_id")
         member_ir_ids = request.data.get("member_ir_ids") or []
+        show_history = bool(request.data.get("show_history", True))
 
         requester = _get_ir(requester_ir_id)
         if not requester:
@@ -362,7 +403,12 @@ class ChatRoomMembersAdd(APIView):
         to_add = [member for member in members if member.ir_id not in existing_member_ids]
         if to_add:
             ChatRoomMember.objects.bulk_create([
-                ChatRoomMember(room=room, ir=member, added_by=requester)
+                ChatRoomMember(
+                    room=room,
+                    ir=member,
+                    added_by=requester,
+                    hide_history_before_join=not show_history,
+                )
                 for member in to_add
             ])
             room.save(update_fields=["updated_at"])
@@ -423,7 +469,8 @@ class ChatRoomMessages(APIView):
             return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
 
         room = get_object_or_404(ChatRoom, id=room_id)
-        if not _is_room_member(room, requester):
+        membership = ChatRoomMember.objects.filter(room=room, ir=requester).first()
+        if not membership:
             return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
 
         try:
@@ -441,6 +488,9 @@ class ChatRoomMessages(APIView):
             .annotate(read_count=Count("receipts"))
             .order_by("-id")   # newest first; ensures [:limit] gives the most-recent page
         )
+
+        if membership.hide_history_before_join:
+            qs = qs.filter(created_at__gte=membership.joined_at)
 
         if before_id:
             try:
@@ -473,7 +523,7 @@ class ChatRoomMessages(APIView):
         if not _is_room_member(room, requester):
             return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
 
-        if message_type not in ChatMessageType.values:
+        if message_type not in ChatMessageType.values or message_type == ChatMessageType.SYSTEM:
             return Response({"detail": "Invalid message_type"}, status=status.HTTP_400_BAD_REQUEST)
 
         if message_type == ChatMessageType.TEXT and not content:
@@ -934,16 +984,28 @@ class ChatRoomImageUpload(APIView):
         room.image_url = image_url
         room.save(update_fields=["image_url", "updated_at"])
 
+        system_message = ChatMessage.objects.create(
+            room=room,
+            sender=requester,
+            message_type=ChatMessageType.SYSTEM,
+            content=f"{requester.chat_name} changed the group photo",
+        )
+        serialized_system_message = _serialize_message(system_message)
+
         try:
             channel_layer = get_channel_layer()
             async_to_sync(channel_layer.group_send)(
                 f"chat_room_{room_id}",
                 {"type": "room_updated", "room": {"id": room.id, "room_name": room.room_name, "image_url": image_url}},
             )
+            async_to_sync(channel_layer.group_send)(
+                f"chat_room_{room_id}",
+                {"type": "message_created", "message": serialized_system_message},
+            )
         except Exception:
             pass
 
-        return Response({"image_url": image_url})
+        return Response({"image_url": image_url, "system_message": serialized_system_message})
 
 
 class ChatMessageReceiptDetail(APIView):

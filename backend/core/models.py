@@ -615,6 +615,7 @@ class ChatMessageType(models.TextChoices):
     VIDEO = "video"
     FILE = "file"
     VOICE = "voice"
+    SYSTEM = "system"
 
 
 class ChatRoom(models.Model):
@@ -650,6 +651,7 @@ class ChatRoomMember(models.Model):
     joined_at = models.DateTimeField(auto_now_add=True)
     is_muted = models.BooleanField(default=False)
     muted_until = models.DateTimeField(null=True, blank=True)
+    hide_history_before_join = models.BooleanField(default=False)
 
     class Meta:
         unique_together = ("room", "ir")

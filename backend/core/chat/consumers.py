@@ -210,11 +210,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def _handle_add_members(self, payload):
         member_ir_ids = payload.get("member_ir_ids") or []
+        show_history = bool(payload.get("show_history", True))
         if not isinstance(member_ir_ids, list) or not member_ir_ids:
             await self._send_error("member_ir_ids is required")
             return
 
-        added_ids, error = await self._add_members(self.room_id, self.user_ir.ir_id, member_ir_ids)
+        added_ids, error = await self._add_members(self.room_id, self.user_ir.ir_id, member_ir_ids, show_history)
         if error:
             await self._send_error(error)
             return
@@ -486,7 +487,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         }
 
     @database_sync_to_async
-    def _add_members(self, room_id, requester_ir_id, member_ir_ids):
+    def _add_members(self, room_id, requester_ir_id, member_ir_ids, show_history=True):
         from core.models import ChatRoomType
         room = ChatRoom.objects.get(id=room_id)
         requester = Ir.objects.get(ir_id=requester_ir_id)
@@ -511,7 +512,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
         existing = set(ChatRoomMember.objects.filter(room=room, ir_id__in=member_ir_ids).values_list("ir_id", flat=True))
         to_add = [candidate for candidate in candidates if candidate.ir_id not in existing]
         ChatRoomMember.objects.bulk_create(
-            [ChatRoomMember(room=room, ir=candidate, added_by=requester) for candidate in to_add]
+            [
+                ChatRoomMember(room=room, ir=candidate, added_by=requester, hide_history_before_join=not show_history)
+                for candidate in to_add
+            ]
         )
         room.save(update_fields=["updated_at"])
 
