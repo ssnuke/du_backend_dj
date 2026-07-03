@@ -1108,3 +1108,26 @@ class ChatTabsConfig(models.Model):
 
     def __str__(self):
         return f"ChatTabsConfig({self.ir.ir_id})"
+
+
+class DashboardMappingConfig(models.Model):
+    """
+    Per-CTC/Admin custom grouping of LDCs on their main dashboard.
+
+    config shape:
+        {"groups": [{"id": str, "label": str|null, "member_ldc_ids": [str, ...]}, ...]}
+
+    List order = display order. An LDC omitted from every group's
+    member_ldc_ids is excluded from the dashboard entirely; two or more LDCs
+    listed in the same group have their data summed into one card (the
+    "couple LDC B under LDC A" case).
+    """
+    ir = models.OneToOneField(Ir, on_delete=models.CASCADE, related_name='dashboard_mapping_config')
+    config = models.JSONField(default=dict)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["ir"])]
+
+    def __str__(self):
+        return f"DashboardMappingConfig({self.ir.ir_id})"

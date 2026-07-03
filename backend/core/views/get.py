@@ -17,6 +17,8 @@ from core.models import (
     TeamWeek,
     TeamRole,
     WeeklyTarget,
+    TeamWeeklyTargets,
+    DashboardMappingConfig,
     AccessLevel,
 )
 from core.serializers import (
@@ -30,6 +32,7 @@ from core.serializers import (
 )
 
 from datetime import datetime, timedelta
+from collections import Counter
 import pytz
 import logging
 
@@ -192,28 +195,42 @@ class GetAllTeams(APIView):
 # ---------------------------------------------------
 # GET ALL LDCs (with hierarchy filter)
 # ---------------------------------------------------
+def get_viewable_ldcs(requester):
+    """
+    All LDCs visible to `requester`, hierarchy-filtered when a requester is
+    given. Shared by GetLDCs (full weekly breakdown) and GetManagerDashboard
+    (grouped/aggregated view) so the two stay in sync on "who counts as an
+    LDC I can see."
+    """
+    ldc_ids = TeamMember.objects.filter(
+        role=TeamRole.LDC
+    ).values_list("ir_id", flat=True).distinct()
+
+    ldcs = Ir.objects.filter(ir_id__in=ldc_ids)
+
+    if requester:
+        viewable_irs = requester.get_viewable_irs()
+        ldcs = ldcs.filter(ir_id__in=viewable_irs.values_list('ir_id', flat=True))
+
+    return ldcs
+
+
 class GetLDCs(APIView):
     import logging
     def get(self, request):
         requester_ir_id = request.GET.get("requester_ir_id")
-        
-        ldc_ids = TeamMember.objects.filter(
-            role=TeamRole.LDC
-        ).values_list("ir_id", flat=True).distinct()
 
-        ldcs = Ir.objects.filter(ir_id__in=ldc_ids)
-        
-        # Filter by hierarchy if requester provided
+        requester = None
         if requester_ir_id:
             try:
                 requester = Ir.objects.get(ir_id=requester_ir_id)
-                viewable_irs = requester.get_viewable_irs()
-                ldcs = ldcs.filter(ir_id__in=viewable_irs.values_list('ir_id', flat=True))
             except Ir.DoesNotExist:
                 return Response(
                     {"detail": "Requester IR not found"},
                     status=status.HTTP_404_NOT_FOUND
                 )
+
+        ldcs = get_viewable_ldcs(requester)
 
         from core.utils.dates import get_week_info_friday_to_friday
         from datetime import datetime
@@ -873,6 +890,225 @@ class GetTargetsDashboard(APIView):
             })
 
         return Response({"personal": personal, "teams": teams_progress})
+
+
+class DashboardMappingConfigView(APIView):
+    """
+    Per-CTC/Admin custom LDC grouping for GetManagerDashboard — same
+    GET/PUT-a-JSON-blob shape as ChatTabsConfigView.
+    """
+
+    def get(self, request, ir_id):
+        try:
+            ir = Ir.objects.get(ir_id=ir_id)
+        except Ir.DoesNotExist:
+            return Response({"detail": "ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            cfg = ir.dashboard_mapping_config
+            return Response({"config": cfg.config})
+        except DashboardMappingConfig.DoesNotExist:
+            return Response({"config": {}})
+
+    def put(self, request, ir_id):
+        config = request.data.get("config")
+        if not isinstance(config, dict):
+            return Response({"detail": "config must be an object"}, status=status.HTTP_400_BAD_REQUEST)
+
+        groups = config.get("groups")
+        if groups is not None:
+            if not isinstance(groups, list):
+                return Response({"detail": "config.groups must be a list"}, status=status.HTTP_400_BAD_REQUEST)
+            for g in groups:
+                if not isinstance(g, dict) or not isinstance(g.get("member_ldc_ids"), list):
+                    return Response(
+                        {"detail": "each group must be an object with a member_ldc_ids list"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+        known_ldc_ids = config.get("known_ldc_ids")
+        if known_ldc_ids is not None and not isinstance(known_ldc_ids, list):
+            return Response({"detail": "config.known_ldc_ids must be a list"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            ir = Ir.objects.get(ir_id=ir_id)
+        except Ir.DoesNotExist:
+            return Response({"detail": "ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        DashboardMappingConfig.objects.update_or_create(ir=ir, defaults={"config": config})
+        return Response({"config": config})
+
+
+class GetManagerDashboard(APIView):
+    """
+    Scalable, grouped replacement for the old per-LDC N+1 dashboard fetch.
+
+    Instead of the frontend calling GetTargetsDashboard once per viewable LDC,
+    this reads the requester's saved DashboardMappingConfig (defaulting to one
+    group per viewable LDC when unset) and returns one aggregated row per
+    group, using bulk queries scoped only to the LDCs actually in some group —
+    excluded LDCs are never queried at all, so cost scales with what's
+    configured to show rather than with the requester's total downline size.
+    """
+
+    def get(self, request):
+        requester_ir_id = request.GET.get("requester_ir_id")
+        if not requester_ir_id:
+            return Response({"detail": "requester_ir_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            requester = Ir.objects.get(ir_id=requester_ir_id)
+        except Ir.DoesNotExist:
+            return Response({"detail": "Requester IR not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        week_param = request.GET.get("week")
+        year_param = request.GET.get("year")
+        try:
+            if week_param and year_param:
+                week_number, year, week_start, week_end = get_week_info_friday_to_friday(
+                    week_number=int(week_param), year=int(year_param)
+                )
+            else:
+                week_number, year, week_start, week_end = get_week_info_friday_to_friday()
+        except Exception:
+            return Response({"detail": "Invalid week parameters"}, status=status.HTTP_400_BAD_REQUEST)
+        _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday(
+            week_number=week_number, year=year
+        )
+
+        viewable_ldcs = list(get_viewable_ldcs(requester))
+        viewable_ldc_ids = {ldc.ir_id for ldc in viewable_ldcs}
+        ldc_by_id = {ldc.ir_id: ldc for ldc in viewable_ldcs}
+
+        try:
+            saved_config = requester.dashboard_mapping_config.config or {}
+        except DashboardMappingConfig.DoesNotExist:
+            saved_config = {}
+        saved_groups = saved_config.get("groups") or []
+        # Snapshot (taken at last save) of every LDC id the admin could see —
+        # lets us tell "intentionally excluded" (in this set, absent from
+        # every group) apart from "new LDC since last save" (absent from this
+        # set entirely), which must still surface automatically.
+        known_ldc_ids = set(saved_config.get("known_ldc_ids") or [])
+
+        # Keep only still-viewable member ids per saved group; drop groups
+        # left with none (LDC removed from the org / no longer viewable).
+        effective_groups = []
+        covered_ldc_ids = set()
+        for g in saved_groups:
+            member_ids = [mid for mid in (g.get("member_ldc_ids") or []) if mid in viewable_ldc_ids]
+            if not member_ids:
+                continue
+            effective_groups.append({
+                "id": g.get("id") or member_ids[0],
+                "label": (g.get("label") or "").strip() or None,
+                "member_ldc_ids": member_ids,
+            })
+            covered_ldc_ids.update(member_ids)
+
+        # Any viewable LDC not yet assigned anywhere gets its own default
+        # group UNLESS the admin's last save already knew about it and chose
+        # to leave it out (a deliberate exclusion, not a new LDC to surface).
+        for ldc in viewable_ldcs:
+            if ldc.ir_id not in covered_ldc_ids and ldc.ir_id not in known_ldc_ids:
+                effective_groups.append({"id": ldc.ir_id, "label": None, "member_ldc_ids": [ldc.ir_id]})
+
+        needed_ldc_ids = [mid for g in effective_groups for mid in g["member_ldc_ids"]]
+
+        # ── Bulk data fetch — scoped only to needed LDCs, current week only ──
+        teams = list(Team.objects.filter(created_by_id__in=needed_ldc_ids).only("id", "name", "created_by_id"))
+        team_ids = [t.id for t in teams]
+
+        member_rows = list(TeamMember.objects.filter(team_id__in=team_ids).values_list("team_id", "ir_id"))
+        team_to_members = {}
+        for team_id, ir_id in member_rows:
+            team_to_members.setdefault(team_id, set()).add(ir_id)
+        all_member_ids = set(ir_id for ids in team_to_members.values() for ir_id in ids)
+
+        info_rows = list(
+            InfoDetail.objects.filter(
+                ir_id__in=all_member_ids, info_date__gte=week_start, info_date__lte=week_end
+            ).values_list("ir_id", flat=True)
+        ) if all_member_ids else []
+        plan_rows = list(
+            PlanDetail.objects.filter(
+                ir_id__in=all_member_ids, plan_date__gte=plan_week_start, plan_date__lte=plan_week_end
+            ).values_list("ir_id", flat=True)
+        ) if all_member_ids else []
+        try:
+            uv_rows = list(
+                UVDetail.objects.filter(
+                    ir_id__in=all_member_ids, uv_date__gte=week_start, uv_date__lte=week_end
+                ).values_list("ir_id", "uv_count")
+            ) if all_member_ids else []
+        except Exception:
+            uv_rows = []
+
+        info_count_by_ir = Counter(info_rows)
+        plan_count_by_ir = Counter(plan_rows)
+        uv_sum_by_ir = {}
+        for ir_id, cnt in uv_rows:
+            uv_sum_by_ir[ir_id] = uv_sum_by_ir.get(ir_id, 0) + float(cnt or 0)
+
+        targets_by_team = {}
+        for twt in TeamWeeklyTargets.objects.filter(team_id__in=team_ids):
+            targets_by_team[twt.team_id] = twt.get_week_targets(year, week_number) or {}
+
+        teams_by_ldc = {}
+        for t in teams:
+            teams_by_ldc.setdefault(t.created_by_id, []).append(t)
+
+        def team_stats(team):
+            members = team_to_members.get(team.id, set())
+            week_data = targets_by_team.get(team.id) or {}
+            return {
+                "team_id": team.id,
+                "team_name": team.name,
+                "info_progress": sum(info_count_by_ir.get(m, 0) for m in members),
+                "plan_progress": sum(plan_count_by_ir.get(m, 0) for m in members),
+                "uv_progress": sum(uv_sum_by_ir.get(m, 0) for m in members),
+                "weekly_info_target": week_data.get("team_weekly_info_target", 0),
+                "weekly_plan_target": week_data.get("team_weekly_plan_target", 0),
+                "weekly_uv_target": week_data.get("team_weekly_uv_target", 0),
+            }
+
+        groups_out = []
+        for g in effective_groups:
+            group_teams = []
+            for mid in g["member_ldc_ids"]:
+                ldc = ldc_by_id.get(mid)
+                ldc_name = ldc.ir_name if ldc else mid
+                for t in teams_by_ldc.get(mid, []):
+                    stats = team_stats(t)
+                    stats["ldc_id"] = mid
+                    stats["ldc_name"] = ldc_name
+                    group_teams.append(stats)
+
+            label = g["label"] or (ldc_by_id[g["member_ldc_ids"][0]].ir_name if g["member_ldc_ids"][0] in ldc_by_id else g["member_ldc_ids"][0])
+
+            groups_out.append({
+                "id": g["id"],
+                "label": label,
+                "member_ldc_ids": g["member_ldc_ids"],
+                "member_ldc_names": [ldc_by_id[m].ir_name if m in ldc_by_id else m for m in g["member_ldc_ids"]],
+                "teams": group_teams,
+                "totals": {
+                    "info_done": sum(t["info_progress"] for t in group_teams),
+                    "plan_done": sum(t["plan_progress"] for t in group_teams),
+                    "uv_done": round(sum(t["uv_progress"] for t in group_teams), 2),
+                },
+            })
+
+        overall_totals = {
+            "info_done": sum(gr["totals"]["info_done"] for gr in groups_out),
+            "plan_done": sum(gr["totals"]["plan_done"] for gr in groups_out),
+            "uv_done": round(sum(gr["totals"]["uv_done"] for gr in groups_out), 2),
+        }
+
+        return Response({
+            "week_number": week_number,
+            "year": year,
+            "groups": groups_out,
+            "overall_totals": overall_totals,
+        })
 
 
 class GetTargets(APIView):

@@ -23,6 +23,8 @@ from core.views.get import (
     GetAvailableWeeks,
     GetTeamAggregatedPlans,
     SearchProspects,
+    DashboardMappingConfigView,
+    GetManagerDashboard,
 )
 from core.views.post import (
     AddIrId,
@@ -145,6 +147,8 @@ urlpatterns = [
     path("irs/", GetAllRegisteredIR.as_view()),
     path("teams/", GetAllTeams.as_view()),
     path("ldcs/", GetLDCs.as_view()),
+    path("manager_dashboard/", GetManagerDashboard.as_view()),
+    path("dashboard_mapping/<str:ir_id>/", DashboardMappingConfigView.as_view()),
     path("teams_by_ldc/<str:ldc_id>/", GetTeamsByLDC.as_view()),
     path("team_members/<int:team_id>/", GetTeamMembers.as_view()),
     path("info_details/<str:ir_id>/", GetInfoDetails.as_view()),
