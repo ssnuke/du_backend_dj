@@ -100,6 +100,9 @@ class Ir(models.Model):
     # Optional display name overrides ir_name in chat context
     display_name = models.CharField(max_length=45, blank=True, null=True)
 
+    # Profile picture shown in chats (initials fallback when unset)
+    avatar_url = models.URLField(max_length=1000, blank=True, null=True)
+
     # Online / last-seen presence
     last_seen = models.DateTimeField(null=True, blank=True)
 

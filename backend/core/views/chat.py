@@ -117,7 +117,8 @@ def _serialize_room(room, requester=None):
         if other:
             other_member = {
                 "ir_id": other.ir.ir_id,
-                "ir_name": other.ir.display_name or other.ir.ir_name,
+                "ir_name": other.ir.chat_name,
+                "avatar_url": other.ir.avatar_url,
                 "last_seen": other.ir.last_seen.isoformat() if other.ir.last_seen else None,
             }
 
@@ -205,6 +206,7 @@ def _serialize_message(message):
         "room_id": message.room_id,
         "sender_ir_id": message.sender.ir_id,
         "sender_name": message.sender.chat_name,
+        "sender_avatar_url": message.sender.avatar_url,
         "message_type": message.message_type,
         "content": message.content,
         "attachment_url": message.attachment_url,
@@ -354,7 +356,8 @@ class ChatRoomMembers(APIView):
                 "members": [
                     {
                         "ir_id": membership.ir.ir_id,
-                        "ir_name": membership.ir.ir_name,
+                        "ir_name": membership.ir.chat_name,
+                        "avatar_url": membership.ir.avatar_url,
                         "ir_access_level": membership.ir.ir_access_level,
                         "joined_at": membership.joined_at,
                         "last_seen": membership.ir.last_seen.isoformat() if membership.ir.last_seen else None,
@@ -669,7 +672,9 @@ class ChatCandidates(APIView):
             candidates_qs = base_qs
 
         if query:
-            candidates_qs = candidates_qs.filter(Q(ir_name__icontains=query) | Q(ir_id__icontains=query))
+            candidates_qs = candidates_qs.filter(
+                Q(ir_name__icontains=query) | Q(display_name__icontains=query) | Q(ir_id__icontains=query)
+            )
 
         # Exclude members already in the given room (used by "Add Members" dialog)
         if exclude_room_id:
@@ -687,7 +692,8 @@ class ChatCandidates(APIView):
                 "candidates": [
                     {
                         "ir_id": c.ir_id,
-                        "ir_name": c.ir_name,
+                        "ir_name": c.chat_name,
+                        "avatar_url": c.avatar_url,
                         "ir_access_level": c.ir_access_level,
                     }
                     for c in page
@@ -1029,6 +1035,7 @@ class ChatMessageReceiptDetail(APIView):
                 {
                     "ir_id": r.reader.ir_id,
                     "ir_name": r.reader.chat_name,
+                    "avatar_url": r.reader.avatar_url,
                     "read_at": r.read_at.isoformat(),
                 }
                 for r in receipts
@@ -1130,6 +1137,45 @@ class IrDisplayNameUpdate(APIView):
         requester.display_name = display_name
         requester.save(update_fields=["display_name"])
         return Response({"display_name": requester.display_name, "chat_name": requester.chat_name})
+
+
+class IrAvatarUpload(APIView):
+    """Upload or update a user's own profile picture, shown across chats."""
+
+    def post(self, request, ir_id):
+        requester = _get_ir(ir_id)
+        if not requester:
+            return Response({"detail": "Invalid IR ID"}, status=status.HTTP_400_BAD_REQUEST)
+
+        uploaded = request.FILES.get("file")
+        if not uploaded:
+            return Response({"detail": "file is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        mime = uploaded.content_type or ""
+        if mime not in {"image/jpeg", "image/png", "image/gif", "image/webp"}:
+            return Response({"detail": "Only image files are allowed"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if uploaded.size > 5 * 1024 * 1024:
+            return Response({"detail": "Image must be under 5 MB"}, status=status.HTTP_400_BAD_REQUEST)
+
+        ext = os.path.splitext(uploaded.name)[1].lower() or ".jpg"
+        filename = f"avatars/{ir_id}/{uuid.uuid4().hex}{ext}"
+        saved_path = default_storage.save(filename, ContentFile(uploaded.read()))
+        avatar_url = default_storage.url(saved_path)
+
+        requester.avatar_url = avatar_url
+        requester.save(update_fields=["avatar_url"])
+
+        return Response({"avatar_url": avatar_url})
+
+    def delete(self, request, ir_id):
+        requester = _get_ir(ir_id)
+        if not requester:
+            return Response({"detail": "Invalid IR ID"}, status=status.HTTP_400_BAD_REQUEST)
+
+        requester.avatar_url = None
+        requester.save(update_fields=["avatar_url"])
+        return Response({"message": "Profile picture removed"})
 
 
 class ChatTabsConfigView(APIView):

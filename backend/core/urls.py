@@ -104,6 +104,7 @@ from core.views.chat import (
     ChatRoomPin,
     ChatRoomUnpin,
     IrDisplayNameUpdate,
+    IrAvatarUpload,
     ChatTabsConfigView,
 )
 
@@ -263,6 +264,7 @@ urlpatterns = [
     path("chat_rooms/<int:room_id>/mute/", ChatRoomMute.as_view()),
     path("chat_presence/", ChatPresenceUpdate.as_view()),
     path("ir/<str:ir_id>/display_name/", IrDisplayNameUpdate.as_view()),
+    path("ir/<str:ir_id>/avatar/", IrAvatarUpload.as_view()),
 
     # ============ LEARN ENDPOINTS ============
     path("learn/<str:ir_id>/videos/", GetLearnVideos.as_view()),
