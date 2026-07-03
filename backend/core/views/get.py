@@ -1094,6 +1094,9 @@ class GetManagerDashboard(APIView):
                     "info_done": sum(t["info_progress"] for t in group_teams),
                     "plan_done": sum(t["plan_progress"] for t in group_teams),
                     "uv_done": round(sum(t["uv_progress"] for t in group_teams), 2),
+                    "info_target": sum(t["weekly_info_target"] for t in group_teams),
+                    "plan_target": sum(t["weekly_plan_target"] for t in group_teams),
+                    "uv_target": round(sum(t["weekly_uv_target"] for t in group_teams), 2),
                 },
             })
 
