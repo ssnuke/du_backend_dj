@@ -1,0 +1,39 @@
+# Render.com service definition for this backend (repo root = django-app/).
+#
+# This documents the existing "du-backend-dj" web service as committed
+# infrastructure-as-code instead of a hidden dashboard-only setting. It does
+# NOT by itself add replicas/instances, and it does NOT take effect just by
+# being pushed — Render only reads render.yaml for services provisioned as a
+# "Blueprint". This service was set up manually in the dashboard, so this
+# file has no effect until it's synced as a Blueprint there.
+#
+# The app is already horizontally scale-safe (Redis-backed Channels layer,
+# no per-process in-memory state), but actually running more than one
+# instance still requires either:
+#   - bumping "Instance Count" for this service in the Render dashboard, or
+#   - upgrading to a plan that supports the `scaling` block below and
+#     uncommenting it.
+# That's a billing/plan decision for the account owner, not something this
+# file can do on its own.
+
+services:
+  - type: web
+    name: du-backend-dj
+    runtime: docker
+    dockerfilePath: ./docker/Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /api/health/
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: CACHE_REDIS_URL
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT_PATH
+        sync: false
+    # scaling:
+    #   minInstances: 2
+    #   maxInstances: 4
+    #   targetCPUPercent: 70

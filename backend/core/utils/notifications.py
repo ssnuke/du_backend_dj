@@ -207,7 +207,7 @@ def send_push_notifications(notifications: Iterable[Notification], title: str, m
 
 def send_fcm_notifications(notifications: Iterable[Notification], title: str, message: str) -> None:
     try:
-        from core.utils.firebase_messaging import send_multicast, send_notification
+        from core.utils.firebase_messaging import send_multicast, send_notification, is_dead_token_error
         import logging
         logger = logging.getLogger(__name__)
     except Exception as e:
@@ -257,9 +257,7 @@ def send_fcm_notifications(notifications: Iterable[Notification], title: str, me
     if result.get("failure", 0) > 0:
         bad_tokens = set()
         for detail in result.get("failure_details", []):
-            msg = str(detail.get("message", ""))
-            code = str(detail.get("code", ""))
-            if "NotRegistered" in msg or "invalid" in msg.lower() or code in ["registration-token-not-registered", "invalid-registration-token"]:
+            if is_dead_token_error(detail.get("code", ""), detail.get("message", "")):
                 bad_tokens.add(detail.get("token"))
                 
         if bad_tokens:

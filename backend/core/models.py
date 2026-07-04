@@ -618,6 +618,7 @@ class ChatMessageType(models.TextChoices):
     VIDEO = "video"
     FILE = "file"
     VOICE = "voice"
+    STICKER = "sticker"
     SYSTEM = "system"
 
 
@@ -713,6 +714,31 @@ class ChatMessageReaction(models.Model):
         indexes = [
             models.Index(fields=["message", "emoji"], name="core_chatme_message_emoji_idx"),
         ]
+
+
+class StickerPack(models.Model):
+    owner = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name="sticker_packs")
+    name = models.CharField(max_length=80)
+    cover_sticker = models.ForeignKey(
+        "Sticker", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+
+
+class Sticker(models.Model):
+    pack = models.ForeignKey(StickerPack, on_delete=models.CASCADE, related_name="stickers")
+    image_url = models.URLField(max_length=1000)
+    is_animated = models.BooleanField(default=False)
+    emoji = models.CharField(max_length=8, blank=True, default="")
+    keywords = models.CharField(max_length=255, blank=True, default="")
+    order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["order", "id"]
 
 
 class Pocket(models.Model):

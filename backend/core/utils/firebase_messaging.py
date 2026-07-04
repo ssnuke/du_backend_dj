@@ -101,87 +101,109 @@ def send_notification(fcm_token, title, body, data=None):
         logger.exception('Full traceback:')
         return None
 
+_DEAD_TOKEN_CODES = {
+    'registration-token-not-registered',
+    'invalid-registration-token',
+    'invalid-argument',
+}
+
+
+def is_dead_token_error(code, message):
+    """
+    True if an FCM send failure means the token itself is permanently invalid
+    (unregistered/uninstalled app, malformed token, etc.) and should be pruned
+    from storage rather than retried. Shared by the chat push path
+    (core/chat/consumers.py) and the generic notification path
+    (core/utils/notifications.py) so both prune on the same signal.
+    """
+    msg = str(message or '')
+    code = str(code or '')
+    return (
+        'NotRegistered' in msg
+        or 'invalid' in msg.lower()
+        or code in _DEAD_TOKEN_CODES
+    )
+
+
 def send_multicast(fcm_tokens, title, body, data=None):
     """
-    Send a push notification to multiple devices
-    
+    Send a push notification to multiple devices in a single batched FCM call.
+
     Args:
         fcm_tokens: List of FCM device tokens
         title: Notification title
         body: Notification body
         data: Optional dictionary of additional data (all values must be strings)
-    
+
     Returns:
-        dict with success and failure counts
+        dict with success/failure counts and per-token failure_details
     """
     try:
         if not firebase_initialized and not initialize_firebase():
             logger.warning('Firebase not initialized, cannot send notifications')
             return {'success': 0, 'failure': len(fcm_tokens)}
-        
+
         # Filter out empty or invalid tokens
         valid_tokens = [token for token in fcm_tokens if token and isinstance(token, str) and len(token) > 0]
-        
+
         if not valid_tokens:
             logger.warning('No valid FCM tokens to send to')
             return {'success': 0, 'failure': 0}
-        
+
         # Ensure all data values are strings (FCM requirement)
         clean_data = {}
         if data:
             for key, value in data.items():
                 clean_data[key] = str(value) if value is not None else ''
-        
-        logger.info(f'Sending multicast FCM notification to {len(valid_tokens)} tokens sequentially - Title: {title}')
-        
-        success_count = 0
-        failure_count = 0
-        failure_details = []
-        
-        for idx, token in enumerate(valid_tokens):
-            try:
-                single_message = messaging.Message(
-                    notification=messaging.Notification(
-                        title=title,
-                        body=body,
-                    ),
-                    webpush=messaging.WebpushConfig(
-                        headers={
-                            "Urgency": "high"
-                        },
-                        notification=messaging.WebpushNotification(
-                            title=title,
-                            body=body,
-                            icon='/icons/Icon-192.png',
-                            require_interaction=False
-                        )
-                    ),
-                    data=clean_data,
-                    token=token,
+
+        logger.info(f'Sending multicast FCM notification to {len(valid_tokens)} tokens (batched) - Title: {title}')
+
+        multicast_message = messaging.MulticastMessage(
+            tokens=valid_tokens,
+            notification=messaging.Notification(
+                title=title,
+                body=body,
+            ),
+            webpush=messaging.WebpushConfig(
+                headers={
+                    "Urgency": "high"
+                },
+                notification=messaging.WebpushNotification(
+                    title=title,
+                    body=body,
+                    icon='/icons/Icon-192.png',
+                    require_interaction=False
                 )
-                messaging.send(single_message)
-                success_count += 1
-            except Exception as e:
-                failure_count += 1
-                err_code = getattr(e, 'code', None)
-                err_msg = str(e)
+            ),
+            data=clean_data,
+        )
+
+        batch_response = messaging.send_each_for_multicast(multicast_message)
+
+        failure_details = []
+        for idx, (token, resp) in enumerate(zip(valid_tokens, batch_response.responses)):
+            if not resp.success:
+                err = resp.exception
                 failure_details.append({
                     'index': idx,
                     'token': token,
-                    'code': err_code,
-                    'message': err_msg,
+                    'code': getattr(err, 'code', None),
+                    'message': str(err),
                 })
-                logger.error(f'Failed to send to token {idx} ({token[:20]}...): {err_msg}')
-        
-        logger.info(f'Multicast notification sent sequentially. Success: {success_count}, Failure: {failure_count}')
-        
+                logger.error(f'Failed to send to token {idx} ({token[:20]}...): {err}')
+
+        logger.info(
+            f'Multicast notification sent (batched). '
+            f'Success: {batch_response.success_count}, Failure: {batch_response.failure_count}'
+        )
+
         return {
-            'success': success_count,
-            'failure': failure_count,
+            'success': batch_response.success_count,
+            'failure': batch_response.failure_count,
             'failure_details': failure_details,
             'resp': None
         }
-        
+
     except Exception as e:
         logger.error(f'Error sending multicast FCM notification: {str(e)}')
         logger.exception('Full traceback:')

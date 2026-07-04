@@ -1,9 +1,11 @@
-# Migration to add missing fields that should have been in 0012
-# Adds info_type to InfoDetail and pocket fields to WeeklyTarget
-# This migration handles fields that were skipped when 0012 had duplicate table errors
+# This migration originally re-added info_type/pocket fields that were already
+# added by 0012_pocketmember_infodetail_info_type_and_more, which breaks a
+# from-scratch `migrate` with "column already exists". The only real state
+# change on top of 0012 is that info_type ended up nullable/blank in
+# models.py, so this is trimmed to just that AlterField; the duplicate
+# AddField calls for the already-existing fields have been removed.
 
 from django.db import migrations, models
-import django.db.models.deletion
 
 
 class Migration(migrations.Migration):
@@ -13,8 +15,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        # Add info_type field to InfoDetail
-        migrations.AddField(
+        migrations.AlterField(
             model_name='infodetail',
             name='info_type',
             field=models.CharField(
@@ -22,36 +23,7 @@ class Migration(migrations.Migration):
                 default='Fresh',
                 max_length=10,
                 null=True,
-                blank=True
-            ),
-        ),
-        # Add pocket field to WeeklyTarget (FK to Pocket)
-        migrations.AddField(
-            model_name='weeklytarget',
-            name='pocket',
-            field=models.ForeignKey(
                 blank=True,
-                null=True,
-                on_delete=django.db.models.deletion.CASCADE,
-                related_name='weekly_targets',
-                to='core.pocket'
             ),
-        ),
-        # Add pocket target fields to WeeklyTarget
-        migrations.AddField(
-            model_name='weeklytarget',
-            name='pocket_weekly_info_target',
-            field=models.IntegerField(blank=True, null=True),
-        ),
-        migrations.AddField(
-            model_name='weeklytarget',
-            name='pocket_weekly_plan_target',
-            field=models.IntegerField(blank=True, null=True),
-        ),
-        migrations.AddField(
-            model_name='weeklytarget',
-            name='pocket_weekly_uv_target',
-            field=models.IntegerField(blank=True, null=True),
         ),
     ]
-

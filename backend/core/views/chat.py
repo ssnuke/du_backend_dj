@@ -5,10 +5,11 @@ import uuid
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
+from django.core.cache import cache
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Max, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -26,6 +27,8 @@ from core.models import (
     ChatMessageType,
     ChatTabsConfig,
     Ir,
+    Sticker,
+    StickerPack,
 )
 
 from datetime import timedelta
@@ -92,15 +95,55 @@ def _is_room_member(room, ir):
     return ChatRoomMember.objects.filter(room=room, ir=ir).exists()
 
 
-def _serialize_room(room, requester=None):
-    last_message = room.messages.order_by("-id").first()
-    unread_count = 0
-    if requester:
+ROOM_LIST_CACHE_TTL = 30  # seconds — a safety net; correctness comes from explicit invalidation below
+ROOM_LIST_CACHE_KEY_FMT = "chat_rooms:{ir_id}"
+
+
+def invalidate_chat_rooms_cache(ir_ids):
+    """
+    Drop the cached room-list response for every given ir_id. Call this after
+    any mutation that changes what ChatRoomListCreate.get would serialize for
+    those users: new/renamed/deleted room, message sent/edited/deleted,
+    members added/removed, mute/unmute (self only), pin/unpin (room or
+    message), room image change. Both the HTTP views and the WS consumer
+    handlers mutate the same data through separate code paths, so both must
+    call this.
+    """
+    ir_ids = [ir_id for ir_id in ir_ids if ir_id]
+    if not ir_ids:
+        return
+    cache.delete_many([ROOM_LIST_CACHE_KEY_FMT.format(ir_id=ir_id) for ir_id in ir_ids])
+
+
+def _room_member_ir_ids(room_id):
+    return list(ChatRoomMember.objects.filter(room_id=room_id).values_list("ir_id", flat=True))
+
+
+def _serialize_room(room, requester=None, *, precomputed=None):
+    """
+    precomputed (optional dict) lets callers that already batch-fetched data for
+    many rooms at once (see ChatRoomListCreate.get) avoid a fresh set of queries
+    per room. Keys: last_message, unread_count, membership, other_member, member_count.
+    Falls back to the old per-room queries when a key isn't supplied, so single-room
+    call sites don't need to change.
+    """
+    precomputed = precomputed or {}
+    has = precomputed.__contains__
+
+    last_message = precomputed.get("last_message") if has("last_message") else room.messages.order_by("-id").first()
+
+    unread_count = precomputed.get("unread_count") if has("unread_count") else 0
+    if not has("unread_count") and requester:
         unread_count = room.messages.exclude(receipts__reader=requester).exclude(sender=requester).count()
 
     is_muted = False
     muted_until = None
-    if requester:
+    if has("membership"):
+        membership = precomputed.get("membership")
+        if membership:
+            is_muted = membership.is_muted
+            muted_until = membership.muted_until
+    elif requester:
         membership = ChatRoomMember.objects.filter(room=room, ir=requester).first()
         if membership:
             # Auto-expire mutes
@@ -111,16 +154,19 @@ def _serialize_room(room, requester=None):
             is_muted = membership.is_muted
             muted_until = membership.muted_until
 
-    other_member = None
-    if room.room_type == ChatRoomType.DIRECT and requester:
-        other = ChatRoomMember.objects.filter(room=room).exclude(ir=requester).select_related("ir").first()
-        if other:
-            other_member = {
-                "ir_id": other.ir.ir_id,
-                "ir_name": other.ir.chat_name,
-                "avatar_url": other.ir.avatar_url,
-                "last_seen": other.ir.last_seen.isoformat() if other.ir.last_seen else None,
-            }
+    if has("other_member"):
+        other_member = precomputed.get("other_member")
+    else:
+        other_member = None
+        if room.room_type == ChatRoomType.DIRECT and requester:
+            other = ChatRoomMember.objects.filter(room=room).exclude(ir=requester).select_related("ir").first()
+            if other:
+                other_member = {
+                    "ir_id": other.ir.ir_id,
+                    "ir_name": other.ir.chat_name,
+                    "avatar_url": other.ir.avatar_url,
+                    "last_seen": other.ir.last_seen.isoformat() if other.ir.last_seen else None,
+                }
 
     pinned_msg_data = None
     if room.pinned_message_id:
@@ -150,6 +196,8 @@ def _serialize_room(room, requester=None):
             preview = f"📎 {last_message.attachment_name or 'File'}"
         elif last_message.message_type == ChatMessageType.VOICE:
             preview = "🎤 Voice message"
+        elif last_message.message_type == ChatMessageType.STICKER:
+            preview = "🎨 Sticker"
         else:
             preview = last_message.content[:80]
 
@@ -165,7 +213,7 @@ def _serialize_room(room, requester=None):
         "is_pinned": room.is_pinned,
         "pinned_at": room.pinned_at,
         "pinned_message": pinned_msg_data,
-        "member_count": room.memberships.count(),
+        "member_count": precomputed.get("member_count") if has("member_count") else room.memberships.count(),
         "last_message_preview": preview,
         "last_message_at": (last_message.created_at if last_message else None),
         "unread_count": unread_count,
@@ -195,7 +243,7 @@ def _serialize_message(message):
         read_count = message.receipts.count()
 
     reactions = {}
-    for r in ChatMessageReaction.objects.filter(message_id=message.id).select_related("ir"):
+    for r in message.reactions.all():
         reactions.setdefault(r.emoji, []).append({
             "ir_id": r.ir.ir_id,
             "ir_name": r.ir.chat_name,
@@ -231,10 +279,84 @@ class ChatRoomListCreate(APIView):
         if not requester:
             return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
 
-        room_ids = ChatRoomMember.objects.filter(ir=requester).values_list("room_id", flat=True)
-        rooms = ChatRoom.objects.filter(id__in=room_ids).prefetch_related("messages", "memberships")
-        data = [_serialize_room(room, requester=requester) for room in rooms]
-        return Response({"rooms": data})
+        cache_key = ROOM_LIST_CACHE_KEY_FMT.format(ir_id=requester_ir_id)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
+        room_ids = list(ChatRoomMember.objects.filter(ir=requester).values_list("room_id", flat=True))
+        rooms = list(
+            ChatRoom.objects.filter(id__in=room_ids)
+            .select_related("created_by", "pinned_message", "pinned_message__sender")
+        )
+
+        # Batch-fetch everything _serialize_room would otherwise re-query per room.
+        last_message_ids = dict(
+            ChatMessage.objects.filter(room_id__in=room_ids)
+            .values("room_id")
+            .annotate(last_id=Max("id"))
+            .values_list("room_id", "last_id")
+        )
+        last_messages_by_room = {
+            m.room_id: m
+            for m in ChatMessage.objects.filter(id__in=[v for v in last_message_ids.values() if v])
+        }
+
+        unread_by_room = dict(
+            ChatMessage.objects.filter(room_id__in=room_ids)
+            .exclude(sender=requester)
+            .exclude(receipts__reader=requester)
+            .values("room_id")
+            .annotate(c=Count("id"))
+            .values_list("room_id", "c")
+        )
+
+        now = timezone.now()
+        memberships = list(
+            ChatRoomMember.objects.filter(room_id__in=room_ids).select_related("ir")
+        )
+        # Auto-expire mutes in bulk instead of per-row .save() calls.
+        expired_ids = [
+            m.id for m in memberships
+            if m.is_muted and m.muted_until and m.muted_until <= now
+        ]
+        if expired_ids:
+            ChatRoomMember.objects.filter(id__in=expired_ids).update(is_muted=False, muted_until=None)
+            for m in memberships:
+                if m.id in expired_ids:
+                    m.is_muted = False
+                    m.muted_until = None
+
+        own_membership_by_room = {m.room_id: m for m in memberships if m.ir_id == requester.ir_id}
+        member_count_by_room = {}
+        other_member_by_room = {}
+        for m in memberships:
+            member_count_by_room[m.room_id] = member_count_by_room.get(m.room_id, 0) + 1
+            if m.ir_id != requester.ir_id and m.room_id not in other_member_by_room:
+                other_member_by_room[m.room_id] = {
+                    "ir_id": m.ir.ir_id,
+                    "ir_name": m.ir.chat_name,
+                    "avatar_url": m.ir.avatar_url,
+                    "last_seen": m.ir.last_seen.isoformat() if m.ir.last_seen else None,
+                }
+
+        data = [
+            _serialize_room(
+                room,
+                requester=requester,
+                precomputed={
+                    "last_message": last_messages_by_room.get(room.id),
+                    "unread_count": unread_by_room.get(room.id, 0),
+                    "membership": own_membership_by_room.get(room.id),
+                    "other_member": other_member_by_room.get(room.id) if room.room_type == ChatRoomType.DIRECT else None,
+                    "member_count": member_count_by_room.get(room.id, 0),
+                },
+            )
+            for room in rooms
+        ]
+        response_body = {"rooms": data}
+        cache.set(cache_key, response_body, ROOM_LIST_CACHE_TTL)
+        return Response(response_body)
 
     def post(self, request):
         requester_ir_id = request.data.get("requester_ir_id")
@@ -302,6 +424,8 @@ class ChatRoomListCreate(APIView):
                 for member in members
             ])
 
+        invalidate_chat_rooms_cache([member.ir_id for member in members])
+
         return Response(
             {
                 "message": "Room created successfully",
@@ -328,6 +452,8 @@ class ChatRoomUpdate(APIView):
 
         room.room_name = room_name
         room.save(update_fields=["room_name", "updated_at"])
+
+        invalidate_chat_rooms_cache(_room_member_ir_ids(room.id))
 
         return Response({
             "message": "Room name updated",
@@ -415,6 +541,7 @@ class ChatRoomMembersAdd(APIView):
                 for member in to_add
             ])
             room.save(update_fields=["updated_at"])
+            invalidate_chat_rooms_cache(_room_member_ir_ids(room.id))
 
         return Response(
             {
@@ -452,6 +579,7 @@ class ChatRoomMembersRemove(APIView):
 
         ChatRoomMember.objects.filter(room=room, ir_id__in=list(removable_ids)).delete()
         room.save(update_fields=["updated_at"])
+        invalidate_chat_rooms_cache(current_member_ids)
 
         return Response(
             {
@@ -559,6 +687,7 @@ class ChatRoomMessages(APIView):
             forwarded_from=forwarded_from,
         )
         room.save(update_fields=["updated_at"])
+        invalidate_chat_rooms_cache(_room_member_ir_ids(room.id))
 
         serialized = _serialize_message(message)
 
@@ -722,7 +851,9 @@ class ChatRoomDelete(APIView):
         if room.room_type == ChatRoomType.GROUP and room.created_by_id != requester.ir_id:
             return Response({"detail": "Only the group owner can delete this group"}, status=status.HTTP_403_FORBIDDEN)
 
+        member_ir_ids = _room_member_ir_ids(room.id)
         room.delete()
+        invalidate_chat_rooms_cache(member_ir_ids)
         return Response({"message": "Room deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
 
 
@@ -741,6 +872,7 @@ class ChatRoomPin(APIView):
         room.is_pinned = True
         room.pinned_at = timezone.now()
         room.save(update_fields=["is_pinned", "pinned_at", "updated_at"])
+        invalidate_chat_rooms_cache(_room_member_ir_ids(room.id))
 
         return Response({
             "message": "Room pinned",
@@ -766,6 +898,7 @@ class ChatRoomUnpin(APIView):
         room.is_pinned = False
         room.pinned_at = None
         room.save(update_fields=["is_pinned", "pinned_at", "updated_at"])
+        invalidate_chat_rooms_cache(_room_member_ir_ids(room.id))
 
         return Response({
             "message": "Room unpinned",
@@ -804,6 +937,7 @@ class ChatMessageEdit(APIView):
         message.content = new_content
         message.edited_at = timezone.now()
         message.save(update_fields=["content", "edited_at"])
+        invalidate_chat_rooms_cache(_room_member_ir_ids(room.id))
 
         return Response({
             "message": "Message updated",
@@ -835,6 +969,7 @@ class ChatMessageDelete(APIView):
         message.is_deleted = True
         message.content = ""
         message.save(update_fields=["is_deleted", "content"])
+        invalidate_chat_rooms_cache(_room_member_ir_ids(room.id))
 
         return Response({"message": "Message deleted", "message_id": message.id})
 
@@ -865,6 +1000,29 @@ def _detect_message_type(mime: str) -> str:
     return ChatMessageType.FILE
 
 
+def _save_chat_attachment(uploaded, *, folder, allowed_mimes, max_size):
+    """
+    Shared MIME-check + storage-save logic used by both the chat message
+    upload endpoint and the sticker upload endpoint. Returns (url, mime, error).
+    """
+    if not uploaded:
+        return None, None, "file is required"
+
+    mime = uploaded.content_type or mimetypes.guess_type(uploaded.name)[0] or "application/octet-stream"
+    if mime not in allowed_mimes:
+        return None, mime, f"File type '{mime}' is not allowed"
+
+    if uploaded.size > max_size:
+        return None, mime, f"File exceeds {max_size // (1024 * 1024)} MB limit"
+
+    ext = os.path.splitext(uploaded.name)[1].lower()
+    filename = f"{folder}/{uuid.uuid4().hex}{ext}"
+    saved_path = default_storage.save(filename, ContentFile(uploaded.read()))
+    # default_storage.url() returns the Cloudinary CDN URL in production,
+    # or a local /media/ path in development — works for both.
+    return default_storage.url(saved_path), mime, None
+
+
 class ChatMessageUpload(APIView):
     """Upload a file attachment; returns the stored URL and detected message_type."""
 
@@ -879,24 +1037,14 @@ class ChatMessageUpload(APIView):
             return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
 
         uploaded = request.FILES.get("file")
-        if not uploaded:
-            return Response({"detail": "file is required"}, status=status.HTTP_400_BAD_REQUEST)
-
-        mime = uploaded.content_type or mimetypes.guess_type(uploaded.name)[0] or "application/octet-stream"
-        allowed = _IMAGE_TYPES | _VIDEO_TYPES | _VOICE_TYPES | _FILE_TYPES
-        if mime not in allowed:
-            return Response({"detail": f"File type '{mime}' is not allowed"}, status=status.HTTP_400_BAD_REQUEST)
-
-        max_size = 50 * 1024 * 1024  # 50 MB
-        if uploaded.size > max_size:
-            return Response({"detail": "File exceeds 50 MB limit"}, status=status.HTTP_400_BAD_REQUEST)
-
-        ext = os.path.splitext(uploaded.name)[1].lower()
-        filename = f"chat/{room_id}/{uuid.uuid4().hex}{ext}"
-        saved_path = default_storage.save(filename, ContentFile(uploaded.read()))
-        # default_storage.url() returns the Cloudinary CDN URL in production,
-        # or a local /media/ path in development — works for both.
-        file_url = default_storage.url(saved_path)
+        file_url, mime, error = _save_chat_attachment(
+            uploaded,
+            folder=f"chat/{room_id}",
+            allowed_mimes=_IMAGE_TYPES | _VIDEO_TYPES | _VOICE_TYPES | _FILE_TYPES,
+            max_size=50 * 1024 * 1024,  # 50 MB
+        )
+        if error:
+            return Response({"detail": error}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response({
             "url": file_url,
@@ -925,6 +1073,7 @@ class ChatMessagePin(APIView):
 
         room.pinned_message = message
         room.save(update_fields=["pinned_message", "updated_at"])
+        invalidate_chat_rooms_cache(_room_member_ir_ids(room.id))
 
         return Response({
             "message": "Message pinned",
@@ -954,6 +1103,7 @@ class ChatMessageUnpin(APIView):
 
         room.pinned_message = None
         room.save(update_fields=["pinned_message", "updated_at"])
+        invalidate_chat_rooms_cache(_room_member_ir_ids(room.id))
 
         return Response({"message": "Message unpinned"})
 
@@ -989,6 +1139,7 @@ class ChatRoomImageUpload(APIView):
 
         room.image_url = image_url
         room.save(update_fields=["image_url", "updated_at"])
+        invalidate_chat_rooms_cache(_room_member_ir_ids(room.id))
 
         system_message = ChatMessage.objects.create(
             room=room,
@@ -1322,6 +1473,7 @@ class ChatRoomMute(APIView):
                 membership.muted_until = timezone.now() + timedelta(hours=1)
 
         membership.save(update_fields=["is_muted", "muted_until"])
+        invalidate_chat_rooms_cache([requester.ir_id])
 
         return Response({
             "is_muted": membership.is_muted,
@@ -1341,3 +1493,123 @@ class ChatPresenceUpdate(APIView):
         ir.last_seen = timezone.now()
         ir.save(update_fields=["last_seen"])
         return Response({"last_seen": ir.last_seen.isoformat()})
+
+
+# ── Sticker packs ──────────────────────────────────────────────────────────
+
+_STICKER_TYPES = _IMAGE_TYPES | _VIDEO_TYPES
+_STICKER_MAX_SIZE = 5 * 1024 * 1024  # 5 MB — stickers should be small
+
+
+def _serialize_sticker(sticker):
+    return {
+        "id": sticker.id,
+        "pack_id": sticker.pack_id,
+        "image_url": sticker.image_url,
+        "is_animated": sticker.is_animated,
+        "emoji": sticker.emoji,
+        "keywords": sticker.keywords,
+    }
+
+
+def _serialize_sticker_pack(pack, stickers=None):
+    stickers = stickers if stickers is not None else list(pack.stickers.all())
+    return {
+        "id": pack.id,
+        "name": pack.name,
+        "cover_sticker_id": pack.cover_sticker_id,
+        "stickers": [_serialize_sticker(s) for s in stickers],
+    }
+
+
+class StickerPackListCreate(APIView):
+    def get(self, request):
+        requester_ir_id = request.GET.get("requester_ir_id")
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        packs = StickerPack.objects.filter(owner=requester).prefetch_related("stickers")
+        return Response({"packs": [_serialize_sticker_pack(pack) for pack in packs]})
+
+    def post(self, request):
+        requester_ir_id = request.data.get("requester_ir_id")
+        name = (request.data.get("name") or "").strip()
+
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+        if not name:
+            return Response({"detail": "name is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        pack = StickerPack.objects.create(owner=requester, name=name)
+        return Response({"pack": _serialize_sticker_pack(pack, stickers=[])}, status=status.HTTP_201_CREATED)
+
+
+class StickerPackDelete(APIView):
+    def delete(self, request, pack_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        pack = get_object_or_404(StickerPack, id=pack_id)
+        if pack.owner_id != requester.ir_id:
+            return Response({"detail": "Not authorized to delete this pack"}, status=status.HTTP_403_FORBIDDEN)
+
+        pack.delete()
+        return Response({"message": "Pack deleted", "pack_id": pack_id})
+
+
+class StickerUpload(APIView):
+    """Upload a sticker image/video into a pack the requester owns."""
+
+    def post(self, request, pack_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        pack = get_object_or_404(StickerPack, id=pack_id)
+        if pack.owner_id != requester.ir_id:
+            return Response({"detail": "Not authorized to add to this pack"}, status=status.HTTP_403_FORBIDDEN)
+
+        uploaded = request.FILES.get("file")
+        file_url, mime, error = _save_chat_attachment(
+            uploaded,
+            folder=f"stickers/{pack_id}",
+            allowed_mimes=_STICKER_TYPES,
+            max_size=_STICKER_MAX_SIZE,
+        )
+        if error:
+            return Response({"detail": error}, status=status.HTTP_400_BAD_REQUEST)
+
+        sticker = Sticker.objects.create(
+            pack=pack,
+            image_url=file_url,
+            is_animated=mime in _VIDEO_TYPES,
+            emoji=(request.data.get("emoji") or "").strip(),
+            keywords=(request.data.get("keywords") or "").strip(),
+            order=pack.stickers.count(),
+        )
+        if not pack.cover_sticker_id:
+            pack.cover_sticker = sticker
+            pack.save(update_fields=["cover_sticker"])
+
+        return Response({"sticker": _serialize_sticker(sticker)}, status=status.HTTP_201_CREATED)
+
+
+class StickerDelete(APIView):
+    def delete(self, request, pack_id, sticker_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        pack = get_object_or_404(StickerPack, id=pack_id)
+        if pack.owner_id != requester.ir_id:
+            return Response({"detail": "Not authorized to modify this pack"}, status=status.HTTP_403_FORBIDDEN)
+
+        sticker = get_object_or_404(Sticker, id=sticker_id, pack=pack)
+        sticker.delete()
+        return Response({"message": "Sticker deleted", "sticker_id": sticker_id})

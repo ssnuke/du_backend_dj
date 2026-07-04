@@ -108,6 +108,10 @@ from core.views.chat import (
     IrDisplayNameUpdate,
     IrAvatarUpload,
     ChatTabsConfigView,
+    StickerPackListCreate,
+    StickerPackDelete,
+    StickerUpload,
+    StickerDelete,
 )
 
 from core.views.pipeline import (
@@ -267,6 +271,10 @@ urlpatterns = [
     path("chat_rooms/<int:room_id>/media/", ChatRoomMediaGallery.as_view()),
     path("chat_rooms/<int:room_id>/mute/", ChatRoomMute.as_view()),
     path("chat_presence/", ChatPresenceUpdate.as_view()),
+    path("sticker_packs/", StickerPackListCreate.as_view()),
+    path("sticker_packs/<int:pack_id>/delete/", StickerPackDelete.as_view()),
+    path("sticker_packs/<int:pack_id>/stickers/", StickerUpload.as_view()),
+    path("sticker_packs/<int:pack_id>/stickers/<int:sticker_id>/delete/", StickerDelete.as_view()),
     path("ir/<str:ir_id>/display_name/", IrDisplayNameUpdate.as_view()),
     path("ir/<str:ir_id>/avatar/", IrAvatarUpload.as_view()),
 

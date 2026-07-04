@@ -1,4 +1,7 @@
+import asyncio
+import functools
 import json
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import parse_qs
 
 from channels.db import database_sync_to_async
@@ -6,6 +9,25 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from django.utils import timezone
 
 from core.models import AccessLevel, ChatMessage, ChatMessageReaction, ChatMessageReceipt, ChatRoom, ChatRoomMember, Ir
+from core.views.chat import invalidate_chat_rooms_cache, _room_member_ir_ids
+
+# Dedicated executor for outbound FCM network calls, kept separate from
+# Django's shared thread-sensitive executor (the one `database_sync_to_async`
+# uses process-wide). Without this, a slow push send would hold that single
+# shared thread and stall unrelated DB-touching work across the whole process.
+_fcm_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="fcm-send")
+
+# Strong references to fire-and-forget background tasks (e.g. push
+# notifications) so they aren't garbage-collected mid-flight — asyncio only
+# holds a weak reference to tasks created via create_task.
+_background_tasks = set()
+
+
+def _spawn_background(coro):
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -102,25 +124,31 @@ class ChatConsumer(AsyncWebsocketConsumer):
         # channel so their room list refreshes in real time even when they have
         # a different room open (or no room open at all).
         member_ir_ids = await self._get_room_member_ir_ids(self.room_id, exclude_ir_id=self.user_ir.ir_id)
-        for member_ir_id in member_ir_ids:
-            await self.channel_layer.group_send(
-                f"user_inbox_{member_ir_id}",
-                {
-                    "type": "room_preview_updated",
-                    "room_id": message["room_id"],
-                    "last_message_preview": message["content"],
-                    "last_message_at": message["created_at"],
-                    "sender_ir_id": message["sender_ir_id"],
-                },
+        await asyncio.gather(
+            *(
+                self.channel_layer.group_send(
+                    f"user_inbox_{member_ir_id}",
+                    {
+                        "type": "room_preview_updated",
+                        "room_id": message["room_id"],
+                        "last_message_preview": message["content"],
+                        "last_message_at": message["created_at"],
+                        "sender_ir_id": message["sender_ir_id"],
+                    },
+                )
+                for member_ir_id in member_ir_ids
             )
+        )
 
-        # Fire FCM push notifications to members who are not in this WS session
-        await self._notify_room_members(
+        # Fire FCM push notifications to members who are not in this WS session.
+        # Not awaited: push delivery (network-bound, can be slow/flaky) must
+        # never block this connection from handling its next incoming frame.
+        _spawn_background(self._notify_room_members(
             self.room_id,
             self.user_ir.ir_id,
             self.user_ir.chat_name,
             content,
-        )
+        ))
 
     async def _broadcast_typing(self, is_typing):
         await self.channel_layer.group_send(
@@ -215,7 +243,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self._send_error("member_ir_ids is required")
             return
 
-        added_ids, error = await self._add_members(self.room_id, self.user_ir.ir_id, member_ir_ids, show_history)
+        added_members, new_member_count, error = await self._add_members(
+            self.room_id, self.user_ir.ir_id, member_ir_ids, show_history
+        )
         if error:
             await self._send_error(error)
             return
@@ -224,7 +254,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             self.group_name,
             {
                 "type": "members_added",
-                "added": added_ids,
+                "added": added_members,
+                "new_member_count": new_member_count,
                 "by_ir_id": self.user_ir.ir_id,
             },
         )
@@ -235,7 +266,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self._send_error("member_ir_ids is required")
             return
 
-        removed_ids, error = await self._remove_members(self.room_id, self.user_ir.ir_id, member_ir_ids)
+        removed_ids, new_member_count, error = await self._remove_members(
+            self.room_id, self.user_ir.ir_id, member_ir_ids
+        )
         if error:
             await self._send_error(error)
             return
@@ -245,6 +278,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             {
                 "type": "members_removed",
                 "removed": removed_ids,
+                "new_member_count": new_member_count,
                 "by_ir_id": self.user_ir.ir_id,
             },
         )
@@ -313,6 +347,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps({
             "type": "members_added",
             "added": event["added"],
+            "new_member_count": event.get("new_member_count"),
             "by_ir_id": event["by_ir_id"],
         }))
 
@@ -320,6 +355,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps({
             "type": "members_removed",
             "removed": event["removed"],
+            "new_member_count": event.get("new_member_count"),
             "by_ir_id": event["by_ir_id"],
         }))
 
@@ -407,6 +443,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             reply_to=reply_to,
         )
         room.save(update_fields=["updated_at"])
+        invalidate_chat_rooms_cache(_room_member_ir_ids(room_id))
         # Use isoformat() strings — channels_redis cannot serialize datetime objects
         return {
             "id": message.id,
@@ -451,6 +488,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         message.content = new_content
         message.edited_at = timezone.now()
         message.save(update_fields=["content", "edited_at"])
+        invalidate_chat_rooms_cache(_room_member_ir_ids(message.room_id))
 
         return {
             "id": message.id,
@@ -472,6 +510,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         message.is_deleted = True
         message.content = ""
         message.save(update_fields=["is_deleted", "content"])
+        invalidate_chat_rooms_cache(_room_member_ir_ids(message.room_id))
 
         return message.id, None
 
@@ -480,6 +519,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         room = ChatRoom.objects.get(id=room_id)
         room.room_name = room_name
         room.save(update_fields=["room_name", "updated_at"])
+        invalidate_chat_rooms_cache(_room_member_ir_ids(room_id))
         return {
             "id": room.id,
             "room_name": room.room_name,
@@ -493,21 +533,21 @@ class ChatConsumer(AsyncWebsocketConsumer):
         requester = Ir.objects.get(ir_id=requester_ir_id)
 
         if not ChatRoomMember.objects.filter(room=room, ir=requester).exists():
-            return [], "Not authorized for this room"
+            return [], 0, "Not authorized for this room"
 
         is_elevated = requester.ir_access_level in (AccessLevel.ADMIN, AccessLevel.CTC, AccessLevel.LDC, AccessLevel.LS)
         if room.room_type == ChatRoomType.GROUP and room.created_by_id != requester_ir_id and not is_elevated:
-            return [], "Only the group owner or an LDC/CTC/Admin/LS can add members"
+            return [], 0, "Only the group owner or an LDC/CTC/Admin/LS can add members"
 
         candidates = list(Ir.objects.filter(ir_id__in=member_ir_ids, status=True))
         found_ids = {candidate.ir_id for candidate in candidates}
         missing = sorted(list(set(member_ir_ids) - found_ids))
         if missing:
-            return [], f"Invalid member IDs: {', '.join(missing)}"
+            return [], 0, f"Invalid member IDs: {', '.join(missing)}"
 
         for candidate in candidates:
             if not requester.can_view_ir(candidate):
-                return [], f"Not authorized to add {candidate.ir_id}"
+                return [], 0, f"Not authorized to add {candidate.ir_id}"
 
         existing = set(ChatRoomMember.objects.filter(room=room, ir_id__in=member_ir_ids).values_list("ir_id", flat=True))
         to_add = [candidate for candidate in candidates if candidate.ir_id not in existing]
@@ -518,8 +558,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
             ]
         )
         room.save(update_fields=["updated_at"])
+        invalidate_chat_rooms_cache(_room_member_ir_ids(room_id))
 
-        return [member.ir_id for member in to_add], None
+        added_members = [
+            {"ir_id": candidate.ir_id, "ir_name": candidate.chat_name, "avatar_url": candidate.avatar_url}
+            for candidate in to_add
+        ]
+        new_member_count = ChatRoomMember.objects.filter(room=room).count()
+        return added_members, new_member_count, None
 
     @database_sync_to_async
     def _pin_message(self, room_id, message_id):
@@ -532,6 +578,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         room = ChatRoom.objects.get(id=room_id)
         room.pinned_message = message
         room.save(update_fields=["pinned_message"])
+        invalidate_chat_rooms_cache(_room_member_ir_ids(room_id))
         return {
             "id": message.id,
             "sender_name": message.sender.ir_name,
@@ -544,6 +591,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _unpin_message(self, room_id):
         ChatRoom.objects.filter(id=room_id).update(pinned_message=None)
+        invalidate_chat_rooms_cache(_room_member_ir_ids(room_id))
 
     @database_sync_to_async
     def _remove_members(self, room_id, requester_ir_id, member_ir_ids):
@@ -552,20 +600,22 @@ class ChatConsumer(AsyncWebsocketConsumer):
         requester = Ir.objects.get(ir_id=requester_ir_id)
 
         if not ChatRoomMember.objects.filter(room=room, ir=requester).exists():
-            return [], "Not authorized for this room"
+            return [], 0, "Not authorized for this room"
 
         if room.room_type == ChatRoomType.GROUP and room.created_by_id != requester_ir_id:
-            return [], "Only the group owner can remove members"
+            return [], 0, "Only the group owner can remove members"
 
         current_ids = set(ChatRoomMember.objects.filter(room=room).values_list("ir_id", flat=True))
         removable_ids = set(member_ir_ids) & current_ids
 
         if len(current_ids - removable_ids) <= 0:
-            return [], "Room must have at least one member"
+            return [], 0, "Room must have at least one member"
 
         ChatRoomMember.objects.filter(room=room, ir_id__in=list(removable_ids)).delete()
         room.save(update_fields=["updated_at"])
-        return sorted(list(removable_ids)), None
+        invalidate_chat_rooms_cache(current_ids)
+        new_member_count = len(current_ids - removable_ids)
+        return sorted(list(removable_ids)), new_member_count, None
 
     @database_sync_to_async
     def _get_room_member_ir_ids(self, room_id, exclude_ir_id=None):
@@ -575,61 +625,108 @@ class ChatConsumer(AsyncWebsocketConsumer):
         return list(qs)
 
     @database_sync_to_async
-    def _notify_room_members(self, room_id, sender_ir_id, sender_name, content):
-        """Send FCM push notifications to room members who are not actively watching this room."""
+    def _gather_notification_targets(self, room_id, sender_ir_id):
+        """
+        DB-only half of push notification prep: title, per-member token list,
+        and a token -> ir_id map (for pruning dead tokens after send). Kept
+        small and fast since it runs on Django's shared thread-sensitive
+        executor; the slow network send itself runs elsewhere (see
+        _notify_room_members).
+        """
+        room = ChatRoom.objects.get(id=room_id)
+        now = timezone.now()
+
+        # Bulk-clear expired mutes up front instead of a per-member .save() loop.
+        ChatRoomMember.objects.filter(
+            room_id=room_id, is_muted=True, muted_until__lte=now
+        ).update(is_muted=False, muted_until=None)
+
+        # Collect FCM tokens for all members except the sender, skipping muted members
+        members = ChatRoomMember.objects.filter(
+            room_id=room_id
+        ).exclude(ir__ir_id=sender_ir_id).select_related("ir")
+
+        token_owner = {}
+        for member in members:
+            # Skip still-muted members (muted_until=None means muted forever)
+            if member.is_muted and (member.muted_until is None or member.muted_until > now):
+                continue
+
+            ir = member.ir
+            if ir.fcm_tokens and isinstance(ir.fcm_tokens, list):
+                valid = [t for t in ir.fcm_tokens if t and isinstance(t, str) and len(t) > 10]
+                for token in valid:
+                    token_owner[token] = ir.ir_id
+
+        return room.room_type, room.room_name, list(token_owner.keys()), token_owner
+
+    @database_sync_to_async
+    def _prune_dead_tokens(self, bad_tokens_by_ir_id):
+        """Remove permanently-invalid FCM tokens from the owning Ir rows."""
+        for ir_id, tokens in bad_tokens_by_ir_id.items():
+            ir = Ir.objects.filter(ir_id=ir_id).first()
+            if not ir or not ir.fcm_tokens:
+                continue
+            new_tokens = [t for t in ir.fcm_tokens if t not in tokens]
+            if len(new_tokens) != len(ir.fcm_tokens):
+                ir.fcm_tokens = new_tokens
+                ir.save(update_fields=["fcm_tokens"])
+
+    async def _notify_room_members(self, room_id, sender_ir_id, sender_name, content):
+        """
+        Send FCM push notifications to room members who are not actively
+        watching this room. Called fire-and-forget (see _handle_send_message)
+        so its latency never blocks the WS connection. The actual network
+        call runs on a dedicated executor (_fcm_executor), not Django's
+        shared thread-sensitive one, so a slow push can't stall unrelated
+        DB-touching work elsewhere in the process.
+        """
         import logging
         logger = logging.getLogger(__name__)
         try:
-            from core.utils.firebase_messaging import send_multicast
+            from core.utils.firebase_messaging import send_multicast, is_dead_token_error
 
-            room = ChatRoom.objects.get(id=room_id)
-
-            # Notification title: just sender name for DMs, "Name · Room" for groups
-            if room.room_type == "direct":
-                title = sender_name
-            else:
-                title = f"{sender_name} · {room.room_name}"
-
-            # Collect FCM tokens for all members except the sender, skipping muted members
-            members = ChatRoomMember.objects.filter(
-                room_id=room_id
-            ).exclude(ir__ir_id=sender_ir_id).select_related("ir")
-
-            now = timezone.now()
-            tokens = []
-            for member in members:
-                # Skip muted members (muted_until=None means muted forever)
-                if member.is_muted:
-                    if member.muted_until is None or member.muted_until > now:
-                        continue
-                    # Mute expired — clear it
-                    member.is_muted = False
-                    member.muted_until = None
-                    member.save(update_fields=["is_muted", "muted_until"])
-
-                ir = member.ir
-                if ir.fcm_tokens and isinstance(ir.fcm_tokens, list):
-                    valid = [t for t in ir.fcm_tokens if t and isinstance(t, str) and len(t) > 10]
-                    tokens.extend(valid)
-
+            room_type, room_name, tokens, token_owner = await self._gather_notification_targets(
+                room_id, sender_ir_id
+            )
             if not tokens:
                 return
 
-            # Deduplicate while preserving order
-            tokens = list(dict.fromkeys(tokens))
-
+            title = sender_name if room_type == "direct" else f"{sender_name} · {room_name}"
             # Truncate message preview to 100 chars
             preview = content if len(content) <= 100 else content[:100] + "…"
 
-            send_multicast(
-                fcm_tokens=tokens,
-                title=title,
-                body=preview,
-                data={
-                    "notification_type": "chat_message",
-                    "room_id": str(room_id),
-                },
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                _fcm_executor,
+                functools.partial(
+                    send_multicast,
+                    fcm_tokens=tokens,
+                    title=title,
+                    body=preview,
+                    data={
+                        "notification_type": "chat_message",
+                        "room_id": str(room_id),
+                    },
+                ),
             )
+
+            if result.get("failure"):
+                bad_tokens_by_ir_id = {}
+                for detail in result.get("failure_details", []):
+                    if is_dead_token_error(detail.get("code"), detail.get("message")):
+                        token = detail.get("token")
+                        owner_ir_id = token_owner.get(token)
+                        if owner_ir_id:
+                            bad_tokens_by_ir_id.setdefault(owner_ir_id, set()).add(token)
+                if bad_tokens_by_ir_id:
+                    logger.info(
+                        "Pruning %d dead FCM token(s) across %d member(s) after chat push to room %s",
+                        sum(len(v) for v in bad_tokens_by_ir_id.values()),
+                        len(bad_tokens_by_ir_id),
+                        room_id,
+                    )
+                    await self._prune_dead_tokens(bad_tokens_by_ir_id)
         except Exception:
             logger.exception("Failed to send chat FCM notifications for room %s", room_id)
 

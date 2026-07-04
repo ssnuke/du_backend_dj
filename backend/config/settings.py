@@ -145,6 +145,23 @@ CHANNEL_LAYERS = {
     },
 }
 
+# Same Redis instance/DB as the channel layer above — many managed Redis
+# offerings (e.g. Redis Cloud fixed/free plans) only expose a single logical
+# DB, so a separate DB index isn't reliably available. A KEY_PREFIX keeps
+# cache keys from ever colliding with channels_redis's own "asgi:"-prefixed
+# pub/sub keys in that shared keyspace. Set CACHE_REDIS_URL to point at a
+# different instance/DB if one becomes available.
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": os.getenv("CACHE_REDIS_URL", os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")),
+        "KEY_PREFIX": "du_cache",
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        },
+    },
+}
+
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
