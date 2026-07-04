@@ -1,5 +1,6 @@
 import os
 
+import cloudinary.uploader
 from cloudinary_storage.storage import MediaCloudinaryStorage
 
 
@@ -47,3 +48,16 @@ class AutoCloudinaryStorage(MediaCloudinaryStorage):
         if ext and not public_id.lower().endswith(ext.lower()):
             public_id += ext
         return public_id
+
+    def delete(self, name):
+        # The extension _save() re-attaches (see above) is only there so
+        # _get_resource_type() keeps working — Cloudinary's *actual* stored
+        # public_id for image/video still omits it. Passing the
+        # extension-bearing name straight to destroy() would silently target
+        # a non-existent public_id (destroy() on a missing resource still
+        # reports "ok"-shaped responses in some cases, so this failure mode
+        # is easy to miss: nothing gets deleted, and storage quietly leaks).
+        resource_type = self._get_resource_type(name)
+        public_id = os.path.splitext(name)[0] if resource_type in ("image", "video") else name
+        response = cloudinary.uploader.destroy(public_id, invalidate=True, resource_type=resource_type)
+        return response.get("result") == "ok"
