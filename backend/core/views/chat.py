@@ -199,6 +199,8 @@ def _serialize_room(room, requester=None, *, precomputed=None):
             preview = "🎤 Voice message"
         elif last_message.message_type == ChatMessageType.STICKER:
             preview = "🎨 Sticker"
+        elif last_message.message_type == ChatMessageType.GIF:
+            preview = "🎞️ GIF"
         else:
             preview = last_message.content[:80]
 

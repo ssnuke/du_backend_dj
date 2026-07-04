@@ -619,6 +619,7 @@ class ChatMessageType(models.TextChoices):
     FILE = "file"
     VOICE = "voice"
     STICKER = "sticker"
+    GIF = "gif"
     SYSTEM = "system"
 
 

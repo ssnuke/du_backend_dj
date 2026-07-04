@@ -228,6 +228,9 @@ BUNNY_STREAM_LIBRARY_ID = os.getenv("BUNNY_STREAM_LIBRARY_ID", "")
 BUNNY_STREAM_CDN_HOSTNAME = os.getenv("BUNNY_STREAM_CDN_HOSTNAME", "")  # e.g. vz-abc123.b-cdn.net
 BUNNY_STREAM_TOKEN_KEY = os.getenv("BUNNY_STREAM_TOKEN_KEY", "")        # token auth key from Bunny dashboard
 
+# GIPHY (chat GIF picker) — get a key at developers.giphy.com
+GIPHY_API_KEY = os.getenv("GIPHY_API_KEY", "")
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/6.0/ref/settings/#default-auto-field
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

@@ -47,6 +47,7 @@ from core.views.post import (
 )
 
 from core.views.health import health_check
+from core.views.gifs import GifSearch, GifTrending
 from core.views.put import (
     UpdateIrDetails,
     UpdateInfoDetail,
@@ -281,6 +282,8 @@ urlpatterns = [
     path("sticker_packs/<int:pack_id>/unsubscribe/", StickerPackUnsubscribe.as_view()),
     path("sticker_packs/<int:pack_id>/stickers/", StickerUpload.as_view()),
     path("sticker_packs/<int:pack_id>/stickers/<int:sticker_id>/delete/", StickerDelete.as_view()),
+    path("gifs/search/", GifSearch.as_view()),
+    path("gifs/trending/", GifTrending.as_view()),
     path("ir/<str:ir_id>/display_name/", IrDisplayNameUpdate.as_view()),
     path("ir/<str:ir_id>/avatar/", IrAvatarUpload.as_view()),
 
