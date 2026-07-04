@@ -717,11 +717,18 @@ class ChatMessageReaction(models.Model):
 
 
 class StickerPack(models.Model):
-    owner = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name="sticker_packs")
+    # Null for admin-curated default/official packs, which aren't tied to any
+    # particular user's account.
+    owner = models.ForeignKey(
+        Ir, on_delete=models.SET_NULL, null=True, blank=True, related_name="sticker_packs"
+    )
     name = models.CharField(max_length=80)
     cover_sticker = models.ForeignKey(
         "Sticker", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
+    # Shown in every user's "Browse" catalog; users can add (subscribe to) it
+    # without duplicating the pack or its stickers.
+    is_public = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -731,6 +738,12 @@ class StickerPack(models.Model):
 class Sticker(models.Model):
     pack = models.ForeignKey(StickerPack, on_delete=models.CASCADE, related_name="stickers")
     image_url = models.URLField(max_length=1000)
+    # Admin-only convenience upload; goes through the same default_storage
+    # (Cloudinary) as every other upload in the app. On save(), if this is
+    # set and image_url is blank, image_url is auto-populated from it — the
+    # rest of the app (API responses, MessageBubble rendering) only ever
+    # reads image_url, so this field doesn't change that contract.
+    admin_upload = models.FileField(upload_to="stickers/admin/", blank=True, null=True)
     is_animated = models.BooleanField(default=False)
     emoji = models.CharField(max_length=8, blank=True, default="")
     keywords = models.CharField(max_length=255, blank=True, default="")
@@ -739,6 +752,26 @@ class Sticker(models.Model):
 
     class Meta:
         ordering = ["order", "id"]
+
+    def save(self, *args, **kwargs):
+        # admin_upload.url isn't valid until the base save() actually commits
+        # the file to storage (assigns it a name/URL) — so populate image_url
+        # in a follow-up save rather than before the first one.
+        needs_url_from_upload = bool(self.admin_upload) and not self.image_url
+        super().save(*args, **kwargs)
+        if needs_url_from_upload:
+            self.image_url = self.admin_upload.url
+            super().save(update_fields=["image_url"])
+
+
+class StickerPackSubscription(models.Model):
+    """A user's non-owned sticker pack, added from the Browse catalog."""
+    ir = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name="sticker_pack_subscriptions")
+    pack = models.ForeignKey(StickerPack, on_delete=models.CASCADE, related_name="subscriptions")
+    subscribed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("ir", "pack")
 
 
 class Pocket(models.Model):

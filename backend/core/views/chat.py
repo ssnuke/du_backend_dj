@@ -29,6 +29,7 @@ from core.models import (
     Ir,
     Sticker,
     StickerPack,
+    StickerPackSubscription,
 )
 
 from datetime import timedelta
@@ -1512,12 +1513,16 @@ def _serialize_sticker(sticker):
     }
 
 
-def _serialize_sticker_pack(pack, stickers=None):
+def _serialize_sticker_pack(pack, stickers=None, *, is_own=None, requester=None):
     stickers = stickers if stickers is not None else list(pack.stickers.all())
+    if is_own is None:
+        is_own = bool(requester) and pack.owner_id == requester.ir_id
     return {
         "id": pack.id,
         "name": pack.name,
         "cover_sticker_id": pack.cover_sticker_id,
+        "is_public": pack.is_public,
+        "is_own": is_own,
         "stickers": [_serialize_sticker(s) for s in stickers],
     }
 
@@ -1529,8 +1534,14 @@ class StickerPackListCreate(APIView):
         if not requester:
             return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
 
-        packs = StickerPack.objects.filter(owner=requester).prefetch_related("stickers")
-        return Response({"packs": [_serialize_sticker_pack(pack) for pack in packs]})
+        packs = (
+            StickerPack.objects.filter(Q(owner=requester) | Q(subscriptions__ir=requester))
+            .distinct()
+            .prefetch_related("stickers")
+        )
+        return Response({
+            "packs": [_serialize_sticker_pack(pack, requester=requester) for pack in packs]
+        })
 
     def post(self, request):
         requester_ir_id = request.data.get("requester_ir_id")
@@ -1543,7 +1554,10 @@ class StickerPackListCreate(APIView):
             return Response({"detail": "name is required"}, status=status.HTTP_400_BAD_REQUEST)
 
         pack = StickerPack.objects.create(owner=requester, name=name)
-        return Response({"pack": _serialize_sticker_pack(pack, stickers=[])}, status=status.HTTP_201_CREATED)
+        return Response(
+            {"pack": _serialize_sticker_pack(pack, stickers=[], is_own=True)},
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class StickerPackDelete(APIView):
@@ -1613,3 +1627,53 @@ class StickerDelete(APIView):
         sticker = get_object_or_404(Sticker, id=sticker_id, pack=pack)
         sticker.delete()
         return Response({"message": "Sticker deleted", "sticker_id": sticker_id})
+
+
+class StickerPackBrowse(APIView):
+    """Public packs the requester doesn't already own or have subscribed to."""
+
+    def get(self, request):
+        requester_ir_id = request.GET.get("requester_ir_id")
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        packs = (
+            StickerPack.objects.filter(is_public=True)
+            .exclude(owner=requester)
+            .exclude(subscriptions__ir=requester)
+            .prefetch_related("stickers")
+        )
+        return Response({
+            "packs": [_serialize_sticker_pack(pack, is_own=False) for pack in packs]
+        })
+
+
+class StickerPackSubscribe(APIView):
+    """Add a public pack to the requester's own sticker picker without copying it."""
+
+    def post(self, request, pack_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        pack = get_object_or_404(StickerPack, id=pack_id)
+        if not pack.is_public:
+            return Response({"detail": "This pack is not public"}, status=status.HTTP_400_BAD_REQUEST)
+
+        StickerPackSubscription.objects.get_or_create(ir=requester, pack=pack)
+        return Response({"pack": _serialize_sticker_pack(pack, is_own=False)})
+
+
+class StickerPackUnsubscribe(APIView):
+    """Remove a subscribed (non-owned) pack from the requester's picker. Never touches the pack itself."""
+
+    def post(self, request, pack_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        StickerPackSubscription.objects.filter(ir=requester, pack_id=pack_id).delete()
+        return Response({"message": "Unsubscribed", "pack_id": pack_id})

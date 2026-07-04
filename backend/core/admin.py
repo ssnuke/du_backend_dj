@@ -1,5 +1,5 @@
 from django.contrib import admin
-from core.models import LearnVideo, DreamVideo
+from core.models import LearnVideo, DreamVideo, StickerPack, Sticker
 
 
 @admin.register(LearnVideo)
@@ -21,6 +21,28 @@ class LearnVideoAdmin(admin.ModelAdmin):
             ),
         }),
     )
+
+
+class StickerInline(admin.TabularInline):
+    model = Sticker
+    extra = 1
+    fields = ('admin_upload', 'image_url', 'emoji', 'is_animated', 'order')
+    readonly_fields = ()
+
+
+@admin.register(StickerPack)
+class StickerPackAdmin(admin.ModelAdmin):
+    list_display = ('name', 'is_public', 'sticker_count', 'owner', 'created_at')
+    list_editable = ('is_public',)
+    list_filter = ('is_public',)
+    search_fields = ('name',)
+    ordering = ('name',)
+    inlines = [StickerInline]
+    fields = ('name', 'is_public', 'owner', 'cover_sticker')
+
+    def sticker_count(self, obj):
+        return obj.stickers.count()
+    sticker_count.short_description = 'Stickers'
 
 
 @admin.register(DreamVideo)

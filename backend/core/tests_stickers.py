@@ -11,6 +11,7 @@ from core.models import (
     Ir,
     Sticker,
     StickerPack,
+    StickerPackSubscription,
 )
 
 
@@ -172,3 +173,93 @@ class StickerMessageSendTests(TestCase):
         message = resp.json()["chat_message"]
         self.assertEqual(message["message_type"], ChatMessageType.STICKER)
         self.assertEqual(message["attachment_url"], "https://example.com/sticker.png")
+
+
+class StickerPackSubscriptionTests(TestCase):
+    def setUp(self):
+        self.owner = Ir.objects.create(
+            ir_id="PUBOWNER1", ir_name="Owner", ir_access_level=AccessLevel.LS, status=True
+        )
+        self.user = Ir.objects.create(
+            ir_id="SUBUSER1", ir_name="Subscriber", ir_access_level=AccessLevel.LS, status=True
+        )
+        self.public_pack = StickerPack.objects.create(owner=self.owner, name="Official Pack", is_public=True)
+        Sticker.objects.create(pack=self.public_pack, image_url="https://example.com/a.png")
+        self.private_pack = StickerPack.objects.create(owner=self.owner, name="Private Pack", is_public=False)
+
+    def test_browse_shows_only_public_packs_not_already_had(self):
+        resp = self.client.get("/api/sticker_packs/browse/", {"requester_ir_id": self.user.ir_id})
+        self.assertEqual(resp.status_code, 200)
+        names = [p["name"] for p in resp.json()["packs"]]
+        self.assertIn("Official Pack", names)
+        self.assertNotIn("Private Pack", names)
+
+    def test_owner_does_not_see_own_pack_in_browse(self):
+        resp = self.client.get("/api/sticker_packs/browse/", {"requester_ir_id": self.owner.ir_id})
+        names = [p["name"] for p in resp.json()["packs"]]
+        self.assertNotIn("Official Pack", names)
+
+    def test_subscribe_adds_pack_to_list_without_duplicating_stickers(self):
+        resp = self.client.post(
+            f"/api/sticker_packs/{self.public_pack.id}/subscribe/",
+            {"requester_ir_id": self.user.ir_id},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+
+        # No new Sticker/StickerPack rows were created — pure subscription.
+        self.assertEqual(StickerPack.objects.count(), 2)
+        self.assertEqual(Sticker.objects.count(), 1)
+
+        list_resp = self.client.get("/api/sticker_packs/", {"requester_ir_id": self.user.ir_id})
+        packs = list_resp.json()["packs"]
+        self.assertEqual(len(packs), 1)
+        self.assertEqual(packs[0]["id"], self.public_pack.id)
+        self.assertFalse(packs[0]["is_own"])
+
+        # Now excluded from browse since the user already has it.
+        browse_resp = self.client.get("/api/sticker_packs/browse/", {"requester_ir_id": self.user.ir_id})
+        self.assertNotIn(self.public_pack.id, [p["id"] for p in browse_resp.json()["packs"]])
+
+    def test_subscribe_rejects_private_pack(self):
+        resp = self.client.post(
+            f"/api/sticker_packs/{self.private_pack.id}/subscribe/",
+            {"requester_ir_id": self.user.ir_id},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(StickerPackSubscription.objects.count(), 0)
+
+    def test_subscribe_is_idempotent(self):
+        for _ in range(2):
+            resp = self.client.post(
+                f"/api/sticker_packs/{self.public_pack.id}/subscribe/",
+                {"requester_ir_id": self.user.ir_id},
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200)
+        self.assertEqual(StickerPackSubscription.objects.count(), 1)
+
+    def test_unsubscribe_removes_from_list_but_keeps_pack_intact(self):
+        StickerPackSubscription.objects.create(ir=self.user, pack=self.public_pack)
+
+        resp = self.client.post(
+            f"/api/sticker_packs/{self.public_pack.id}/unsubscribe/",
+            {"requester_ir_id": self.user.ir_id},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(StickerPackSubscription.objects.count(), 0)
+
+        # Pack and its stickers still exist for the owner and anyone else.
+        self.assertTrue(StickerPack.objects.filter(id=self.public_pack.id).exists())
+        self.assertEqual(Sticker.objects.filter(pack=self.public_pack).count(), 1)
+
+        list_resp = self.client.get("/api/sticker_packs/", {"requester_ir_id": self.user.ir_id})
+        self.assertEqual(list_resp.json()["packs"], [])
+
+    def test_owner_pack_marked_is_own_true(self):
+        resp = self.client.get("/api/sticker_packs/", {"requester_ir_id": self.owner.ir_id})
+        packs = {p["id"]: p for p in resp.json()["packs"]}
+        self.assertTrue(packs[self.public_pack.id]["is_own"])
+        self.assertTrue(packs[self.private_pack.id]["is_own"])
