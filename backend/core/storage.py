@@ -31,3 +31,19 @@ class AutoCloudinaryStorage(MediaCloudinaryStorage):
         if ext in self.AV_EXTENSIONS:
             return "video"
         return "raw"
+
+    def _save(self, name, content):
+        # Cloudinary strips the extension from the public_id it returns for
+        # image/video uploads (format is tracked separately on their end), so
+        # the name Django stores loses its extension entirely. Later calls to
+        # url()/delete() re-derive resource_type from that stored name via
+        # _get_resource_type() above — without the extension they always fall
+        # through to "raw", producing a broken delivery URL (wrong
+        # resource_type segment) for an asset Cloudinary actually stored as
+        # image/video. Re-attach the original extension so type detection
+        # keeps working on every later call, not just at upload time.
+        ext = os.path.splitext(name)[1]
+        public_id = super()._save(name, content)
+        if ext and not public_id.lower().endswith(ext.lower()):
+            public_id += ext
+        return public_id
