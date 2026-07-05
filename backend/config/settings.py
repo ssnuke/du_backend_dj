@@ -247,7 +247,15 @@ AWS_ACCESS_KEY_ID = R2_ACCESS_KEY_ID
 AWS_SECRET_ACCESS_KEY = R2_SECRET_ACCESS_KEY
 AWS_STORAGE_BUCKET_NAME = R2_BUCKET_NAME
 AWS_S3_ENDPOINT_URL = R2_ENDPOINT_URL
-AWS_S3_CUSTOM_DOMAIN = R2_PUBLIC_URL
+# django-storages builds delivery URLs as "<url_protocol>//<CUSTOM_DOMAIN>/<path>"
+# — it expects a bare hostname, NOT a full URL. Cloudflare's dashboard shows
+# the public URL with an "https://" prefix already on it, which is exactly
+# what someone would naturally copy-paste into the env var; strip it here so
+# a scheme-included value doesn't silently produce a broken
+# "https://https://pub-xxxx.r2.dev/..." URL for every single upload.
+AWS_S3_CUSTOM_DOMAIN = (
+    R2_PUBLIC_URL.split("://", 1)[-1].rstrip("/") if R2_PUBLIC_URL else None
+)
 AWS_S3_REGION_NAME = "auto"  # required by R2's S3-compatible API
 AWS_DEFAULT_ACL = None       # R2 doesn't support S3 ACLs
 AWS_QUERYSTRING_AUTH = False  # bucket is served publicly via AWS_S3_CUSTOM_DOMAIN, no signed URLs
