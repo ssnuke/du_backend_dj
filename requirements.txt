@@ -21,4 +21,6 @@ redis==5.0.8
 django-redis==5.4.0
 cloudinary>=1.40.0
 django-cloudinary-storage>=0.3.0
+django-storages[s3]>=1.14.4
+Pillow>=10.4.0
 requests==2.32.5

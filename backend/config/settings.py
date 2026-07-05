@@ -215,14 +215,46 @@ STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
-# ── Cloudinary (media / file uploads) ────────────────────────────────────────
-# Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET in env.
+# ── Cloudinary (legacy media storage — old uploads only) ─────────────────────
+# No longer the active storage backend (see R2 below) — its free tier ran
+# out. Kept configured only so already-uploaded ChatMessage.attachment_url /
+# Sticker.image_url / ChatRoom.image_url values (absolute URLs stored at
+# upload time) keep resolving; the account must stay active until that old
+# media naturally ages out or is separately migrated.
 CLOUDINARY_STORAGE = {
     'CLOUD_NAME': os.getenv('CLOUDINARY_CLOUD_NAME'),
     'API_KEY':    os.getenv('CLOUDINARY_API_KEY'),
     'API_SECRET': os.getenv('CLOUDINARY_API_SECRET'),
 }
-DEFAULT_FILE_STORAGE = 'core.storage.AutoCloudinaryStorage'
+
+# ── Cloudflare R2 (media storage — chat attachments, avatars, stickers) ──────
+# Active storage backend for all new uploads. R2 is S3-API-compatible (hence
+# django-storages' S3Boto3Storage) and charges zero egress fees, unlike
+# Cloudinary's bundled storage+bandwidth credit model.
+# Create a bucket + API token in the Cloudflare dashboard, then set these env
+# vars (locally via .env, on Render via the dashboard's env var settings):
+R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID") or None
+R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY") or None
+R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME") or None
+R2_ENDPOINT_URL = os.getenv("R2_ENDPOINT_URL") or None  # https://<account_id>.r2.cloudflarestorage.com
+R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL") or None      # custom domain or <bucket>.<account_id>.r2.dev
+# botocore hard-crashes (ValueError: Invalid endpoint) on an empty-string
+# endpoint/bucket rather than treating it like "unset" — `or None` above
+# keeps local/test environments without R2 credentials configured from
+# blowing up the moment anything calls default_storage.save()/url().
+
+AWS_ACCESS_KEY_ID = R2_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY = R2_SECRET_ACCESS_KEY
+AWS_STORAGE_BUCKET_NAME = R2_BUCKET_NAME
+AWS_S3_ENDPOINT_URL = R2_ENDPOINT_URL
+AWS_S3_CUSTOM_DOMAIN = R2_PUBLIC_URL
+AWS_S3_REGION_NAME = "auto"  # required by R2's S3-compatible API
+AWS_DEFAULT_ACL = None       # R2 doesn't support S3 ACLs
+AWS_QUERYSTRING_AUTH = False  # bucket is served publicly via AWS_S3_CUSTOM_DOMAIN, no signed URLs
+AWS_S3_ADDRESSING_STYLE = "virtual"
+AWS_S3_FILE_OVERWRITE = False
+
+DEFAULT_FILE_STORAGE = 'core.storage.R2Storage'
 
 MEDIA_URL = '/media/'   # kept for local fallback / admin compatibility
 MEDIA_ROOT = BASE_DIR / "media"

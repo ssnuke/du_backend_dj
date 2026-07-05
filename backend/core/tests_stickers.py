@@ -1,6 +1,6 @@
 import io
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from core.models import (
     AccessLevel,
@@ -80,7 +80,12 @@ class StickerPackApiTests(TestCase):
         self.assertEqual(len(packs), 1)
         self.assertEqual(packs[0]["name"], "Mine")
 
+    @override_settings(DEFAULT_FILE_STORAGE="django.core.files.storage.FileSystemStorage")
     def test_upload_sticker_to_own_pack(self):
+        # This endpoint saves the uploaded file through `default_storage`,
+        # which in production is a real cloud backend (R2/Cloudinary) that
+        # this test shouldn't depend on having live credentials for — swap
+        # in local filesystem storage just for this test.
         pack = StickerPack.objects.create(owner=self.owner, name="Pack")
         image = io.BytesIO(_tiny_png_bytes())
         image.name = "sticker.png"

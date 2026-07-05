@@ -1,7 +1,10 @@
+import io
 import os
 
 import cloudinary.uploader
 from cloudinary_storage.storage import MediaCloudinaryStorage
+from django.core.files.base import ContentFile
+from storages.backends.s3boto3 import S3Boto3Storage
 
 
 class AutoCloudinaryStorage(MediaCloudinaryStorage):
@@ -61,3 +64,61 @@ class AutoCloudinaryStorage(MediaCloudinaryStorage):
         public_id = os.path.splitext(name)[0] if resource_type in ("image", "video") else name
         response = cloudinary.uploader.destroy(public_id, invalidate=True, resource_type=resource_type)
         return response.get("result") == "ok"
+
+
+class R2Storage(S3Boto3Storage):
+    """
+    Cloudflare R2 (S3-compatible) storage backend — replaces
+    AutoCloudinaryStorage as DEFAULT_FILE_STORAGE once Cloudinary's free tier
+    ran out. R2 charges zero egress fees, unlike Cloudinary's bundled
+    storage+bandwidth credit model, which is what made costs unpredictable.
+
+    R2 has no built-in on-the-fly URL-based resizing (Cloudflare's "Image
+    Resizing" feature needs a paid Pro-plan zone). Since every frontend call
+    site only ever asks for one of a handful of fixed display sizes, a
+    single "-thumb" derivative generated once at upload time — named
+    predictably so the frontend can request it via plain string
+    manipulation on the original URL, same as it already does for Cloudinary
+    transforms — covers all of them without needing a paid resizing service.
+
+    Only affects new uploads. Existing ChatMessage.attachment_url /
+    Sticker.image_url / ChatRoom.image_url values already store a
+    fully-resolved Cloudinary URL from before this switch, and keep
+    resolving directly against Cloudinary's CDN unchanged.
+    """
+
+    IMAGE_EXTENSIONS = AutoCloudinaryStorage.IMAGE_EXTENSIONS
+    THUMB_MAX_SIDE = 400
+    THUMB_QUALITY = 80
+
+    def _save(self, name, content):
+        saved_name = super()._save(name, content)
+        if os.path.splitext(saved_name)[1].lower() in self.IMAGE_EXTENSIONS:
+            self._save_thumbnail(saved_name, content)
+        return saved_name
+
+    def _save_thumbnail(self, name, content):
+        # Thumbnail generation is a bandwidth optimization, not essential —
+        # never let a corrupt/unsupported image fail the actual upload.
+        try:
+            from PIL import Image, ImageOps
+
+            content.seek(0)
+            image = ImageOps.exif_transpose(Image.open(content))
+            image.thumbnail((self.THUMB_MAX_SIDE, self.THUMB_MAX_SIDE))
+
+            is_png = os.path.splitext(name)[1].lower() == ".png" and image.mode == "RGBA"
+            if not is_png and image.mode not in ("RGB", "L"):
+                image = image.convert("RGB")
+
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG" if is_png else "JPEG", quality=self.THUMB_QUALITY)
+            buffer.seek(0)
+            super()._save(self._thumb_name(name), ContentFile(buffer.read()))
+        except Exception:
+            pass
+
+    @staticmethod
+    def _thumb_name(name):
+        root, ext = os.path.splitext(name)
+        return f"{root}-thumb{ext}"

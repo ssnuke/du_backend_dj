@@ -41,15 +41,17 @@ Last reviewed: 2026-07-05.
 
 ## Media storage
 
-### Cloudinary — images, videos, voice notes, stickers, avatars
-- **What**: stores and serves all chat media (photos, videos, voice notes, sticker uploads, room/personal avatars) via `core/storage.py`'s `AutoCloudinaryStorage`.
-- **Config**: `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` in `config/settings.py`.
-- **Plan**: free tier, 25 credits/month (1 credit ≈ 1GB storage or bandwidth, roughly).
-- **Fixed this session**:
-  - Was uploading everything as Cloudinary's "raw" resource type (no automatic image/video optimization at all) — now routes by file type via `AutoCloudinaryStorage`, unlocking `f_auto`/`q_auto` compression.
-  - Frontend now requests appropriately-sized thumbnail derivatives (`cldThumb()` in `react-web-app/src/utils/cloudinaryUrl.js`) instead of always pulling full-resolution originals for small UI elements (avatars, sticker grid, etc.).
-- **Known limitation**: even with those fixes, the free tier is very likely **not sufficient for sustained use by 100-200 active users** — storage is cumulative (never resets monthly) and will keep growing as people share media, with no retention/cleanup policy currently in place. Was already at ~70% usage before this session's optimizations, with minimal real traffic.
-- **Plan ahead**: monitor actual credit consumption for a few weeks post-optimization before deciding between (a) upgrading to Cloudinary's paid plan (~$99+/month), or (b) migrating to Bunny.net (see below — already integrated for video, could consolidate). A media retention/cleanup policy (e.g. auto-purge very old voice notes) is also worth considering as a cost lever independent of provider.
+### Cloudflare R2 — images, videos, voice notes, stickers, avatars (active)
+- **What**: stores and serves all **new** chat media (photos, videos, voice notes, sticker uploads, room/personal avatars) via `core/storage.py`'s `R2Storage`, an S3-compatible backend (`django-storages` + `boto3`) pointed at an R2 bucket.
+- **Config**: `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `R2_ENDPOINT_URL`, `R2_PUBLIC_URL` in `config/settings.py` — create the bucket + API token in the Cloudflare dashboard.
+- **Why R2 over Cloudinary/Bunny**: R2 charges **zero egress fees**, unlike Cloudinary (storage+bandwidth bundled into the same credit pool — the actual cause of the free-tier exhaustion) or Bunny (small but nonzero per-GB bandwidth charge). For a chat app, bandwidth is the real cost driver, not storage.
+- **No on-the-fly resizing**: Cloudflare's Image Resizing feature needs a paid Pro-plan zone, so `R2Storage` instead generates one fixed "-thumb" derivative (400px max side, quality 80) at upload time for image uploads; the frontend (`cldThumb()`/`cldAvatar()` in `react-web-app/src/utils/cloudinaryUrl.js`) requests it by filename convention instead of a dynamic transform. Video/audio files have no thumbnail — the original is always used.
+- **Migration note**: only new uploads go to R2 — no bulk migration of existing Cloudinary-hosted assets was done. Old messages/avatars keep resolving directly against Cloudinary's CDN.
+
+### Cloudinary — legacy (old media only, no new uploads)
+- **What**: `core/storage.py`'s `AutoCloudinaryStorage` class still exists and its settings are still configured, but it is **no longer** `DEFAULT_FILE_STORAGE` — R2 (above) took over for all new uploads once the free tier ran out.
+- **Config**: `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` in `config/settings.py` — must stay set and the account must stay active, since existing `ChatMessage.attachment_url` / `Sticker.image_url` / `ChatRoom.image_url` values are absolute Cloudinary URLs stored at upload time; they'll break if the account is closed.
+- **Plan ahead**: revisit only if/when it's worth writing a one-off bulk-copy script to move old assets to R2 too, so the Cloudinary account can finally be closed. Not urgent — no ongoing cost as long as nothing new is uploaded there.
 
 ### Bunny.net Stream — Learn/Dream videos
 - **What**: video delivery for the `LearnVideo`/`DreamVideo` admin-curated content models (unrelated to chat media).
