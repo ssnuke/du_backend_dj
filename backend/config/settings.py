@@ -136,11 +136,24 @@ DATABASES = {
         )
 }
 
+# Neither channels_redis nor django-redis caps its connection pool size by
+# default — under load they'll keep opening new Redis connections rather
+# than reusing a bounded set, which is how a small managed-Redis plan's
+# connection limit gets exhausted even with a modest number of active users.
+# These caps force reuse instead. Tune via env vars if the plan's limit
+# changes; keep (channel layer max) + (cache max) comfortably under whatever
+# your Redis plan's total connection limit is.
+REDIS_CHANNEL_MAX_CONNECTIONS = int(os.getenv("REDIS_CHANNEL_MAX_CONNECTIONS", "15"))
+REDIS_CACHE_MAX_CONNECTIONS = int(os.getenv("REDIS_CACHE_MAX_CONNECTIONS", "10"))
+
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")],
+            "hosts": [{
+                "address": os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0"),
+                "max_connections": REDIS_CHANNEL_MAX_CONNECTIONS,
+            }],
         },
     },
 }
@@ -158,6 +171,7 @@ CACHES = {
         "KEY_PREFIX": "du_cache",
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            "CONNECTION_POOL_KWARGS": {"max_connections": REDIS_CACHE_MAX_CONNECTIONS},
         },
     },
 }
