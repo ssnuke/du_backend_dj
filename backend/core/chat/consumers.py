@@ -470,6 +470,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         reader = Ir.objects.get(ir_id=reader_ir_id)
         receipts = [ChatMessageReceipt(message=message, reader=reader) for message in messages]
         ChatMessageReceipt.objects.bulk_create(receipts, ignore_conflicts=True)
+        invalidate_chat_rooms_cache([reader_ir_id])
         return [message.id for message in messages]
 
     @database_sync_to_async

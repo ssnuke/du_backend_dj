@@ -162,3 +162,19 @@ class ChatRoomListCacheTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertGreater(len(ctx.captured_queries), 0, "cache should have been invalidated by the new message")
         self.assertEqual(resp.json()["rooms"][0]["last_message_preview"], "hello")
+
+    def test_marking_read_invalidates_cache_for_the_reader(self):
+        message = ChatMessage.objects.create(room=self.room, sender=self.other, content="unread me")
+        self._list_rooms()  # populate cache with unread_count=1 for self.requester
+
+        self.assertEqual(self._list_rooms().json()["rooms"][0]["unread_count"], 1)
+
+        read_resp = self.client.post(
+            f"/api/chat_rooms/{self.room.id}/read_receipts/",
+            {"requester_ir_id": self.requester.ir_id, "message_ids": [message.id]},
+            content_type="application/json",
+        )
+        self.assertEqual(read_resp.status_code, 200)
+
+        # Cache must reflect the read receipt immediately, not after the TTL.
+        self.assertEqual(self._list_rooms().json()["rooms"][0]["unread_count"], 0)

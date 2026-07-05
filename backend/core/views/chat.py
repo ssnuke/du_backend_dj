@@ -736,6 +736,7 @@ class ChatReadReceipts(APIView):
             for message in valid_messages
         ]
         ChatMessageReceipt.objects.bulk_create(receipts, ignore_conflicts=True)
+        invalidate_chat_rooms_cache([requester.ir_id])
 
         return Response(
             {
