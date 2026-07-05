@@ -73,6 +73,17 @@ Last reviewed: 2026-07-05.
 
 ---
 
+## Audio transcoding
+
+### ffmpeg — voice note normalization (no external service, in-container binary)
+- **What**: every voice note uploaded to chat is transcoded server-side to AAC audio in an `.m4a` container via `core/utils/audio_transcode.py`, wired into the shared upload path in `core/views/chat.py`'s `_save_chat_attachment()`.
+- **Why**: MediaRecorder on Chrome/Firefox/Android records voice notes as `audio/webm;codecs=opus` by default. Safari/iOS's WebKit engine cannot decode the WebM container at all — not a missing codec, a hard platform limitation — so any voice note recorded on a non-Safari device was permanently unplayable for iOS listeners. Transcoding once, server-side, at upload time fixes this for every future listener regardless of recording device.
+- **Config**: none — `ffmpeg` is installed as a system package in `docker/Dockerfile` (`apt-get install ffmpeg`), no API keys or external service involved.
+- **Failure mode**: if `ffmpeg` is missing or transcoding fails for any reason (corrupt input, timeout), the original upload is saved untouched rather than blocking the send — a slightly-less-compatible voice note beats a failed message.
+- **Known limitation**: only affects new uploads going forward — voice notes sent before this was added are not retroactively transcoded and will still fail to play on iOS.
+
+---
+
 ## Chat features backed by external content
 
 ### GIPHY — GIF picker

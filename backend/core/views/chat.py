@@ -31,6 +31,7 @@ from core.models import (
     StickerPack,
     StickerPackSubscription,
 )
+from core.utils.audio_transcode import SKIP_TRANSCODE_MIMES, transcode_voice_note
 
 from datetime import timedelta
 
@@ -1020,8 +1021,20 @@ def _save_chat_attachment(uploaded, *, folder, allowed_mimes, max_size):
         return None, mime, f"File exceeds {max_size // (1024 * 1024)} MB limit"
 
     ext = os.path.splitext(uploaded.name)[1].lower()
+    file_bytes = uploaded.read()
+
+    if mime in _VOICE_TYPES and mime not in SKIP_TRANSCODE_MIMES:
+        # Normalize every voice note to AAC/m4a so it plays on Safari/iOS
+        # regardless of which browser recorded it (see
+        # core/utils/audio_transcode.py). Falls back to the original upload
+        # untouched if transcoding fails for any reason — never blocks the send.
+        transcoded = transcode_voice_note(file_bytes)
+        if transcoded is not None:
+            file_bytes = transcoded
+            ext = ".m4a"
+
     filename = f"{folder}/{uuid.uuid4().hex}{ext}"
-    saved_path = default_storage.save(filename, ContentFile(uploaded.read()))
+    saved_path = default_storage.save(filename, ContentFile(file_bytes))
     # default_storage.url() returns the Cloudinary CDN URL in production,
     # or a local /media/ path in development — works for both.
     return default_storage.url(saved_path), mime, None
