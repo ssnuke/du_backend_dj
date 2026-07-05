@@ -13,6 +13,7 @@ Last reviewed: 2026-07-05.
 - **URL**: `https://du-backend-dj.onrender.com`
 - **Repo**: `github.com/ssnuke/du_backend_dj` (this repo, `django-app/`).
 - **Config**: `render.yaml` exists in-repo but is **not synced as a Blueprint** — the service was created manually in Render's dashboard, so `render.yaml` is documentation only right now and won't take effect until you sync it there.
+- **Region**: Singapore — confirmed against the actual dashboard setting (2026-07-05), already the closest available Render region to India. No change needed; `render.yaml` now documents this explicitly via `region: singapore`.
 - **Known limitation**: single instance, no horizontal scaling configured. The app is architecturally ready for it (Redis-backed Channels layer, no per-process in-memory state), but actually running more than one instance requires either bumping "Instance Count" in the dashboard or upgrading to a plan with autoscaling — that's a billing/plan decision, not something fixable in code.
 - **Plan ahead**: if traffic grows, this is the first thing to revisit — check current plan's request/connection limits before it becomes a bottleneck.
 

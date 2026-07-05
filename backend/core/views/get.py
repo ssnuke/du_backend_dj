@@ -53,12 +53,33 @@ def get_viewable_teams_for_ir(ir):
     return ir.get_teams_can_view()
 
 
+MAX_PAGE_LIMIT = 200
+
+
+def apply_optional_pagination(queryset, request):
+    """
+    Opt-in limit/offset slicing: if the client passes `limit`, apply it
+    (clamped to MAX_PAGE_LIMIT) with an optional `offset`. If `limit` is
+    omitted, the queryset is returned unsliced — existing callers that don't
+    yet know about pagination keep getting the full result set, unchanged.
+    """
+    limit_param = request.GET.get("limit")
+    if not limit_param:
+        return queryset
+    try:
+        limit = max(1, min(int(limit_param), MAX_PAGE_LIMIT))
+        offset = max(0, int(request.GET.get("offset", 0)))
+    except (TypeError, ValueError):
+        return queryset
+    return queryset[offset:offset + limit]
+
+
 # ---------------------------------------------------
 # GET ALL IR IDs
 # ---------------------------------------------------
 class GetAllIR(APIView):
     def get(self, request):
-        irs = IrId.objects.all()
+        irs = apply_optional_pagination(IrId.objects.all(), request)
         return Response(IrIdSerializer(irs, many=True).data)
 
 
@@ -105,7 +126,7 @@ class GetAllRegisteredIR(APIView):
             try:
                 requester = Ir.objects.get(ir_id=requester_ir_id)
                 # Use role-based viewable IRs
-                irs = requester.get_viewable_irs()
+                irs = requester.get_viewable_irs().select_related('parent_ir')
             except Ir.DoesNotExist:
                 return Response(
                     {"detail": "Requester IR not found"},
@@ -113,8 +134,9 @@ class GetAllRegisteredIR(APIView):
                 )
         else:
             # No filter - return all (backward compatible)
-            irs = Ir.objects.all()
-        
+            irs = Ir.objects.select_related('parent_ir').all()
+
+        irs = list(apply_optional_pagination(irs, request))
         data = IrSerializer(irs, many=True).data
         
         # Add hierarchy info to each IR
@@ -464,46 +486,55 @@ class GetTeamMembers(APIView):
                 week_number, year, info_week_start, info_week_end = get_week_info_friday_to_friday()
                 _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday()
 
-            members = TeamMember.objects.filter(team_id=team_id).select_related("ir")
+            members = list(TeamMember.objects.filter(team_id=team_id).select_related("ir"))
 
             # Map team roles to access level numbers (matching AccessLevel class)
             # Admin=1, CTC=2, LDC=3, LS=4, GC=5, IR=6
             role_map = {"ADMIN": 1, "CTC": 2, "LDC": 3, "LS": 4, "GC": 5, "IR": 6}
             result = []
 
+            # ── Batch all per-member queries into bulk lookups (was 4 queries/member) ──
+            member_ir_ids = [member.ir_id for member in members]
+
+            info_by_ir = dict(
+                InfoDetail.objects.filter(
+                    ir_id__in=member_ir_ids,
+                    info_date__gte=info_week_start,
+                    info_date__lte=info_week_end,
+                ).values('ir_id').annotate(c=Count('id')).values_list('ir_id', 'c')
+            )
+
+            plan_by_ir = dict(
+                PlanDetail.objects.filter(
+                    ir_id__in=member_ir_ids,
+                    plan_date__gte=plan_week_start,
+                    plan_date__lte=plan_week_end,
+                ).values('ir_id').annotate(c=Count('id')).values_list('ir_id', 'c')
+            )
+
+            try:
+                uv_by_ir = dict(
+                    UVDetail.objects.filter(
+                        ir_id__in=member_ir_ids,
+                        uv_date__gte=info_week_start,
+                        uv_date__lte=info_week_end,
+                    ).values('ir_id').annotate(total=Sum('uv_count')).values_list('ir_id', 'total')
+                )
+            except Exception:
+                # UVDetail table may not exist yet due to pending migrations
+                uv_by_ir = {}
+
+            target_by_ir = {
+                t.ir_id: t
+                for t in WeeklyTarget.objects.filter(
+                    ir_id__in=member_ir_ids, week_number=week_number, year=year
+                )
+            }
+
             for member in members:
                 ir = member.ir
-                
-                # Calculate info counts for the selected week (Friday to next Friday 11:45 PM)
-                info_count_week = InfoDetail.objects.filter(
-                    ir_id=ir.ir_id,
-                    info_date__gte=info_week_start,
-                    info_date__lte=info_week_end
-                ).count()
-                
-                # Calculate plan counts for the selected week (Monday to Sunday)
-                plan_count_week = PlanDetail.objects.filter(
-                    ir_id=ir.ir_id,
-                    plan_date__gte=plan_week_start,
-                    plan_date__lte=plan_week_end
-                ).count()
-                
-                # Calculate week-specific UV count from UVDetail records (Friday-Friday range)
-                try:
-                    uv_count_week = UVDetail.objects.filter(
-                        ir_id=ir.ir_id,
-                        uv_date__gte=info_week_start,
-                        uv_date__lte=info_week_end
-                    ).aggregate(total=Sum('uv_count'))['total'] or 0
-                except Exception:
-                    # UVDetail table may not exist yet due to pending migrations
-                    uv_count_week = 0
-                
-                # Get weekly targets for the selected week
-                ir_target = WeeklyTarget.objects.filter(
-                    ir=ir, week_number=week_number, year=year
-                ).first()
-                
+                ir_target = target_by_ir.get(ir.ir_id)
+
                 result.append({
                     **TeamMemberSerializer(member).data,
                     "ir_name": ir.ir_name,
@@ -511,10 +542,10 @@ class GetTeamMembers(APIView):
                     "ir_access_level": ir.ir_access_level,  # Actual access level from IR model
                     "weekly_info_target": ir_target.ir_weekly_info_target if ir_target else ir.weekly_info_target,
                     "weekly_plan_target": ir_target.ir_weekly_plan_target if ir_target else ir.weekly_plan_target,
-                    "info_count": info_count_week,
-                    "plan_count": plan_count_week,
+                    "info_count": info_by_ir.get(ir.ir_id, 0),
+                    "plan_count": plan_by_ir.get(ir.ir_id, 0),
                     "weekly_uv_target": (ir_target.ir_weekly_uv_target if ir_target else ir.weekly_uv_target) if ir.ir_access_level in [2, 3] else None,
-                    "uv_count": uv_count_week , #if ir.ir_access_level in [2, 3] else None
+                    "uv_count": uv_by_ir.get(ir.ir_id, 0) or 0, #if ir.ir_access_level in [2, 3] else None
                     "cumulative_uv_count": ir.uv_count if ir.ir_access_level in [2, 3] else None,
                     "week_number": week_number,
                     "year": year,
@@ -588,6 +619,7 @@ class GetInfoDetails(APIView):
         if info_type_filter:
             qs = qs.filter(info_type=info_type_filter)
 
+        qs = apply_optional_pagination(qs, request)
         return Response(InfoDetailSerializer(qs, many=True).data)
 
 
@@ -627,6 +659,7 @@ class GetPlanDetails(APIView):
                     follow_up_date__lte=today,
                     status__in=['closing_pending', 'kiv'],
                 ).order_by('follow_up_date')
+                qs = apply_optional_pagination(qs, request)
                 return Response(PlanDetailSerializer(qs, many=True).data)
 
             # Check for week/year parameters first
@@ -659,6 +692,7 @@ class GetPlanDetails(APIView):
             if status_filter:
                 qs = qs.filter(status=status_filter)
 
+            qs = apply_optional_pagination(qs, request)
             return Response(PlanDetailSerializer(qs, many=True).data)
         except Ir.DoesNotExist:
             return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
@@ -718,21 +752,25 @@ class GetTeamAggregatedPlans(APIView):
         if presented_by_filter:
             plans_qs = plans_qs.filter(presented_by__ir_id=presented_by_filter)
 
-        plans = []
-        closed_count = 0
-        total_positive_uvs = 0
-        presenters_set = {}
-        for p in plans_qs:
-            uv = float(p.uv_value) if p.uv_value else 0
-            if p.status == 'closed':
-                closed_count += 1
-            if uv > 0:
-                total_positive_uvs += uv
+        # Summary/presenters must reflect ALL matching plans regardless of
+        # whether the `plans` list below gets paginated for display — compute
+        # them via DB aggregation over the full plans_qs first (also avoids
+        # pulling every row into Python just to sum two numbers).
+        total_plans_count = plans_qs.count()
+        closed_count = plans_qs.filter(status='closed').count()
+        total_positive_uvs = float(
+            plans_qs.filter(uv_value__gt=0).aggregate(total=Sum('uv_value'))['total'] or 0
+        )
+        presenters_set = dict(
+            plans_qs.exclude(presented_by__isnull=True)
+            .values_list('presented_by__ir_id', 'presented_by__ir_name')
+            .distinct()
+        )
 
+        plans = []
+        for p in apply_optional_pagination(plans_qs, request):
             presenter_id = p.presented_by.ir_id if p.presented_by else None
             presenter_name = p.presented_by.ir_name if p.presented_by else None
-            if presenter_id and presenter_id not in presenters_set:
-                presenters_set[presenter_id] = presenter_name
 
             plans.append({
                 "id": p.id,
@@ -755,7 +793,7 @@ class GetTeamAggregatedPlans(APIView):
             "plans": plans,
             "presenters": presenters,
             "summary": {
-                "total_plans": len(plans),
+                "total_plans": total_plans_count,
                 "closed_count": closed_count,
                 "total_positive_uvs": round(total_positive_uvs, 2),
             },
@@ -822,47 +860,56 @@ class GetTargetsDashboard(APIView):
             return Response({"personal": personal, "teams": "NA"})
 
         # Get teams visible to this IR (hierarchy-based)
-        viewable_teams = get_viewable_teams_for_ir(ir)
-        
+        viewable_teams = list(get_viewable_teams_for_ir(ir).select_related('created_by'))
+        team_ids = [t.id for t in viewable_teams]
+
+        # ── Batch all per-team queries into bulk lookups (was ~5 queries/team) ──
+        from core.models import TeamWeeklyTargets
+
+        team_member_map = {}  # team_id -> [ir_id, ...]
+        all_member_ids = set()
+        for team_id, member_ir_id in TeamMember.objects.filter(
+            team_id__in=team_ids
+        ).values_list('team_id', 'ir_id').distinct():
+            team_member_map.setdefault(team_id, []).append(member_ir_id)
+            all_member_ids.add(member_ir_id)
+
+        info_by_ir = dict(
+            InfoDetail.objects.filter(
+                ir_id__in=all_member_ids, info_date__gte=week_start, info_date__lte=week_end,
+            ).values('ir_id').annotate(c=Count('id')).values_list('ir_id', 'c')
+        )
+        plan_by_ir = dict(
+            PlanDetail.objects.filter(
+                ir_id__in=all_member_ids, plan_date__gte=plan_week_start, plan_date__lte=plan_week_end,
+            ).values('ir_id').annotate(c=Count('id')).values_list('ir_id', 'c')
+        )
+        try:
+            uv_by_ir = dict(
+                UVDetail.objects.filter(
+                    ir_id__in=all_member_ids, uv_date__gte=week_start, uv_date__lte=week_end,
+                ).values('ir_id').annotate(total=Sum('uv_count')).values_list('ir_id', 'total')
+            )
+        except Exception:
+            # UVDetail table may not exist yet due to pending migrations
+            uv_by_ir = {}
+
+        team_targets_map = {
+            tt.team_id: tt
+            for tt in TeamWeeklyTargets.objects.filter(team_id__in=team_ids)
+        }
+
         teams_progress = []
 
         for team in viewable_teams:
-            members = Ir.objects.filter(
-                teammember__team=team
-            ).distinct()
-            
-            member_ids = members.values_list('ir_id', flat=True)
+            member_ids = team_member_map.get(team.id, [])
 
-            # Get weekly targets for this team from JSON structure
-            from core.models import TeamWeeklyTargets
-            try:
-                team_targets = TeamWeeklyTargets.objects.get(team=team)
-                week_data = team_targets.get_week_targets(year, week_number)
-            except TeamWeeklyTargets.DoesNotExist:
-                week_data = None
+            team_targets = team_targets_map.get(team.id)
+            week_data = team_targets.get_week_targets(year, week_number) if team_targets else None
 
-            # Calculate current week's progress for all team members
-            team_info_progress = InfoDetail.objects.filter(
-                ir_id__in=member_ids,
-                info_date__gte=week_start,
-                info_date__lte=week_end
-            ).count()
-            
-            team_plan_progress = PlanDetail.objects.filter(
-                ir_id__in=member_ids,
-                plan_date__gte=plan_week_start,
-                plan_date__lte=plan_week_end
-            ).count()
-            
-            try:
-                team_uv_progress = UVDetail.objects.filter(
-                    ir_id__in=member_ids,
-                    uv_date__gte=week_start,
-                    uv_date__lte=week_end
-                ).aggregate(total=Sum('uv_count'))['total'] or 0
-            except Exception:
-                # UVDetail table may not exist yet due to pending migrations
-                team_uv_progress = 0
+            team_info_progress = sum(info_by_ir.get(i, 0) for i in member_ids)
+            team_plan_progress = sum(plan_by_ir.get(i, 0) for i in member_ids)
+            team_uv_progress = sum(uv_by_ir.get(i, 0) or 0 for i in member_ids)
 
             # Check if requester can edit this team (created by someone in their subtree)
             can_edit = False
@@ -1303,7 +1350,7 @@ class GetTeamsByIR(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
         
-        teams = Team.objects.filter(teammember__ir_id=ir_id).distinct()
+        teams = Team.objects.filter(teammember__ir_id=ir_id).distinct().select_related('created_by')
         
         result = []
         for team in teams:
@@ -1573,18 +1620,20 @@ class GetTeamUVTotal(APIView):
             
             # Get UV counts for all team members
             irs = Ir.objects.filter(ir_id__in=member_ids)
-            
+
+            # Build ir_id -> role once instead of re-querying `links` per member
+            role_by_ir_id = dict(links.values_list("ir_id", "role"))
+
             team_uv_total = 0
             members = []
-            
+
             for ir in irs:
                 uv_count = ir.uv_count or 0
                 team_uv_total += uv_count
-                
+
                 # Get member role
-                member_link = links.filter(ir_id=ir.ir_id).first()
-                role = member_link.role if member_link else None
-                
+                role = role_by_ir_id.get(ir.ir_id)
+
                 members.append({
                     "ir_id": ir.ir_id,
                     "ir_name": ir.ir_name,
@@ -1912,11 +1961,23 @@ class GetHierarchyTree(APIView):
             ir = Ir.objects.get(ir_id=ir_id)
         except Ir.DoesNotExist:
             return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
-        
+
+        # ── Fetch the whole subtree in one query, build the tree in-memory ──
+        # (was up to 2 queries per node — get_direct_downlines() + .count() —
+        # recursively, for every node in the tree).
+        subtree = list(
+            Ir.objects.filter(hierarchy_path__startswith=ir.hierarchy_path)
+            .exclude(ir_id=ir.ir_id)
+        )
+        children_by_parent = {}
+        for node in subtree:
+            children_by_parent.setdefault(node.parent_ir_id, []).append(node)
+
         def build_tree(node, current_depth=0):
-            """Recursively build tree structure"""
+            """Recursively build tree structure from the in-memory subtree — no further queries."""
+            children = children_by_parent.get(node.ir_id, [])
+
             if max_depth is not None and current_depth >= max_depth:
-                children_count = node.get_direct_downlines().count()
                 return {
                     "ir_id": node.ir_id,
                     "ir_name": node.ir_name,
@@ -1925,11 +1986,10 @@ class GetHierarchyTree(APIView):
                     "info_count": node.info_count,
                     "plan_count": node.plan_count,
                     "uv_count": node.uv_count,
-                    "children_count": children_count,
-                    "children": f"... {children_count} children (max_depth reached)"
+                    "children_count": len(children),
+                    "children": f"... {len(children)} children (max_depth reached)"
                 }
-            
-            children = node.get_direct_downlines()
+
             return {
                 "ir_id": node.ir_id,
                 "ir_name": node.ir_name,
@@ -1938,20 +1998,17 @@ class GetHierarchyTree(APIView):
                 "info_count": node.info_count,
                 "plan_count": node.plan_count,
                 "uv_count": node.uv_count,
-                "children_count": children.count(),
+                "children_count": len(children),
                 "children": [build_tree(child, current_depth + 1) for child in children]
             }
-        
+
         tree = build_tree(ir)
-        
-        # Get total counts
-        all_downlines = ir.get_all_downlines()
-        
+
         return Response({
             "root_ir_id": ir.ir_id,
             "root_ir_name": ir.ir_name,
-            "total_downlines": all_downlines.count(),
-            "max_depth_in_tree": all_downlines.aggregate(max_level=Count('hierarchy_level'))['max_level'] or 0,
+            "total_downlines": len(subtree),
+            "max_depth_in_tree": max((n.hierarchy_level for n in subtree), default=0),
             "tree": tree
         })
 

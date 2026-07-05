@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.db import transaction
+from django.db.models import Prefetch
 from django.shortcuts import get_object_or_404
 from django.utils.dateparse import parse_datetime
 from django.utils import timezone
@@ -108,6 +109,12 @@ class GetPockets(APIView):
                         status=status.HTTP_403_FORBIDDEN
                     )
             
+            # Prefetch members with their ir/added_by FKs resolved, so the nested
+            # PocketMemberSerializer + member_count don't issue fresh queries per pocket.
+            members_prefetch = Prefetch(
+                'members', queryset=PocketMember.objects.select_related('ir', 'added_by')
+            )
+
             # For GC/IR (non-LS+): restrict to pockets where requester is a pocket head
             if requester.ir_access_level > AccessLevel.LS:
                 pockets = Pocket.objects.filter(
@@ -115,9 +122,9 @@ class GetPockets(APIView):
                     is_active=True,
                     members__ir=requester,
                     members__is_head=True
-                ).distinct().order_by('name')
+                ).distinct().order_by('name').prefetch_related(members_prefetch)
             else:
-                pockets = Pocket.objects.filter(team=team, is_active=True).order_by('name')
+                pockets = Pocket.objects.filter(team=team, is_active=True).order_by('name').prefetch_related(members_prefetch)
             serializer = PocketDetailedSerializer(pockets, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
         

@@ -20,6 +20,7 @@ services:
   - type: web
     name: du-backend-dj
     runtime: docker
+    region: singapore # closest Render region to India; confirmed against the account's actual dashboard setting, not a default
     dockerfilePath: ./docker/Dockerfile
     dockerContext: .
     plan: starter

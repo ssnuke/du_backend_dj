@@ -102,7 +102,10 @@ class PocketSerializer(serializers.ModelSerializer):
         }
     
     def get_member_count(self, obj):
-        return obj.members.count()
+        # len(obj.members.all()) reuses a prefetch_related cache when the view
+        # supplies one (see GetPockets), instead of .count() always issuing a
+        # fresh query per pocket; costs the same single query when not prefetched.
+        return len(obj.members.all())
 
 
 class PocketDetailedSerializer(serializers.ModelSerializer):
@@ -122,7 +125,10 @@ class PocketDetailedSerializer(serializers.ModelSerializer):
         }
     
     def get_member_count(self, obj):
-        return obj.members.count()
+        # len(obj.members.all()) reuses a prefetch_related cache when the view
+        # supplies one (see GetPockets), instead of .count() always issuing a
+        # fresh query per pocket; costs the same single query when not prefetched.
+        return len(obj.members.all())
 
 
 class WeeklyTargetSerializer(serializers.ModelSerializer):

@@ -150,16 +150,41 @@ class Ir(models.Model):
 
     def _update_descendant_paths(self, parent_ir):
         """
-        Recursively update hierarchy_path for all descendants of parent_ir.
-        Called after parent_ir's path has been updated.
+        Update hierarchy_path/hierarchy_level for the entire subtree of
+        parent_ir (whose own path has just been recalculated correctly, but
+        whose descendants still have stale paths from before the reparent).
+
+        Fetches the subtree level-by-level via parent_ir_id (O(depth)
+        queries, not O(subtree size)) instead of recursing with an
+        individual .save() per descendant, then applies every change in one
+        bulk_update.
         """
-        for child in parent_ir.direct_downlines.all():
-            # Recalculate path based on updated parent
-            child.hierarchy_path = f"{parent_ir.hierarchy_path}{child.ir_id}/"
-            child.hierarchy_level = parent_ir.hierarchy_level + 1
-            child.save(update_fields=['hierarchy_path', 'hierarchy_level'])
-            # Recurse to update grandchildren
-            self._update_descendant_paths(child)
+        all_descendants = []
+        frontier_ids = [parent_ir.ir_id]
+        while frontier_ids:
+            level = list(Ir.objects.filter(parent_ir_id__in=frontier_ids))
+            if not level:
+                break
+            all_descendants.extend(level)
+            frontier_ids = [node.ir_id for node in level]
+
+        if not all_descendants:
+            return
+
+        # Rebuild each descendant's path from its (already-correct) parent's
+        # new path, processing in the BFS order collected above so a node's
+        # parent is always resolved before the node itself.
+        new_path_by_id = {parent_ir.ir_id: parent_ir.hierarchy_path}
+        new_level_by_id = {parent_ir.ir_id: parent_ir.hierarchy_level}
+        for node in all_descendants:
+            parent_new_path = new_path_by_id[node.parent_ir_id]
+            parent_new_level = new_level_by_id[node.parent_ir_id]
+            node.hierarchy_path = f"{parent_new_path}{node.ir_id}/"
+            node.hierarchy_level = parent_new_level + 1
+            new_path_by_id[node.ir_id] = node.hierarchy_path
+            new_level_by_id[node.ir_id] = node.hierarchy_level
+
+        Ir.objects.bulk_update(all_descendants, ['hierarchy_path', 'hierarchy_level'])
 
     # ========== HIERARCHY HELPER METHODS ==========
 
