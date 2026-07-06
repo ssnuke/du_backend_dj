@@ -135,27 +135,30 @@ def _serialize_room(room, requester=None, *, precomputed=None):
 
     last_message = precomputed.get("last_message") if has("last_message") else room.messages.order_by("-id").first()
 
-    unread_count = precomputed.get("unread_count") if has("unread_count") else 0
-    if not has("unread_count") and requester:
-        unread_count = room.messages.exclude(receipts__reader=requester).exclude(sender=requester).count()
-
     is_muted = False
     muted_until = None
-    if has("membership"):
-        membership = precomputed.get("membership")
-        if membership:
-            is_muted = membership.is_muted
-            muted_until = membership.muted_until
-    elif requester:
+    membership = precomputed.get("membership") if has("membership") else None
+    if not has("membership") and requester:
         membership = ChatRoomMember.objects.filter(room=room, ir=requester).first()
-        if membership:
-            # Auto-expire mutes
-            if membership.is_muted and membership.muted_until and membership.muted_until <= timezone.now():
-                membership.is_muted = False
-                membership.muted_until = None
-                membership.save(update_fields=["is_muted", "muted_until"])
-            is_muted = membership.is_muted
-            muted_until = membership.muted_until
+    if membership:
+        # Auto-expire mutes
+        if membership.is_muted and membership.muted_until and membership.muted_until <= timezone.now():
+            membership.is_muted = False
+            membership.muted_until = None
+            membership.save(update_fields=["is_muted", "muted_until"])
+        is_muted = membership.is_muted
+        muted_until = membership.muted_until
+
+    unread_count = precomputed.get("unread_count") if has("unread_count") else 0
+    if not has("unread_count") and requester:
+        unread_qs = room.messages.exclude(receipts__reader=requester).exclude(sender=requester)
+        # A member added with history hidden can never see (or mark read)
+        # anything sent before they joined — counting those messages here
+        # produced an unread badge that could never reach zero no matter
+        # how much the member actually read.
+        if membership and membership.hide_history_before_join:
+            unread_qs = unread_qs.filter(created_at__gte=membership.joined_at)
+        unread_count = unread_qs.count()
 
     if has("other_member"):
         other_member = precomputed.get("other_member")
@@ -338,6 +341,27 @@ class ChatRoomListCreate(APIView):
                     m.muted_until = None
 
         own_membership_by_room = {m.room_id: m for m in memberships if m.ir_id == requester.ir_id}
+
+        # The naive unread_by_room count above counts every message ever sent,
+        # including ones from before a member joined with history hidden —
+        # those messages are permanently excluded from that member's message
+        # list (see ChatRoomMessages.get's hide_history_before_join filter
+        # below) so they can never be scrolled to or marked read, leaving the
+        # badge stuck above zero forever. Only re-query the (usually tiny)
+        # subset of rooms actually affected, rather than restructuring the
+        # single aggregate query above for everyone.
+        hidden_history_room_ids = [
+            room_id for room_id, m in own_membership_by_room.items() if m.hide_history_before_join
+        ]
+        for room_id in hidden_history_room_ids:
+            joined_at = own_membership_by_room[room_id].joined_at
+            unread_by_room[room_id] = (
+                ChatMessage.objects.filter(room_id=room_id, created_at__gte=joined_at)
+                .exclude(sender=requester)
+                .exclude(receipts__reader=requester)
+                .count()
+            )
+
         member_count_by_room = {}
         other_member_by_room = {}
         for m in memberships:

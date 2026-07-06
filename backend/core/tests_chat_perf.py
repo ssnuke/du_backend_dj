@@ -178,3 +178,67 @@ class ChatRoomListCacheTests(TestCase):
 
         # Cache must reflect the read receipt immediately, not after the TTL.
         self.assertEqual(self._list_rooms().json()["rooms"][0]["unread_count"], 0)
+
+
+class ChatRoomHiddenHistoryUnreadCountTests(TestCase):
+    """
+    A member added to a room with history hidden (hide_history_before_join)
+    can never see or mark as read anything sent before they joined —
+    ChatRoomMessages.get already excludes those from the message list. The
+    unread_count shown on the room list must apply the same cutoff, otherwise
+    it counts messages the member is permanently unable to reach, producing a
+    badge that never reaches zero no matter how much they actually read.
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        self.creator = Ir.objects.create(
+            ir_id="HHCREATE1", ir_name="Creator", ir_access_level=AccessLevel.LS, status=True
+        )
+        self.newcomer = Ir.objects.create(
+            ir_id="HHNEWCOM1", ir_name="Newcomer", ir_access_level=AccessLevel.LS, status=True
+        )
+        self.room = ChatRoom.objects.create(
+            room_type=ChatRoomType.GROUP, room_name="Broadcast", created_by=self.creator
+        )
+        ChatRoomMember.objects.create(room=self.room, ir=self.creator)
+
+        # Messages sent before the newcomer joins.
+        ChatMessage.objects.create(room=self.room, sender=self.creator, content="old message 1")
+        ChatMessage.objects.create(room=self.room, sender=self.creator, content="old message 2")
+
+        # Newcomer joins with history hidden (joined_at is auto_now_add, so it
+        # naturally lands after the messages created above).
+        ChatRoomMember.objects.create(room=self.room, ir=self.newcomer, hide_history_before_join=True)
+
+        # One message sent after the newcomer joined — this one they CAN see.
+        self.visible_message = ChatMessage.objects.create(
+            room=self.room, sender=self.creator, content="new message"
+        )
+
+    def _list_rooms_as(self, ir_id):
+        return self.client.get("/api/chat_rooms/", {"requester_ir_id": ir_id})
+
+    def test_unread_count_excludes_pre_join_hidden_history(self):
+        resp = self._list_rooms_as(self.newcomer.ir_id)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["rooms"][0]["unread_count"], 1)
+
+    def test_unread_count_reaches_zero_after_reading_the_visible_message(self):
+        read_resp = self.client.post(
+            f"/api/chat_rooms/{self.room.id}/read_receipts/",
+            {"requester_ir_id": self.newcomer.ir_id, "message_ids": [self.visible_message.id]},
+            content_type="application/json",
+        )
+        self.assertEqual(read_resp.status_code, 200)
+
+        resp = self._list_rooms_as(self.newcomer.ir_id)
+        self.assertEqual(resp.json()["rooms"][0]["unread_count"], 0)
+
+    def test_unaffected_member_unread_count_still_counts_everything(self):
+        # A member without hidden history (the creator) should be unaffected
+        # by this cutoff — sanity check the fix didn't over-apply.
+        resp = self._list_rooms_as(self.creator.ir_id)
+        # creator sent all messages themselves, so nothing is unread for them
+        self.assertEqual(resp.json()["rooms"][0]["unread_count"], 0)
