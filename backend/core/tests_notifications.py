@@ -1,35 +1,56 @@
 from unittest.mock import MagicMock, patch
 
 from django.test import TestCase, TransactionTestCase
+from firebase_admin import exceptions as fb_exceptions
+from firebase_admin.messaging import UnregisteredError
 
 from core.chat.consumers import ChatConsumer
 from core.models import AccessLevel, ChatRoom, ChatRoomMember, ChatRoomType, Ir
 from core.utils.firebase_messaging import is_dead_token_error, send_multicast
 
 
-def _fake_send_response(success, code=None, message=""):
+def _fake_send_response(success, code=None, message="", exception_type=None):
     resp = MagicMock()
     resp.success = success
     if success:
         resp.exception = None
     else:
-        exc = MagicMock()
+        # A real exception instance, not MagicMock — send_multicast keys
+        # dead-token detection off type(err).__name__, and reassigning
+        # `__class__` on a MagicMock fools isinstance() but NOT type(), so a
+        # mock can't fake a specific exception class name for this purpose.
+        exc_cls = type(exception_type or "FirebaseError", (Exception,), {})
+        exc = exc_cls(message)
         exc.code = code
-        exc.__str__ = lambda self: message
         resp.exception = exc
     return resp
 
 
 class IsDeadTokenErrorTests(TestCase):
-    def test_not_registered_message_is_dead(self):
-        self.assertTrue(is_dead_token_error(None, "Requested entity was not found: NotRegistered"))
+    """
+    These use the actual firebase_admin exception shapes (verified against
+    the installed SDK version), not the legacy FCM HTTP API's error codes
+    (e.g. 'registration-token-not-registered') — the Admin SDK's v1 API never
+    produces those, which is exactly why the original version of this check
+    silently never matched real failures and dead tokens were never pruned.
+    """
+
+    def test_unregistered_error_is_dead(self):
+        self.assertTrue(is_dead_token_error(None, None, exception_type="UnregisteredError"))
+        # Real SDK instance, for good measure — confirms .code and message shape.
+        exc = UnregisteredError("Device unregistered.")
+        self.assertEqual(exc.code, fb_exceptions.NOT_FOUND)
+        self.assertTrue(is_dead_token_error(exc.code, str(exc), exception_type=type(exc).__name__))
 
     def test_known_dead_codes_are_dead(self):
-        self.assertTrue(is_dead_token_error("registration-token-not-registered", ""))
-        self.assertTrue(is_dead_token_error("invalid-registration-token", ""))
+        self.assertTrue(is_dead_token_error("NOT_FOUND", ""))
+        self.assertTrue(is_dead_token_error("INVALID_ARGUMENT", ""))
+
+    def test_dead_message_text_without_code_is_dead(self):
+        self.assertTrue(is_dead_token_error(None, "Requested entity was not found: Device unregistered."))
 
     def test_unrelated_error_is_not_dead(self):
-        self.assertFalse(is_dead_token_error("internal-error", "Some transient failure"))
+        self.assertFalse(is_dead_token_error("UNAVAILABLE", "Some transient failure"))
 
 
 class SendMulticastBatchApiTests(TestCase):
@@ -49,7 +70,9 @@ class SendMulticastBatchApiTests(TestCase):
 
         responses = [
             _fake_send_response(True),
-            _fake_send_response(False, code="registration-token-not-registered", message="NotRegistered"),
+            _fake_send_response(
+                False, code="NOT_FOUND", message="Device unregistered.", exception_type="UnregisteredError"
+            ),
         ]
         batch_response = MagicMock()
         batch_response.responses = responses
@@ -68,7 +91,14 @@ class SendMulticastBatchApiTests(TestCase):
         self.assertEqual(result["failure"], 1)
         self.assertEqual(len(result["failure_details"]), 1)
         self.assertEqual(result["failure_details"][0]["token"], "token-bad-aaaaaaaaaaaaaaaaa")
-        self.assertTrue(is_dead_token_error(result["failure_details"][0]["code"], result["failure_details"][0]["message"]))
+        # send_multicast must capture the exception's class name — it's the
+        # signal is_dead_token_error actually relies on for real SDK failures.
+        self.assertEqual(result["failure_details"][0]["exception_type"], "UnregisteredError")
+        self.assertTrue(is_dead_token_error(
+            result["failure_details"][0]["code"],
+            result["failure_details"][0]["message"],
+            exception_type=result["failure_details"][0]["exception_type"],
+        ))
 
     @patch("core.utils.firebase_messaging.firebase_initialized", True)
     @patch("core.utils.firebase_messaging.messaging")
@@ -112,8 +142,9 @@ class NotifyRoomMembersPruningTests(TransactionTestCase):
                 {
                     "index": 0,
                     "token": "dead-token-aaaaaaaaaaaaaaaa",
-                    "code": "registration-token-not-registered",
-                    "message": "NotRegistered",
+                    "code": "NOT_FOUND",
+                    "message": "Device unregistered.",
+                    "exception_type": "UnregisteredError",
                 }
             ],
         }

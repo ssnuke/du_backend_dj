@@ -49,13 +49,39 @@ def initialize_firebase():
             
             firebase_admin.initialize_app(cred)
             logger.info('Firebase Admin SDK initialized successfully')
-        
+
         firebase_initialized = True
+        _widen_messaging_connection_pool()
         return True
-        
+
     except Exception as e:
         logger.error(f'Error initializing Firebase Admin SDK: {str(e)}')
         return False
+
+
+def _widen_messaging_connection_pool(pool_maxsize=50):
+    """
+    send_each_for_multicast issues one HTTP request per token rather than a
+    true batch request (Google deprecated the old batch endpoint), so a room
+    with more members than urllib3's default pool size (10) logs a stream of
+    "Connection pool is full, discarding connection" warnings and pays
+    reconnect overhead on every send. Not a functional bug — sends still
+    succeed — just needless churn once a room/broadcast has more than ~10
+    recipients. Reaches into the SDK's internal HTTP session, so this is
+    guarded and non-fatal if a future firebase_admin version restructures it.
+    """
+    try:
+        import requests
+        from firebase_admin import messaging as _messaging
+
+        app = firebase_admin.get_app()
+        session = _messaging._get_messaging_service(app)._client.session
+        adapter = requests.adapters.HTTPAdapter(pool_connections=pool_maxsize, pool_maxsize=pool_maxsize)
+        session.mount('https://', adapter)
+        session.mount('http://', adapter)
+        logger.info(f'Widened FCM HTTP connection pool to {pool_maxsize}')
+    except Exception as e:
+        logger.warning(f'Could not widen FCM connection pool (non-fatal, sends still work): {e}')
 
 def send_notification(fcm_token, title, body, data=None):
     """
@@ -101,26 +127,44 @@ def send_notification(fcm_token, title, body, data=None):
         logger.exception('Full traceback:')
         return None
 
+_DEAD_TOKEN_EXCEPTION_TYPES = {
+    # firebase_admin.messaging.UnregisteredError — app uninstalled or the
+    # push subscription otherwise invalidated on the device.
+    'UnregisteredError',
+    # Malformed/invalid token string.
+    'InvalidArgumentError',
+}
+
+# firebase_admin.exceptions.FirebaseError.code values (NOT the legacy FCM HTTP
+# API's code strings like 'registration-token-not-registered' — those never
+# appear from this SDK and were silently never matching here).
 _DEAD_TOKEN_CODES = {
-    'registration-token-not-registered',
-    'invalid-registration-token',
-    'invalid-argument',
+    'NOT_FOUND',
+    'INVALID_ARGUMENT',
 }
 
 
-def is_dead_token_error(code, message):
+def is_dead_token_error(code, message, exception_type=None):
     """
     True if an FCM send failure means the token itself is permanently invalid
     (unregistered/uninstalled app, malformed token, etc.) and should be pruned
     from storage rather than retried. Shared by the chat push path
     (core/chat/consumers.py) and the generic notification path
     (core/utils/notifications.py) so both prune on the same signal.
+
+    Prefers exception_type (the firebase_admin exception class name, e.g.
+    'UnregisteredError') since it's the most stable signal across SDK
+    versions; code/message are checked as a fallback for callers that don't
+    have it.
     """
-    msg = str(message or '')
+    if exception_type in _DEAD_TOKEN_EXCEPTION_TYPES:
+        return True
+
+    msg = str(message or '').lower()
     code = str(code or '')
     return (
-        'NotRegistered' in msg
-        or 'invalid' in msg.lower()
+        'unregistered' in msg
+        or 'not registered' in msg
         or code in _DEAD_TOKEN_CODES
     )
 
@@ -189,6 +233,12 @@ def send_multicast(fcm_tokens, title, body, data=None):
                     'token': token,
                     'code': getattr(err, 'code', None),
                     'message': str(err),
+                    # Most reliable signal for is_dead_token_error() — the
+                    # firebase_admin SDK's own exception class (e.g.
+                    # 'UnregisteredError'), rather than .code/message strings
+                    # which vary across SDK versions and don't always match
+                    # what we check for (see is_dead_token_error docstring).
+                    'exception_type': type(err).__name__,
                 })
                 logger.error(f'Failed to send to token {idx} ({token[:20]}...): {err}')
 

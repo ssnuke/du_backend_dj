@@ -1,3 +1,4 @@
+import logging
 import mimetypes
 import os
 import uuid
@@ -227,7 +228,7 @@ def _serialize_room(room, requester=None, *, precomputed=None):
     }
 
 
-def _serialize_message(message):
+def _serialize_message(message, read_by_me=None):
     reply_to_data = None
     if message.reply_to_id:
         try:
@@ -268,6 +269,11 @@ def _serialize_message(message):
         # Use isoformat strings — channel layer (Redis) cannot serialize datetime objects
         "created_at": message.created_at.isoformat() if message.created_at else None,
         "read_count": read_count,
+        # Per-requester read state. Only meaningful for a single-recipient response
+        # (e.g. the paginated message-history GET); omitted (None) on payloads
+        # broadcast identically to every room member, such as message_created —
+        # those recipients derive their own read state client-side instead.
+        "read_by_me": read_by_me,
         "reply_to": reply_to_data,
         "is_deleted": message.is_deleted,
         "edited_at": message.edited_at.isoformat() if message.edited_at else None,
@@ -637,9 +643,21 @@ class ChatRoomMessages(APIView):
         messages = list(qs[:limit])
         next_before_id = messages[-1].id if messages else None
 
+        read_message_ids = set(
+            ChatMessageReceipt.objects.filter(
+                reader=requester, message_id__in=[m.id for m in messages]
+            ).values_list("message_id", flat=True)
+        )
+
         return Response(
             {
-                "messages": [_serialize_message(message) for message in messages],
+                "messages": [
+                    _serialize_message(
+                        message,
+                        read_by_me=(message.sender_id == requester.ir_id or message.id in read_message_ids),
+                    )
+                    for message in messages
+                ],
                 "next_before_id": next_before_id,
                 "has_more": len(messages) == limit,
             }
@@ -694,6 +712,9 @@ class ChatRoomMessages(APIView):
         invalidate_chat_rooms_cache(_room_member_ir_ids(room.id))
 
         serialized = _serialize_message(message)
+        member_ir_ids_except_sender = [
+            ir_id for ir_id in _room_member_ir_ids(room.id) if ir_id != requester.ir_id
+        ]
 
         # Broadcast to all WebSocket connections in the room so every client
         # updates in real-time, not just on refresh.
@@ -703,8 +724,45 @@ class ChatRoomMessages(APIView):
                 f"chat_room_{room_id}",
                 {"type": "message_created", "message": serialized},
             )
+            # Also push a room-preview update to every other member's inbox
+            # channel, same as the WebSocket send path — without this, messages
+            # sent through this endpoint (all attachments/stickers/GIFs/forwards,
+            # plus text sent while the sender's own socket happens to be down)
+            # never refreshed anyone else's room list/unread badge live.
+            from core.chat.notify import preview_for_message
+            preview_text = preview_for_message(content, message_type, attachment_name)
+            for member_ir_id in member_ir_ids_except_sender:
+                async_to_sync(channel_layer.group_send)(
+                    f"user_inbox_{member_ir_id}",
+                    {
+                        "type": "room_preview_updated",
+                        "room_id": message.room_id,
+                        "last_message_preview": preview_text,
+                        "last_message_at": serialized["created_at"],
+                        "sender_ir_id": requester.ir_id,
+                    },
+                )
         except Exception:
             pass  # never block the response if the channel layer is unavailable
+
+        # Fire FCM push notifications the same way the WebSocket send path does
+        # (core/chat/consumers.py _notify_room_members) — this REST endpoint is
+        # the only send path for attachments/stickers/GIFs/forwards, and was
+        # previously silent for all of them.
+        try:
+            from core.chat.notify import notify_chat_room_members
+            notify_chat_room_members(
+                room.id,
+                requester.ir_id,
+                requester.chat_name,
+                content,
+                message_type=message_type,
+                attachment_name=attachment_name,
+            )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Failed to send chat FCM notifications for room %s (REST path)", room.id
+            )
 
         return Response(
             {
@@ -738,6 +796,34 @@ class ChatReadReceipts(APIView):
         ]
         ChatMessageReceipt.objects.bulk_create(receipts, ignore_conflicts=True)
         invalidate_chat_rooms_cache([requester.ir_id])
+
+        updated_ids = [message.id for message in valid_messages]
+        if updated_ids:
+            try:
+                channel_layer = get_channel_layer()
+                # Tell live viewers of this room (e.g. the sender watching their own
+                # message get read) that these messages are now read. The WebSocket
+                # mark_read path already does this — this REST path is hit whenever
+                # the client's socket happens to be reconnecting, so without this
+                # broadcast those viewers never see the read tick update live.
+                async_to_sync(channel_layer.group_send)(
+                    f"chat_room_{room_id}",
+                    {
+                        "type": "read_receipts_updated",
+                        "message_ids": updated_ids,
+                        "reader_ir_id": requester.ir_id,
+                        "reader_name": requester.ir_name,
+                    },
+                )
+                # Tell the reader's own other tabs/devices that this room's unread
+                # count just changed, so their room list badge updates without a
+                # manual refresh.
+                async_to_sync(channel_layer.group_send)(
+                    f"user_inbox_{requester.ir_id}",
+                    {"type": "own_read_state_updated", "room_id": room_id},
+                )
+            except Exception:
+                pass  # never block the response if the channel layer is unavailable
 
         return Response(
             {

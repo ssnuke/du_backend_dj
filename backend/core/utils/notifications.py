@@ -257,7 +257,7 @@ def send_fcm_notifications(notifications: Iterable[Notification], title: str, me
     if result.get("failure", 0) > 0:
         bad_tokens = set()
         for detail in result.get("failure_details", []):
-            if is_dead_token_error(detail.get("code", ""), detail.get("message", "")):
+            if is_dead_token_error(detail.get("code", ""), detail.get("message", ""), detail.get("exception_type")):
                 bad_tokens.add(detail.get("token"))
                 
         if bad_tokens:

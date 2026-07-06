@@ -1,0 +1,151 @@
+"""
+Shared, synchronous chat push-notification logic used by both the WebSocket
+consumer (core/chat/consumers.py, wrapped in database_sync_to_async /
+run_in_executor since it must not block the event loop) and the plain REST
+message endpoint (core/views/chat.py ChatRoomMessages.post, which handles
+attachments/stickers/GIFs/forwards — messages sent this way previously never
+triggered a push at all).
+"""
+import logging
+
+from django.core.cache import cache
+from django.utils import timezone
+
+from core.models import ChatMessageType, ChatRoom, ChatRoomMember
+
+logger = logging.getLogger(__name__)
+
+# ── Room presence ────────────────────────────────────────────────────────────
+# Tracks which (room_id, ir_id) pairs currently have a live ChatConsumer
+# connection, so push notifications can skip members who are already looking
+# at the room (in this tab or another tab/device). Backed by the same Redis
+# cache as everything else, with a short TTL refreshed on every WS heartbeat
+# ping (chatService.js pings every 25s) — so a connection that dies without a
+# clean disconnect (tab crash, laptop sleep, dropped network) self-expires
+# quickly instead of permanently silencing pushes for that member.
+_PRESENCE_TTL = 75  # seconds — 3x the 25s client heartbeat interval
+
+
+def _presence_key(room_id, ir_id):
+    return f"chat_presence:{room_id}:{ir_id}"
+
+
+def mark_room_present(room_id, ir_id):
+    cache.set(_presence_key(room_id, ir_id), True, _PRESENCE_TTL)
+
+
+def clear_room_present(room_id, ir_id):
+    cache.delete(_presence_key(room_id, ir_id))
+
+
+def is_room_present(room_id, ir_id):
+    return bool(cache.get(_presence_key(room_id, ir_id)))
+
+_PREVIEW_LABELS = {
+    ChatMessageType.IMAGE: "📷 Photo",
+    ChatMessageType.VIDEO: "🎥 Video",
+    ChatMessageType.VOICE: "🎤 Voice message",
+    ChatMessageType.STICKER: "🎨 Sticker",
+    ChatMessageType.GIF: "🎞️ GIF",
+}
+
+
+def preview_for_message(content, message_type, attachment_name=None):
+    if message_type == ChatMessageType.FILE:
+        return f"📎 {attachment_name or 'File'}"
+    if message_type in _PREVIEW_LABELS:
+        return _PREVIEW_LABELS[message_type]
+    text = content or ""
+    return text if len(text) <= 100 else text[:100] + "…"
+
+
+def gather_notification_targets(room_id, sender_ir_id):
+    """
+    Return (room_type, room_name, tokens, token_owner) for FCM push to every
+    room member except the sender, skipping members currently muted for this
+    room. token_owner maps token -> ir_id, used to prune dead tokens after send.
+    """
+    room = ChatRoom.objects.get(id=room_id)
+    now = timezone.now()
+
+    # Bulk-clear expired mutes up front instead of a per-member .save() loop.
+    ChatRoomMember.objects.filter(
+        room_id=room_id, is_muted=True, muted_until__lte=now
+    ).update(is_muted=False, muted_until=None)
+
+    members = ChatRoomMember.objects.filter(
+        room_id=room_id
+    ).exclude(ir__ir_id=sender_ir_id).select_related("ir")
+
+    token_owner = {}
+    for member in members:
+        if member.is_muted and (member.muted_until is None or member.muted_until > now):
+            continue
+        # Skip members who currently have this room open (this tab or another
+        # tab/device) — they're already seeing the message live over the
+        # WebSocket, a push on top of that is just noise.
+        if is_room_present(room_id, member.ir_id):
+            continue
+        ir = member.ir
+        if ir.fcm_tokens and isinstance(ir.fcm_tokens, list):
+            valid = [t for t in ir.fcm_tokens if t and isinstance(t, str) and len(t) > 10]
+            for token in valid:
+                token_owner[token] = ir.ir_id
+
+    return room.room_type, room.room_name, list(token_owner.keys()), token_owner
+
+
+def prune_dead_tokens(bad_tokens_by_ir_id):
+    """Remove permanently-invalid FCM tokens from the owning Ir rows."""
+    from core.models import Ir
+
+    for ir_id, tokens in bad_tokens_by_ir_id.items():
+        ir = Ir.objects.filter(ir_id=ir_id).first()
+        if not ir or not ir.fcm_tokens:
+            continue
+        new_tokens = [t for t in ir.fcm_tokens if t not in tokens]
+        if len(new_tokens) != len(ir.fcm_tokens):
+            ir.fcm_tokens = new_tokens
+            ir.save(update_fields=["fcm_tokens"])
+
+
+def notify_chat_room_members(room_id, sender_ir_id, sender_name, content, message_type="text", attachment_name=None):
+    """
+    Synchronous end-to-end push: gather targets, send, prune dead tokens.
+    Safe to call directly from a normal (sync) Django view. Callers running
+    inside an asyncio event loop (the WS consumer) should instead reuse
+    gather_notification_targets/prune_dead_tokens directly and run the network
+    send in an executor — see core/chat/consumers.py.
+    """
+    from core.utils.firebase_messaging import is_dead_token_error, send_multicast
+
+    room_type, room_name, tokens, token_owner = gather_notification_targets(room_id, sender_ir_id)
+    if not tokens:
+        return
+
+    title = sender_name if room_type == "direct" else f"{sender_name} · {room_name}"
+    preview = preview_for_message(content, message_type, attachment_name)
+
+    result = send_multicast(
+        fcm_tokens=tokens,
+        title=title,
+        body=preview,
+        data={"notification_type": "chat_message", "room_id": str(room_id)},
+    )
+
+    if result.get("failure"):
+        bad_tokens_by_ir_id = {}
+        for detail in result.get("failure_details", []):
+            if is_dead_token_error(detail.get("code"), detail.get("message"), detail.get("exception_type")):
+                token = detail.get("token")
+                owner_ir_id = token_owner.get(token)
+                if owner_ir_id:
+                    bad_tokens_by_ir_id.setdefault(owner_ir_id, set()).add(token)
+        if bad_tokens_by_ir_id:
+            logger.info(
+                "Pruning %d dead FCM token(s) across %d member(s) after chat push to room %s",
+                sum(len(v) for v in bad_tokens_by_ir_id.values()),
+                len(bad_tokens_by_ir_id),
+                room_id,
+            )
+            prune_dead_tokens(bad_tokens_by_ir_id)

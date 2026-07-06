@@ -55,11 +55,23 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
+        await self._mark_present()
 
     async def disconnect(self, close_code):
         if hasattr(self, 'user_ir') and self.user_ir:
             await self._update_last_seen(self.user_ir.ir_id)
+            await self._clear_present()
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    @database_sync_to_async
+    def _mark_present(self):
+        from core.chat.notify import mark_room_present
+        mark_room_present(self.room_id, self.user_ir.ir_id)
+
+    @database_sync_to_async
+    def _clear_present(self):
+        from core.chat.notify import clear_room_present
+        clear_room_present(self.room_id, self.user_ir.ir_id)
 
     async def receive(self, text_data=None, bytes_data=None):
         if not text_data:
@@ -98,6 +110,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         elif event_type == "buzz":
             await self._handle_buzz()
         elif event_type == "ping":
+            await self._mark_present()  # refresh presence TTL on every heartbeat
             await self.send(text_data=json.dumps({"type": "pong"}))
         else:
             await self._send_error("Unsupported event type")
@@ -177,6 +190,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 "reader_name": self.user_ir.ir_name,
             },
         )
+        if updated_ids:
+            # Let the reader's own other tabs/devices know this room's unread
+            # count changed, so their room list badge updates live instead of
+            # only on next full mount/reload.
+            await self.channel_layer.group_send(
+                f"user_inbox_{self.user_ir.ir_id}",
+                {"type": "own_read_state_updated", "room_id": self.room_id},
+            )
 
     async def _handle_edit_message(self, payload):
         message_id = payload.get("message_id")
@@ -632,46 +653,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
         and a token -> ir_id map (for pruning dead tokens after send). Kept
         small and fast since it runs on Django's shared thread-sensitive
         executor; the slow network send itself runs elsewhere (see
-        _notify_room_members).
+        _notify_room_members). Shared with the REST attachment-message path
+        in core/views/chat.py via core/chat/notify.py.
         """
-        room = ChatRoom.objects.get(id=room_id)
-        now = timezone.now()
-
-        # Bulk-clear expired mutes up front instead of a per-member .save() loop.
-        ChatRoomMember.objects.filter(
-            room_id=room_id, is_muted=True, muted_until__lte=now
-        ).update(is_muted=False, muted_until=None)
-
-        # Collect FCM tokens for all members except the sender, skipping muted members
-        members = ChatRoomMember.objects.filter(
-            room_id=room_id
-        ).exclude(ir__ir_id=sender_ir_id).select_related("ir")
-
-        token_owner = {}
-        for member in members:
-            # Skip still-muted members (muted_until=None means muted forever)
-            if member.is_muted and (member.muted_until is None or member.muted_until > now):
-                continue
-
-            ir = member.ir
-            if ir.fcm_tokens and isinstance(ir.fcm_tokens, list):
-                valid = [t for t in ir.fcm_tokens if t and isinstance(t, str) and len(t) > 10]
-                for token in valid:
-                    token_owner[token] = ir.ir_id
-
-        return room.room_type, room.room_name, list(token_owner.keys()), token_owner
+        from core.chat.notify import gather_notification_targets
+        return gather_notification_targets(room_id, sender_ir_id)
 
     @database_sync_to_async
     def _prune_dead_tokens(self, bad_tokens_by_ir_id):
         """Remove permanently-invalid FCM tokens from the owning Ir rows."""
-        for ir_id, tokens in bad_tokens_by_ir_id.items():
-            ir = Ir.objects.filter(ir_id=ir_id).first()
-            if not ir or not ir.fcm_tokens:
-                continue
-            new_tokens = [t for t in ir.fcm_tokens if t not in tokens]
-            if len(new_tokens) != len(ir.fcm_tokens):
-                ir.fcm_tokens = new_tokens
-                ir.save(update_fields=["fcm_tokens"])
+        from core.chat.notify import prune_dead_tokens
+        prune_dead_tokens(bad_tokens_by_ir_id)
 
     async def _notify_room_members(self, room_id, sender_ir_id, sender_name, content):
         """
@@ -715,7 +707,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             if result.get("failure"):
                 bad_tokens_by_ir_id = {}
                 for detail in result.get("failure_details", []):
-                    if is_dead_token_error(detail.get("code"), detail.get("message")):
+                    if is_dead_token_error(detail.get("code"), detail.get("message"), detail.get("exception_type")):
                         token = detail.get("token")
                         owner_ir_id = token_owner.get(token)
                         if owner_ir_id:
@@ -773,6 +765,12 @@ class UserInboxConsumer(AsyncWebsocketConsumer):
             "last_message_preview": event["last_message_preview"],
             "last_message_at": event["last_message_at"],
             "sender_ir_id": event["sender_ir_id"],
+        }))
+
+    async def own_read_state_updated(self, event):
+        await self.send(text_data=json.dumps({
+            "type": "own_read_state_updated",
+            "room_id": event["room_id"],
         }))
 
     @database_sync_to_async
