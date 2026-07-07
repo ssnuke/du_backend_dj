@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import time
+from urllib.parse import urlencode, urlparse, urlunparse, parse_qsl
 
 from django.conf import settings
 from rest_framework.views import APIView
@@ -8,6 +9,21 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from core.models import Ir, LearnVideo
+
+
+def _with_cache_buster(url: str, version) -> str:
+    """
+    Append ?v=<version> to a thumbnail URL. Bunny's CDN and this app's own
+    service worker (cache-first for images) both cache purely by URL with no
+    expiry — re-uploading a thumbnail on Bunny's dashboard changes the image
+    bytes but not the URL, so every cache layer keeps serving the old image
+    indefinitely. Changing the URL whenever `version` changes is what
+    actually busts both caches.
+    """
+    parsed = urlparse(url)
+    query = dict(parse_qsl(parsed.query))
+    query["v"] = str(version)
+    return urlunparse(parsed._replace(query=urlencode(query)))
 
 
 def _generate_bunny_token(video_id: str, expires_in_seconds: int = 7200) -> tuple[str, int]:
@@ -36,9 +52,11 @@ def _generate_bunny_token(video_id: str, expires_in_seconds: int = 7200) -> tupl
 def _bunny_thumbnail_url(video: LearnVideo) -> str:
     """Return the Bunny Stream auto-generated thumbnail URL, falling back to any manually set URL."""
     if video.thumbnail_url:
-        return video.thumbnail_url
-    cdn = settings.BUNNY_STREAM_CDN_HOSTNAME
-    return f"https://{cdn}/{video.bunny_video_id}/thumbnail.jpg"
+        url = video.thumbnail_url
+    else:
+        cdn = settings.BUNNY_STREAM_CDN_HOSTNAME
+        url = f"https://{cdn}/{video.bunny_video_id}/thumbnail.jpg"
+    return _with_cache_buster(url, video.updated_at.timestamp() if video.updated_at else 0)
 
 
 def _video_list_item(video: LearnVideo) -> dict:

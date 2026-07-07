@@ -4,14 +4,16 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from core.models import Ir, DreamVideo
-from core.views.learn import _generate_bunny_token
+from core.views.learn import _generate_bunny_token, _with_cache_buster
 
 
 def _bunny_thumbnail_url(video: DreamVideo) -> str:
     if video.thumbnail_url:
-        return video.thumbnail_url
-    cdn = settings.BUNNY_STREAM_CDN_HOSTNAME
-    return f"https://{cdn}/{video.bunny_video_id}/thumbnail.jpg"
+        url = video.thumbnail_url
+    else:
+        cdn = settings.BUNNY_STREAM_CDN_HOSTNAME
+        url = f"https://{cdn}/{video.bunny_video_id}/thumbnail.jpg"
+    return _with_cache_buster(url, video.updated_at.timestamp() if video.updated_at else 0)
 
 
 def _dream_video_list_item(video: DreamVideo) -> dict:
