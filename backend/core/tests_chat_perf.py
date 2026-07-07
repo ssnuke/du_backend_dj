@@ -179,6 +179,24 @@ class ChatRoomListCacheTests(TestCase):
         # Cache must reflect the read receipt immediately, not after the TTL.
         self.assertEqual(self._list_rooms().json()["rooms"][0]["unread_count"], 0)
 
+    def test_mark_all_read_clears_badge_without_message_ids(self):
+        # Simulates the manual "Mark as read" escape hatch: unlike
+        # read_receipts/, this endpoint takes no message_ids at all — the
+        # server resolves everything unread on its own, so it works even if
+        # the client never loaded/rendered a single one of these messages.
+        for i in range(5):
+            ChatMessage.objects.create(room=self.room, sender=self.other, content=f"msg {i}")
+        self.assertEqual(self._list_rooms().json()["rooms"][0]["unread_count"], 5)
+
+        resp = self.client.post(
+            f"/api/chat_rooms/{self.room.id}/mark_all_read/",
+            {"requester_ir_id": self.requester.ir_id},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["updated_count"], 5)
+        self.assertEqual(self._list_rooms().json()["rooms"][0]["unread_count"], 0)
+
 
 class ChatRoomHiddenHistoryUnreadCountTests(TestCase):
     """

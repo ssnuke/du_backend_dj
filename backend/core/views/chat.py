@@ -857,6 +857,64 @@ class ChatReadReceipts(APIView):
         )
 
 
+class ChatRoomMarkAllRead(APIView):
+    """
+    Manual escape hatch: mark every currently-unread message in this room as
+    read for the requester in one shot, regardless of how many there are or
+    whether the client has ever fetched/rendered them. Exists because the
+    normal path (IntersectionObserver marking messages read as they scroll
+    into view) depends on the client actually loading and rendering each
+    unread message — for a room with a very large backlog, or if that
+    client-side marking has any gap, the badge can get stuck no matter how
+    much the user reads. This endpoint doesn't depend on the client having
+    seen anything; it authoritatively resolves the badge from the server side.
+    """
+
+    def post(self, request, room_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        room = get_object_or_404(ChatRoom, id=room_id)
+        membership = ChatRoomMember.objects.filter(room=room, ir=requester).first()
+        if not membership:
+            return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        unread_qs = ChatMessage.objects.filter(room=room).exclude(sender=requester).exclude(receipts__reader=requester)
+        if membership.hide_history_before_join:
+            unread_qs = unread_qs.filter(created_at__gte=membership.joined_at)
+
+        unread_ids = list(unread_qs.values_list("id", flat=True))
+        ChatMessageReceipt.objects.bulk_create(
+            [ChatMessageReceipt(message_id=message_id, reader=requester) for message_id in unread_ids],
+            ignore_conflicts=True,
+        )
+        invalidate_chat_rooms_cache([requester.ir_id])
+
+        if unread_ids:
+            try:
+                channel_layer = get_channel_layer()
+                async_to_sync(channel_layer.group_send)(
+                    f"chat_room_{room_id}",
+                    {
+                        "type": "read_receipts_updated",
+                        "message_ids": unread_ids,
+                        "reader_ir_id": requester.ir_id,
+                        "reader_name": requester.ir_name,
+                    },
+                )
+                async_to_sync(channel_layer.group_send)(
+                    f"user_inbox_{requester.ir_id}",
+                    {"type": "own_read_state_updated", "room_id": room_id},
+                )
+            except Exception:
+                pass  # never block the response if the channel layer is unavailable
+
+        return Response({"message": "Room marked as read", "updated_count": len(unread_ids)})
+
+
 def _get_upline_irs(requester, allowed_levels):
     """Walk up the parent_ir chain and return active Ir objects at the given access levels."""
     upline_ids = []
