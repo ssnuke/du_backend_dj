@@ -1,7 +1,8 @@
+from django.conf import settings
 from django.contrib import admin
 from core.models import LearnVideo, DreamVideo, StickerPack, Sticker
 from core.views.learn import raw_thumbnail_url
-from core.utils.bunny import purge_bunny_url
+from core.utils.bunny import purge_bunny_url, get_bunny_thumbnail_filename
 
 
 def refresh_thumbnail_cache(modeladmin, request, queryset):
@@ -16,20 +17,34 @@ def refresh_thumbnail_cache(modeladmin, request, queryset):
     core/views/learn.py _bunny_thumbnail_url) so their own caches see a new
     URL too. Re-uploading a thumbnail directly on Bunny's dashboard does
     neither on its own — this action does both in one click.
+
+    Also re-resolves the actual thumbnail filename from Bunny's Stream API
+    (thumbnailFileName) and persists it to thumbnail_url — the hardcoded
+    "thumbnail.jpg" guess used when that field is blank is wrong for any
+    video with a custom (non-auto-generated) thumbnail, which 404s and shows
+    up in the app as a broken image (net::ERR_BLOCKED_BY_ORB).
     """
-    purged, failed = 0, 0
+    purged, failed, resolved = 0, 0, 0
     for obj in queryset:
+        filename = get_bunny_thumbnail_filename(obj.bunny_library_id, obj.bunny_video_id)
+        if filename:
+            new_url = f"https://{settings.BUNNY_STREAM_CDN_HOSTNAME}/{obj.bunny_video_id}/{filename}"
+            if new_url != obj.thumbnail_url:
+                obj.thumbnail_url = new_url
+                resolved += 1
+
         if purge_bunny_url(raw_thumbnail_url(obj)):
             purged += 1
         else:
             failed += 1
-        obj.save(update_fields=['updated_at'])
+        obj.save(update_fields=['thumbnail_url', 'updated_at'])
 
     if failed:
         modeladmin.message_user(
             request,
-            f"Refreshed {purged} video(s), but Bunny purge failed for {failed} — check "
-            f"BUNNY_ACCOUNT_API_KEY is set correctly. updated_at was still bumped for all.",
+            f"Refreshed {purged} video(s) ({resolved} thumbnail URL(s) corrected), but Bunny purge "
+            f"failed for {failed} — check BUNNY_ACCOUNT_API_KEY is set correctly. "
+            f"updated_at was still bumped for all.",
             level='WARNING',
         )
     else:
