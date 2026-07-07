@@ -1,23 +1,39 @@
 from django.contrib import admin
 from core.models import LearnVideo, DreamVideo, StickerPack, Sticker
+from core.views.learn import raw_thumbnail_url
+from core.utils.bunny import purge_bunny_url
 
 
 def refresh_thumbnail_cache(modeladmin, request, queryset):
     """
-    Bunny's CDN and this app's own service worker both cache the thumbnail
-    purely by URL, with no expiry — re-uploading/replacing a thumbnail
-    directly on Bunny's dashboard changes the image bytes but never touches
-    this row, so the URL (and every cache of it) never changes and the app
-    keeps showing the old image indefinitely. The thumbnail URL served to
-    the app includes a `?v=<updated_at>` cache-buster (see
-    core/views/learn.py _bunny_thumbnail_url), so re-saving here — which
-    bumps `updated_at` — is what actually busts it everywhere.
+    Bunny's CDN caches the thumbnail purely by path (confirmed via response
+    headers — Cdn-Cache stayed a HIT across requests with different ?v=
+    cache-busting query strings, so it ignores the query entirely), and this
+    app's own service worker cache-first-caches images with no expiry. Both
+    only get invalidated by: (1) actually purging Bunny's edge cache for the
+    real thumbnail URL, and (2) bumping `updated_at`, which changes the
+    `?v=<updated_at>` the app serves to clients (see
+    core/views/learn.py _bunny_thumbnail_url) so their own caches see a new
+    URL too. Re-uploading a thumbnail directly on Bunny's dashboard does
+    neither on its own — this action does both in one click.
     """
-    count = 0
+    purged, failed = 0, 0
     for obj in queryset:
+        if purge_bunny_url(raw_thumbnail_url(obj)):
+            purged += 1
+        else:
+            failed += 1
         obj.save(update_fields=['updated_at'])
-        count += 1
-    modeladmin.message_user(request, f"Refreshed thumbnail cache for {count} video(s).")
+
+    if failed:
+        modeladmin.message_user(
+            request,
+            f"Refreshed {purged} video(s), but Bunny purge failed for {failed} — check "
+            f"BUNNY_ACCOUNT_API_KEY is set correctly. updated_at was still bumped for all.",
+            level='WARNING',
+        )
+    else:
+        modeladmin.message_user(request, f"Refreshed thumbnail cache for {purged} video(s).")
 refresh_thumbnail_cache.short_description = "Refresh thumbnail cache (after updating on Bunny.net)"
 
 

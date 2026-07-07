@@ -282,6 +282,11 @@ BUNNY_STREAM_LIBRARY_ID = os.getenv("BUNNY_STREAM_LIBRARY_ID", "")
 BUNNY_STREAM_CDN_HOSTNAME = os.getenv("BUNNY_STREAM_CDN_HOSTNAME", "")  # e.g. vz-abc123.b-cdn.net
 BUNNY_STREAM_TOKEN_KEY = os.getenv("BUNNY_STREAM_TOKEN_KEY", "")        # token auth key from Bunny dashboard
 
+# Bunny.net account-level API key (My Account → API on the Bunny dashboard) —
+# distinct from BUNNY_STREAM_API_KEY above, which is scoped to one Stream
+# library and cannot call account-level endpoints like Purge Cache.
+BUNNY_ACCOUNT_API_KEY = os.getenv("BUNNY_ACCOUNT_API_KEY", "")
+
 # GIPHY (chat GIF picker) — get a key at developers.giphy.com
 GIPHY_API_KEY = os.getenv("GIPHY_API_KEY", "")
 

@@ -49,13 +49,23 @@ def _generate_bunny_token(video_id: str, expires_in_seconds: int = 7200) -> tupl
     return token_b64, expiry
 
 
+def raw_thumbnail_url(video) -> str:
+    """
+    The actual Bunny thumbnail URL with no cache-busting query param — this is
+    the exact path Bunny's CDN keys its cache by (it ignores query strings
+    entirely, confirmed via response headers), so it's what must be passed to
+    the Purge Cache API (see core/utils/bunny.py). Shared by LearnVideo and
+    DreamVideo, which have identical thumbnail_url/bunny_video_id fields.
+    """
+    if video.thumbnail_url:
+        return video.thumbnail_url
+    cdn = settings.BUNNY_STREAM_CDN_HOSTNAME
+    return f"https://{cdn}/{video.bunny_video_id}/thumbnail.jpg"
+
+
 def _bunny_thumbnail_url(video: LearnVideo) -> str:
     """Return the Bunny Stream auto-generated thumbnail URL, falling back to any manually set URL."""
-    if video.thumbnail_url:
-        url = video.thumbnail_url
-    else:
-        cdn = settings.BUNNY_STREAM_CDN_HOSTNAME
-        url = f"https://{cdn}/{video.bunny_video_id}/thumbnail.jpg"
+    url = raw_thumbnail_url(video)
     return _with_cache_buster(url, video.updated_at.timestamp() if video.updated_at else 0)
 
 
