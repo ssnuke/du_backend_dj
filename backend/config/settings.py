@@ -262,6 +262,17 @@ AWS_QUERYSTRING_AUTH = False  # bucket is served publicly via AWS_S3_CUSTOM_DOMA
 AWS_S3_ADDRESSING_STYLE = "virtual"
 AWS_S3_FILE_OVERWRITE = False
 
+# Without this, R2 sends no Cache-Control header at all, so the browser
+# re-downloads the full file (attachment, avatar, thumbnail) from scratch on
+# every single view instead of ever using its own cache — confirmed via a
+# live Network tab check (repeated 200s at full size, not disk-cache hits).
+# Safe to cache aggressively since AWS_S3_FILE_OVERWRITE=False means a given
+# URL's content never changes after upload — there's no staleness risk to
+# guard against with a shorter TTL.
+AWS_S3_OBJECT_PARAMETERS = {
+    "CacheControl": "public, max-age=31536000, immutable",
+}
+
 DEFAULT_FILE_STORAGE = 'core.storage.R2Storage'
 
 MEDIA_URL = '/media/'   # kept for local fallback / admin compatibility
