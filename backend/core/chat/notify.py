@@ -38,8 +38,20 @@ def clear_room_present(room_id, ir_id):
     cache.delete(_presence_key(room_id, ir_id))
 
 
-def is_room_present(room_id, ir_id):
-    return bool(cache.get(_presence_key(room_id, ir_id)))
+def present_ir_ids(room_id, ir_ids):
+    """
+    Batched presence lookup for a whole room's membership at once — one Redis
+    round-trip (cache.get_many, which django-redis implements via MGET)
+    instead of one GET per member. Matters for larger rooms: gathering
+    notification targets used to do a sequential per-member presence check,
+    so a 20+ person broadcast room paid 20+ round-trips before a single push
+    could go out.
+    """
+    if not ir_ids:
+        return set()
+    keys = {_presence_key(room_id, ir_id): ir_id for ir_id in ir_ids}
+    found = cache.get_many(list(keys.keys()))
+    return {keys[key] for key in found}
 
 _PREVIEW_LABELS = {
     ChatMessageType.IMAGE: "📷 Photo",
@@ -73,9 +85,12 @@ def gather_notification_targets(room_id, sender_ir_id):
         room_id=room_id, is_muted=True, muted_until__lte=now
     ).update(is_muted=False, muted_until=None)
 
-    members = ChatRoomMember.objects.filter(
-        room_id=room_id
-    ).exclude(ir__ir_id=sender_ir_id).select_related("ir")
+    members = list(
+        ChatRoomMember.objects.filter(room_id=room_id)
+        .exclude(ir__ir_id=sender_ir_id)
+        .select_related("ir")
+    )
+    present = present_ir_ids(room_id, [m.ir_id for m in members])
 
     token_owner = {}
     for member in members:
@@ -84,7 +99,7 @@ def gather_notification_targets(room_id, sender_ir_id):
         # Skip members who currently have this room open (this tab or another
         # tab/device) — they're already seeing the message live over the
         # WebSocket, a push on top of that is just noise.
-        if is_room_present(room_id, member.ir_id):
+        if member.ir_id in present:
             continue
         ir = member.ir
         if ir.fcm_tokens and isinstance(ir.fcm_tokens, list):

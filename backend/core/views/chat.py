@@ -767,7 +767,15 @@ class ChatRoomMessages(APIView):
                     },
                 )
         except Exception:
-            pass  # never block the response if the channel layer is unavailable
+            # Never block the response if the channel layer is unavailable —
+            # but log it. This used to be a bare `pass`, which meant a broken
+            # channel layer would silently kill every live update (both the
+            # room broadcast and every member's inbox preview) with zero
+            # trace in the logs — exactly the symptom of "works on refresh,
+            # never live" with no visible cause.
+            logging.getLogger(__name__).exception(
+                "Failed to broadcast message_created/room_preview_updated for room %s", room.id
+            )
 
         # Fire FCM push notifications the same way the WebSocket send path does
         # (core/chat/consumers.py _notify_room_members) — this REST endpoint is
@@ -847,7 +855,9 @@ class ChatReadReceipts(APIView):
                     {"type": "own_read_state_updated", "room_id": room_id},
                 )
             except Exception:
-                pass  # never block the response if the channel layer is unavailable
+                logging.getLogger(__name__).exception(
+                    "Failed to broadcast read_receipts_updated/own_read_state_updated for room %s", room_id
+                )
 
         return Response(
             {
@@ -910,7 +920,10 @@ class ChatRoomMarkAllRead(APIView):
                     {"type": "own_read_state_updated", "room_id": room_id},
                 )
             except Exception:
-                pass  # never block the response if the channel layer is unavailable
+                logging.getLogger(__name__).exception(
+                    "Failed to broadcast read_receipts_updated/own_read_state_updated for room %s (mark-all-read)",
+                    room_id,
+                )
 
         return Response({"message": "Room marked as read", "updated_count": len(unread_ids)})
 
@@ -1345,7 +1358,9 @@ class ChatRoomImageUpload(APIView):
                 {"type": "message_created", "message": serialized_system_message},
             )
         except Exception:
-            pass
+            logging.getLogger(__name__).exception(
+                "Failed to broadcast room_updated/message_created for room %s (image change)", room_id
+            )
 
         return Response({"image_url": image_url, "system_message": serialized_system_message})
 
@@ -1419,7 +1434,9 @@ class ChatMessageReactionView(APIView):
                 },
             )
         except Exception:
-            pass
+            logging.getLogger(__name__).exception(
+                "Failed to broadcast reaction_updated for message %s (add)", message_id
+            )
 
         return Response({"reactions": reactions}, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
@@ -1453,7 +1470,9 @@ class ChatMessageReactionView(APIView):
                 },
             )
         except Exception:
-            pass
+            logging.getLogger(__name__).exception(
+                "Failed to broadcast reaction_updated for message %s (remove)", message_id
+            )
 
         return Response({"reactions": reactions})
 
