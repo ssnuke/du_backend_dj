@@ -48,8 +48,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.close(code=4002)
             return
 
-        is_member = await self._is_room_member(self.room_id, self.user_ir.ir_id)
-        if not is_member:
+        self.chat_room = await self._get_room_if_member(self.room_id, self.user_ir.ir_id)
+        if not self.chat_room:
             await self.close(code=4003)
             return
 
@@ -123,35 +123,49 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         reply_to_id = payload.get("reply_to_id")
 
-        message = await self._create_message(self.room_id, self.user_ir.ir_id, content, reply_to_id)
+        message = await self._create_message(self.chat_room, self.user_ir, content, reply_to_id)
 
-        await self.channel_layer.group_send(
-            self.group_name,
-            {
-                "type": "message_created",
-                "message": message,
-            },
-        )
-
-        # Push a lightweight room-preview update to every other member's inbox
-        # channel so their room list refreshes in real time even when they have
-        # a different room open (or no room open at all).
-        member_ir_ids = await self._get_room_member_ir_ids(self.room_id, exclude_ir_id=self.user_ir.ir_id)
-        await asyncio.gather(
-            *(
-                self.channel_layer.group_send(
-                    f"user_inbox_{member_ir_id}",
-                    {
-                        "type": "room_preview_updated",
-                        "room_id": message["room_id"],
-                        "last_message_preview": message["content"],
-                        "last_message_at": message["created_at"],
-                        "sender_ir_id": message["sender_ir_id"],
-                    },
+        async def _fanout_inbox_updates():
+            # Push a lightweight room-preview update to every other member's
+            # inbox channel so their room list refreshes in real time even
+            # when they have a different room open (or no room open at all).
+            member_ir_ids = await self._get_room_member_ir_ids(self.room_id, exclude_ir_id=self.user_ir.ir_id)
+            if member_ir_ids:
+                await asyncio.gather(
+                    *(
+                        self.channel_layer.group_send(
+                            f"user_inbox_{member_ir_id}",
+                            {
+                                "type": "room_preview_updated",
+                                "room_id": message["room_id"],
+                                "last_message_preview": message["content"],
+                                "last_message_at": message["created_at"],
+                                "sender_ir_id": message["sender_ir_id"],
+                            },
+                        )
+                        for member_ir_id in member_ir_ids
+                    )
                 )
-                for member_ir_id in member_ir_ids
-            )
+
+        # The primary room broadcast and the inbox fanout (member lookup +
+        # per-member group_send) don't depend on each other — run them
+        # concurrently instead of chaining awaits, so the fanout's DB query
+        # doesn't sit in front of the broadcast everyone in the room is
+        # waiting on.
+        await asyncio.gather(
+            self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "message_created",
+                    "message": message,
+                },
+            ),
+            _fanout_inbox_updates(),
         )
+
+        # Cache invalidation doesn't need to block message delivery — fire it
+        # the same non-blocking way FCM push already is.
+        _spawn_background(self._invalidate_room_cache_for_room(self.room_id))
 
         # Fire FCM push notifications to members who are not in this WS session.
         # Not awaited: push delivery (network-bound, can be slow/flaky) must
@@ -435,19 +449,23 @@ class ChatConsumer(AsyncWebsocketConsumer):
         Ir.objects.filter(ir_id=ir_id).update(last_seen=timezone.now())
 
     @database_sync_to_async
-    def _is_room_member(self, room_id, ir_id):
-        return ChatRoomMember.objects.filter(room_id=room_id, ir_id=ir_id).exists()
+    def _get_room_if_member(self, room_id, ir_id):
+        # Single query: confirms membership and fetches the room in one round
+        # trip, and lets the caller cache the room object for the connection's
+        # lifetime instead of re-fetching it on every message.
+        return ChatRoom.objects.filter(id=room_id, memberships__ir_id=ir_id).first()
 
     @database_sync_to_async
-    def _create_message(self, room_id, sender_ir_id, content, reply_to_id=None):
-        room = ChatRoom.objects.get(id=room_id)
-        sender = Ir.objects.get(ir_id=sender_ir_id)
-
+    def _create_message(self, room, sender, content, reply_to_id=None):
+        # room/sender are passed in from the connection-scoped cache
+        # (self.chat_room / self.user_ir) rather than re-fetched here — they
+        # were already validated in connect() and don't change for the life
+        # of the socket, so re-querying them on every message was pure waste.
         reply_to = None
         reply_to_data = None
         if reply_to_id:
             try:
-                reply_to = ChatMessage.objects.select_related("sender").get(id=reply_to_id, room_id=room_id)
+                reply_to = ChatMessage.objects.select_related("sender").get(id=reply_to_id, room_id=room.id)
                 reply_to_data = {
                     "id": reply_to.id,
                     "sender_name": reply_to.sender.ir_name,
@@ -464,7 +482,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
             reply_to=reply_to,
         )
         room.save(update_fields=["updated_at"])
-        invalidate_chat_rooms_cache(_room_member_ir_ids(room_id))
         # Use isoformat() strings — channels_redis cannot serialize datetime objects
         return {
             "id": message.id,
@@ -645,6 +662,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if exclude_ir_id:
             qs = qs.exclude(ir_id=exclude_ir_id)
         return list(qs)
+
+    @database_sync_to_async
+    def _invalidate_room_cache_for_room(self, room_id):
+        invalidate_chat_rooms_cache(_room_member_ir_ids(room_id))
 
     @database_sync_to_async
     def _gather_notification_targets(self, room_id, sender_ir_id):

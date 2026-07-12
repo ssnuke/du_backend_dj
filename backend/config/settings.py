@@ -132,7 +132,12 @@ ASGI_APPLICATION = 'config.asgi.application'
 
 DATABASES = {
     "default": dj_database_url.config(
-            default=os.getenv("DATABASE_URL")
+            default=os.getenv("DATABASE_URL"),
+            # Without this, CONN_MAX_AGE defaults to 0 and every request/websocket
+            # message opens a brand-new Postgres connection, which can spike past
+            # the plan's max_connections under concurrent chat load. Reusing
+            # connections for this long keeps connection churn low.
+            conn_max_age=int(os.getenv("DB_CONN_MAX_AGE", "60")),
         )
 }
 
