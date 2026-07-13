@@ -20,13 +20,15 @@ from core.models import (
 
 class DeleteIr(APIView):
     """
-    Delete an IR completely from the database.
-    Requires requester_ir_id (query param). Only LDC (3) and above can delete.
+    Delete an IR completely from the database. Restricted to ADMIN. All
+    other roles must go through the approval flow (core/views/approvals.py:
+    RequestDeleteIr + ApproveIrRequest), which calls this same deletion
+    logic once an ADMIN approves.
+    Requires requester_ir_id (query param).
     Rules:
       - Cannot delete yourself
       - Cannot delete an IR with a higher access level (lower number) than yourself
       - Must be able to view the target IR in your hierarchy
-      - LDC can only delete IRs in their own downline
     Children are automatically reconnected to the grandparent (handled by Ir.delete()).
     """
     def delete(self, request, ir_id):
@@ -43,10 +45,10 @@ class DeleteIr(APIView):
         except Ir.DoesNotExist:
             return Response({"detail": "Requester IR not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        # Only LDC and above (access_level <= 3)
-        if requester.ir_access_level > 3:
+        # ADMIN only — everyone else must request approval instead
+        if requester.ir_access_level != AccessLevel.ADMIN:
             return Response(
-                {"detail": "Not authorized. Only LDC and above can delete IRs"},
+                {"detail": "Not authorized. Direct deletion requires ADMIN; other roles must request approval."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 

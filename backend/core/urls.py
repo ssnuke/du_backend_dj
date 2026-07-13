@@ -136,6 +136,15 @@ from core.views.dreams import (
     GetDreamVideoStream,
 )
 
+# IR registration/deletion approval workflow
+from core.views.approvals import (
+    RequestRegisterIr,
+    RequestDeleteIr,
+    ListPendingIrRequests,
+    ApproveIrRequest,
+    RejectIrRequest,
+)
+
 # Pocket views
 from core.views.pockets import (
     CreatePocket,
@@ -183,6 +192,12 @@ urlpatterns = [
     path("add_ir_id/", AddIrId.as_view()),
     path("register_new_ir/", RegisterIR.as_view()),
     path("bulk_register_from_excel/", BulkRegisterIRFromExcel.as_view()),
+    # IR registration/deletion approval workflow
+    path("ir_requests/register/", RequestRegisterIr.as_view()),
+    path("ir_requests/delete/<str:ir_id>/", RequestDeleteIr.as_view()),
+    path("ir_requests/pending/", ListPendingIrRequests.as_view()),
+    path("ir_requests/<int:request_id>/approve/", ApproveIrRequest.as_view()),
+    path("ir_requests/<int:request_id>/reject/", RejectIrRequest.as_view()),
     path("login/", IRLogin.as_view()),
     path("create_team/", CreateTeam.as_view()),
     path("add_ir_to_team/", AddIrToTeam.as_view()),

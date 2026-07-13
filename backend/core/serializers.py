@@ -146,3 +146,35 @@ class NotificationSerializer(serializers.ModelSerializer):
         model = Notification
         fields = ['id', 'recipient', 'title', 'message', 'notification_type', 'is_read', 'related_object_id', 'metadata', 'created_at']
         read_only_fields = ['created_at']
+
+
+class IrPendingRequestSerializer(serializers.ModelSerializer):
+    requested_by_id = serializers.CharField(source='requested_by.ir_id', read_only=True)
+    requested_by_name = serializers.CharField(source='requested_by.ir_name', read_only=True)
+    reviewed_by_id = serializers.CharField(source='reviewed_by.ir_id', read_only=True, allow_null=True)
+    reviewed_by_name = serializers.CharField(source='reviewed_by.ir_name', read_only=True, allow_null=True)
+    ir_name = serializers.SerializerMethodField()
+    ir_email = serializers.SerializerMethodField()
+    ir_access_level = serializers.SerializerMethodField()
+
+    class Meta:
+        model = IrPendingRequest
+        fields = [
+            'id', 'action_type', 'request_status',
+            'requested_by_id', 'requested_by_name',
+            'target_ir_code', 'target_ir_name', 'referred_ir_id',
+            'ir_name', 'ir_email', 'ir_access_level',
+            'reviewed_by_id', 'reviewed_by_name', 'reviewed_at', 'rejection_reason',
+            'created_at',
+        ]
+
+    def get_ir_name(self, obj):
+        # For REGISTER requests, the requested name lives in payload (never
+        # yet an Ir row); target_ir_name already covers DELETE requests.
+        return (obj.payload or {}).get('ir_name') if obj.action_type == IrPendingRequest.ActionType.REGISTER else obj.target_ir_name
+
+    def get_ir_email(self, obj):
+        return (obj.payload or {}).get('ir_email') if obj.action_type == IrPendingRequest.ActionType.REGISTER else None
+
+    def get_ir_access_level(self, obj):
+        return (obj.payload or {}).get('ir_access_level') if obj.action_type == IrPendingRequest.ActionType.REGISTER else None

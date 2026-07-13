@@ -12,6 +12,7 @@ from django.db.models import F
 from core.models import (
     IrId,
     Ir,
+    AccessLevel,
     Team,
     TeamMember,
     InfoDetail,
@@ -141,9 +142,24 @@ class AddIrId(APIView):
 # REGISTER NEW IR
 # ---------------------------------------------------
 class RegisterIR(APIView):
+    """
+    Direct IR creation, restricted to ADMIN. All other roles must go through
+    the approval flow (core/views/approvals.py: RequestRegisterIr +
+    ApproveIrRequest), which itself calls this same creation logic once an
+    ADMIN approves — this endpoint is what that approval ultimately performs,
+    and remains available for ADMIN-initiated bulk/direct registration.
+    """
     def post(self, request):
         payload = request.data
         logging.info(f"RegisterIR: Received payload: {payload}")
+
+        requester_ir_id = request.data.get("requester_ir_id") if isinstance(payload, dict) else None
+        requester = Ir.objects.filter(ir_id=requester_ir_id).first() if requester_ir_id else None
+        if not requester or requester.ir_access_level != AccessLevel.ADMIN:
+            return Response(
+                {"detail": "Not authorized. Direct registration requires ADMIN; other roles must request approval."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         # Basic payload validation
         if payload is None:

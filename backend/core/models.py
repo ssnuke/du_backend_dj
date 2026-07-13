@@ -1057,6 +1057,8 @@ class Notification(models.Model):
         MEMBER_ADDED = 'MEMBER_ADDED', 'Team Member Added'
         MEMBER_UPDATED = 'MEMBER_UPDATED', 'Team Member Updated'
         MEMBER_DELETED = 'MEMBER_DELETED', 'Team Member Deleted'
+        IR_APPROVAL_REQUEST = 'IR_APPROVAL_REQUEST', 'IR Approval Request'
+        IR_REQUEST_REJECTED = 'IR_REQUEST_REJECTED', 'IR Request Rejected'
 
     recipient = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name='notifications')
     title = models.CharField(max_length=255)
@@ -1076,6 +1078,59 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"{self.title} -> {self.recipient.ir_name}"
+
+
+class IrPendingRequest(models.Model):
+    """
+    An IR registration or deletion request awaiting ADMIN approval. Nothing
+    is written to the Ir table until an ADMIN approves the request — at
+    which point the same create/delete logic used by the (legacy) direct
+    endpoints runs, so the usual NEW_IR/IR_DELETED notifications still fire.
+    """
+    class ActionType(models.TextChoices):
+        REGISTER = 'REGISTER', 'Register New IR'
+        DELETE = 'DELETE', 'Delete IR'
+
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        APPROVED = 'APPROVED', 'Approved'
+        REJECTED = 'REJECTED', 'Rejected'
+
+    action_type = models.CharField(max_length=10, choices=ActionType.choices)
+    request_status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+
+    requested_by = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name='ir_requests_made')
+
+    # REGISTER: full new-IR payload (password stored pre-hashed, never plaintext).
+    # DELETE: unused.
+    payload = models.JSONField(null=True, blank=True)
+
+    # DELETE: the IR to remove. Kept as SET_NULL (not CASCADE) so the request
+    # row — and the denormalized target_* fields below — survive the delete.
+    target_ir = models.ForeignKey(
+        Ir, on_delete=models.SET_NULL, null=True, blank=True, related_name='ir_delete_requests'
+    )
+    # Denormalized snapshot of the target IR at request time, for both
+    # REGISTER (the id/name being requested) and DELETE (the id/name of the
+    # IR being removed), so the admin list and history read correctly even
+    # after the underlying Ir row is gone.
+    target_ir_code = models.CharField(max_length=18)
+    target_ir_name = models.CharField(max_length=45)
+    referred_ir_id = models.CharField(max_length=18, blank=True, null=True)
+
+    reviewed_by = models.ForeignKey(
+        Ir, on_delete=models.SET_NULL, null=True, blank=True, related_name='ir_requests_reviewed'
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.CharField(max_length=255, blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.action_type} {self.target_ir_code} ({self.request_status})"
 
 
 class PipelineStats(models.Model):
