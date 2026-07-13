@@ -1912,8 +1912,13 @@ class GetDownlineData(APIView):
 # ---------------------------------------------------
 class GetIrsForStatusManagement(APIView):
     """
-    Returns the requester's subtree IRs (excluding self) with their current
-    active/inactive status, for the LDC "manage IR status" screen.
+    Returns IRs belonging to teams the requester (LDC) is a member of, with
+    their current active/inactive status, for the LDC "manage IR status"
+    screen. Same scoping as the LDC branch of GetDownlineData's System
+    Count, so this list matches what actually feeds that count.
+
+    Supports search (?search=) and pagination (?limit=&offset=) so the
+    client never has to load the full team roster up front.
     """
     def get(self, request, ir_id):
         try:
@@ -1924,13 +1929,35 @@ class GetIrsForStatusManagement(APIView):
         if requester.ir_access_level != AccessLevel.LDC:
             return Response({"detail": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
 
+        search = (request.GET.get("search") or "").strip()
+        try:
+            limit = min(max(int(request.GET.get("limit", 15)), 1), 100)
+            offset = max(int(request.GET.get("offset", 0)), 0)
+        except (TypeError, ValueError):
+            return Response({"detail": "Invalid limit/offset"}, status=status.HTTP_400_BAD_REQUEST)
+
+        ldc_team_ids = TeamMember.objects.filter(ir=requester).values_list('team_id', flat=True)
         irs = (
-            requester.get_subtree_irs()
-            .exclude(ir_id=requester.ir_id)
-            .order_by("ir_name")
-            .values("ir_id", "ir_name", "ir_access_level", "status")
+            TeamMember.objects
+            .filter(team_id__in=ldc_team_ids)
+            .exclude(ir=requester)
+            .values_list('ir_id', flat=True)
+            .distinct()
         )
-        return Response(list(irs))
+        queryset = Ir.objects.filter(ir_id__in=irs)
+
+        if search:
+            queryset = queryset.filter(Q(ir_name__icontains=search) | Q(ir_id__icontains=search))
+
+        queryset = queryset.order_by("ir_name")
+        total = queryset.count()
+        page = queryset[offset:offset + limit].values("ir_id", "ir_name", "ir_access_level", "status")
+
+        return Response({
+            "results": list(page),
+            "total": total,
+            "has_more": offset + limit < total,
+        })
 
 
 # ---------------------------------------------------
