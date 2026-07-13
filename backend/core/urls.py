@@ -18,6 +18,7 @@ from core.views.get import (
     # New hierarchy-based endpoints
     GetVisibleTeams,
     GetDownlineData,
+    GetIrsForStatusManagement,
     GetDirectDownlines,
     GetHierarchyTree,
     GetAvailableWeeks,
@@ -62,6 +63,7 @@ from core.views.put import (
     UpdateUVCount,
     RemapIR,
     AdjustIrCounters,
+    ToggleIrStatus,
 )
 from core.views.delete import (
     ResetDatabase,
@@ -172,6 +174,7 @@ urlpatterns = [
     # New hierarchy-based endpoints
     path("visible_teams/<str:ir_id>/", GetVisibleTeams.as_view()),
     path("downline_data/<str:ir_id>/", GetDownlineData.as_view()),
+    path("ir_status_management/<str:ir_id>/", GetIrsForStatusManagement.as_view()),
     path("direct_downlines/<str:ir_id>/", GetDirectDownlines.as_view()),
     path("hierarchy_tree/<str:ir_id>/", GetHierarchyTree.as_view()),
     path("available_weeks/", GetAvailableWeeks.as_view()),
@@ -205,6 +208,7 @@ urlpatterns = [
     path("update_weekly_targets/", UpdateWeeklyTargets.as_view()),
     path("update_uv_count/<int:uv_id>/", UpdateUVCount.as_view()),
     path("adjust_ir_counts/<str:ir_id>/", AdjustIrCounters.as_view()),
+    path("ir/<str:ir_id>/status/", ToggleIrStatus.as_view()),
     path("move_ir_to_team/", MoveIrToTeam.as_view()),
     #DELETE endpoints
     path("delete_team/<int:team_id>/", DeleteTeam.as_view()),

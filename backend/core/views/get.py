@@ -1850,7 +1850,7 @@ class GetDownlineData(APIView):
         if ir.ir_access_level == AccessLevel.ADMIN:
             system_count = Ir.objects.filter(status=True).count()
         elif ir.ir_access_level == AccessLevel.CTC:
-            system_count = ir.get_all_downlines().count()
+            system_count = ir.get_all_downlines().filter(status=True).count()
         elif ir.ir_access_level == AccessLevel.LDC:
             ldc_team_ids = (
                 TeamMember.objects
@@ -1859,14 +1859,14 @@ class GetDownlineData(APIView):
             )
             system_count = (
                 TeamMember.objects
-                .filter(team_id__in=ldc_team_ids)
+                .filter(team_id__in=ldc_team_ids, ir__status=True)
                 .exclude(ir=ir)
                 .values('ir_id')
                 .distinct()
                 .count()
             )
         else:
-            system_count = viewable_irs.count()
+            system_count = viewable_irs.filter(status=True).count()
 
         # Get current week info using Friday→Friday; accept optional week/year
         week_param = request.GET.get("week")
@@ -1905,6 +1905,32 @@ class GetDownlineData(APIView):
                 "uv_count": ir.uv_count,
             }
         })
+
+
+# ---------------------------------------------------
+# GET IRS FOR STATUS MANAGEMENT (LDC-only: subtree IRs w/ active status)
+# ---------------------------------------------------
+class GetIrsForStatusManagement(APIView):
+    """
+    Returns the requester's subtree IRs (excluding self) with their current
+    active/inactive status, for the LDC "manage IR status" screen.
+    """
+    def get(self, request, ir_id):
+        try:
+            requester = Ir.objects.get(ir_id=ir_id)
+        except Ir.DoesNotExist:
+            return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if requester.ir_access_level != AccessLevel.LDC:
+            return Response({"detail": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
+
+        irs = (
+            requester.get_subtree_irs()
+            .exclude(ir_id=requester.ir_id)
+            .order_by("ir_name")
+            .values("ir_id", "ir_name", "ir_access_level", "status")
+        )
+        return Response(list(irs))
 
 
 # ---------------------------------------------------

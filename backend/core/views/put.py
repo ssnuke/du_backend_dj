@@ -1159,3 +1159,45 @@ class AdjustIrCounters(APIView):
             "name_list": target.name_list,
         }, status=status.HTTP_200_OK)
 
+
+# ---------------------------------------------------
+# TOGGLE IR STATUS (LDC-only: activate/deactivate a downline IR)
+# ---------------------------------------------------
+class ToggleIrStatus(APIView):
+    """
+    Set an IR's active/inactive status. Restricted to LDC acting on an IR
+    in their own subtree. Inactive IRs are excluded from System Count.
+    """
+    def patch(self, request, ir_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        if not requester_ir_id:
+            return Response({"detail": "requester_ir_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        new_status = request.data.get("status")
+        if not isinstance(new_status, bool):
+            return Response({"detail": "status must be a boolean"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            requester = Ir.objects.get(ir_id=requester_ir_id)
+            target = Ir.objects.get(ir_id=ir_id)
+        except Ir.DoesNotExist:
+            return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if requester.ir_access_level != AccessLevel.LDC:
+            return Response({"detail": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
+
+        if requester.ir_id == target.ir_id:
+            return Response({"detail": "Cannot change your own status"}, status=status.HTTP_403_FORBIDDEN)
+
+        if not requester.is_in_subtree(target):
+            return Response({"detail": "Not authorized to change status for this IR"}, status=status.HTTP_403_FORBIDDEN)
+
+        target.status = new_status
+        target.save(update_fields=["status"])
+
+        return Response({
+            "ir_id": target.ir_id,
+            "ir_name": target.ir_name,
+            "status": target.status,
+        }, status=status.HTTP_200_OK)
+
