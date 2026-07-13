@@ -111,8 +111,9 @@ class GetPockets(APIView):
             
             # Prefetch members with their ir/added_by FKs resolved, so the nested
             # PocketMemberSerializer + member_count don't issue fresh queries per pocket.
+            # Excludes inactive IRs so deactivated members drop out of counts/stats.
             members_prefetch = Prefetch(
-                'members', queryset=PocketMember.objects.select_related('ir', 'added_by')
+                'members', queryset=PocketMember.objects.select_related('ir', 'added_by').filter(ir__status=True)
             )
 
             # For GC/IR (non-LS+): restrict to pockets where requester is a pocket head
@@ -145,8 +146,16 @@ class GetPocketDetail(APIView):
             requester_id = request.query_params.get("requester_ir_id")
             requester = get_object_or_404(Ir, ir_id=requester_id)
             
-            pocket = get_object_or_404(Pocket, id=pocket_id)
-            
+            pocket = get_object_or_404(
+                Pocket.objects.prefetch_related(
+                    Prefetch(
+                        'members',
+                        queryset=PocketMember.objects.select_related('ir', 'added_by').filter(ir__status=True)
+                    )
+                ),
+                id=pocket_id,
+            )
+
             # Permission check: Can user view the team?
             if not requester.can_view_team(pocket.team):
                 # Allow GC/IR if they're the pocket head

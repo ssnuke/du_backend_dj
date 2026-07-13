@@ -486,7 +486,7 @@ class GetTeamMembers(APIView):
                 week_number, year, info_week_start, info_week_end = get_week_info_friday_to_friday()
                 _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday()
 
-            members = list(TeamMember.objects.filter(team_id=team_id).select_related("ir"))
+            members = list(TeamMember.objects.filter(team_id=team_id, ir__status=True).select_related("ir"))
 
             # Map team roles to access level numbers (matching AccessLevel class)
             # Admin=1, CTC=2, LDC=3, LS=4, GC=5, IR=6
