@@ -869,7 +869,7 @@ class GetTargetsDashboard(APIView):
         team_member_map = {}  # team_id -> [ir_id, ...]
         all_member_ids = set()
         for team_id, member_ir_id in TeamMember.objects.filter(
-            team_id__in=team_ids
+            team_id__in=team_ids, ir__status=True
         ).values_list('team_id', 'ir_id').distinct():
             team_member_map.setdefault(team_id, []).append(member_ir_id)
             all_member_ids.add(member_ir_id)
@@ -1729,7 +1729,7 @@ class GetVisibleTeams(APIView):
             team_raw_members[team.id] = all_ms
             filtered = [
                 m for m in all_ms
-                if not (m.role == TeamRole.LDC and m.ir == team.created_by)
+                if m.ir.status and not (m.role == TeamRole.LDC and m.ir == team.created_by)
             ]
             ids = [m.ir_id for m in filtered]
             team_member_map[team.id] = ids
