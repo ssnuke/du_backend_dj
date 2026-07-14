@@ -6,6 +6,7 @@ from urllib.parse import parse_qs
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+from django.conf import settings
 from django.utils import timezone
 
 from core.models import AccessLevel, ChatMessage, ChatMessageReaction, ChatMessageReceipt, ChatRoom, ChatRoomMember, Ir
@@ -129,23 +130,30 @@ class ChatConsumer(AsyncWebsocketConsumer):
             # Push a lightweight room-preview update to every other member's
             # inbox channel so their room list refreshes in real time even
             # when they have a different room open (or no room open at all).
+            # Concurrency is capped (CHAT_FANOUT_CONCURRENCY) instead of firing
+            # one group_send per member all at once — a large room otherwise
+            # bursts past the Redis channel layer's connection pool
+            # (REDIS_CHANNEL_MAX_CONNECTIONS) in a single message send.
             member_ir_ids = await self._get_room_member_ir_ids(self.room_id, exclude_ir_id=self.user_ir.ir_id)
-            if member_ir_ids:
-                await asyncio.gather(
-                    *(
-                        self.channel_layer.group_send(
-                            f"user_inbox_{member_ir_id}",
-                            {
-                                "type": "room_preview_updated",
-                                "room_id": message["room_id"],
-                                "last_message_preview": message["content"],
-                                "last_message_at": message["created_at"],
-                                "sender_ir_id": message["sender_ir_id"],
-                            },
-                        )
-                        for member_ir_id in member_ir_ids
+            if not member_ir_ids:
+                return
+
+            semaphore = asyncio.Semaphore(settings.CHAT_FANOUT_CONCURRENCY)
+
+            async def _send_one(member_ir_id):
+                async with semaphore:
+                    await self.channel_layer.group_send(
+                        f"user_inbox_{member_ir_id}",
+                        {
+                            "type": "room_preview_updated",
+                            "room_id": message["room_id"],
+                            "last_message_preview": message["content"],
+                            "last_message_at": message["created_at"],
+                            "sender_ir_id": message["sender_ir_id"],
+                        },
                     )
-                )
+
+            await asyncio.gather(*(_send_one(member_ir_id) for member_ir_id in member_ir_ids))
 
         # The primary room broadcast and the inbox fanout (member lookup +
         # per-member group_send) don't depend on each other — run them

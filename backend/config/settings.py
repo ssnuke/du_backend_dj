@@ -148,8 +148,24 @@ DATABASES = {
 # These caps force reuse instead. Tune via env vars if the plan's limit
 # changes; keep (channel layer max) + (cache max) comfortably under whatever
 # your Redis plan's total connection limit is.
-REDIS_CHANNEL_MAX_CONNECTIONS = int(os.getenv("REDIS_CHANNEL_MAX_CONNECTIONS", "15"))
-REDIS_CACHE_MAX_CONNECTIONS = int(os.getenv("REDIS_CACHE_MAX_CONNECTIONS", "10"))
+#
+# 2026-07-14: moved to a 250MB Redis Cloud plan in the same region as the
+# backend (Singapore) — real limits are 256 connections and 1000 ops/sec
+# (up from the free/30MB tier's 30 connections and 100 ops/sec that caused
+# the original crash). Sized well under the new ceiling on purpose: at
+# <300 users there's no need to fill the pool close to its limit, so
+# 60+20=80 (~31% of 256) leaves generous headroom for growth rather than
+# just matching what the plan allows.
+REDIS_CHANNEL_MAX_CONNECTIONS = int(os.getenv("REDIS_CHANNEL_MAX_CONNECTIONS", "60"))
+REDIS_CACHE_MAX_CONNECTIONS = int(os.getenv("REDIS_CACHE_MAX_CONNECTIONS", "20"))
+
+# Chat's per-message inbox fanout (one group_send per other room member, see
+# ChatConsumer._fanout_inbox_updates and ChatRoomMessages.post) is bounded to
+# this many concurrent group_send calls so a large room can't burst past
+# REDIS_CHANNEL_MAX_CONNECTIONS or the plan's ops/sec cap in one shot — keep
+# comfortably below the channel pool size to leave headroom for the room
+# broadcast itself and any other concurrent chat activity in the process.
+CHAT_FANOUT_CONCURRENCY = int(os.getenv("CHAT_FANOUT_CONCURRENCY", "20"))
 
 CHANNEL_LAYERS = {
     "default": {

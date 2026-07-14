@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import mimetypes
 import os
@@ -743,29 +744,43 @@ class ChatRoomMessages(APIView):
         # Broadcast to all WebSocket connections in the room so every client
         # updates in real-time, not just on refresh.
         try:
-            channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                f"chat_room_{room_id}",
-                {"type": "message_created", "message": serialized},
-            )
-            # Also push a room-preview update to every other member's inbox
-            # channel, same as the WebSocket send path — without this, messages
-            # sent through this endpoint (all attachments/stickers/GIFs/forwards,
-            # plus text sent while the sender's own socket happens to be down)
-            # never refreshed anyone else's room list/unread badge live.
             from core.chat.notify import preview_for_message
             preview_text = preview_for_message(content, message_type, attachment_name)
-            for member_ir_id in member_ir_ids_except_sender:
-                async_to_sync(channel_layer.group_send)(
-                    f"user_inbox_{member_ir_id}",
-                    {
-                        "type": "room_preview_updated",
-                        "room_id": message.room_id,
-                        "last_message_preview": preview_text,
-                        "last_message_at": serialized["created_at"],
-                        "sender_ir_id": requester.ir_id,
-                    },
+
+            async def _broadcast():
+                # Mirrors ChatConsumer._handle_send_message: one group_send for
+                # the room, plus a concurrency-bounded fanout (not one
+                # async_to_sync call per member — that was sequential, unbounded,
+                # and paid a fresh event-loop-spin per call, competing with the
+                # WebSocket path for the same capped Redis connection pool. A
+                # large room's message burst on this path is exactly what could
+                # leave an in-flight request stuck long enough for Daphne to
+                # force-kill it as "took too long to shut down".)
+                channel_layer = get_channel_layer()
+                semaphore = asyncio.Semaphore(settings.CHAT_FANOUT_CONCURRENCY)
+
+                async def _send_one(member_ir_id):
+                    async with semaphore:
+                        await channel_layer.group_send(
+                            f"user_inbox_{member_ir_id}",
+                            {
+                                "type": "room_preview_updated",
+                                "room_id": message.room_id,
+                                "last_message_preview": preview_text,
+                                "last_message_at": serialized["created_at"],
+                                "sender_ir_id": requester.ir_id,
+                            },
+                        )
+
+                await asyncio.gather(
+                    channel_layer.group_send(
+                        f"chat_room_{room_id}",
+                        {"type": "message_created", "message": serialized},
+                    ),
+                    *(_send_one(member_ir_id) for member_ir_id in member_ir_ids_except_sender),
                 )
+
+            async_to_sync(_broadcast)()
         except Exception:
             # Never block the response if the channel layer is unavailable —
             # but log it. This used to be a bare `pass`, which meant a broken
