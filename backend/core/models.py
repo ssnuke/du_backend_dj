@@ -438,7 +438,8 @@ class Ir(models.Model):
         - ADMIN: all
         - CTC / LDC: own subtree (downlines only)
         - LS: team members who are NOT their hierarchical uplines
-        - GC / IR: self only
+        - GC: own subtree (downlines only, typically small/leaf)
+        - IR: self only
         """
         if self.ir_id == target_ir.ir_id:
             return True
@@ -454,6 +455,9 @@ class Ir(models.Model):
                 return False
             # target is an upline when self's path starts with target's path
             return not self.hierarchy_path.startswith(target_ir.hierarchy_path)
+
+        if self.ir_access_level == AccessLevel.GC:
+            return self.is_in_subtree(target_ir)
 
         return False
 
@@ -482,6 +486,12 @@ class Ir(models.Model):
                 Ir.objects.filter(ir_id__in=team_member_ids)
                           .exclude(ir_id__in=upline_ids)
             )
+
+        if self.ir_access_level == AccessLevel.GC:
+            # GC's downline (IRs they referred/registered) via the hierarchy
+            # tree — same mechanism as CTC/LDC, just scoped to GC's own
+            # (typically small/leaf) subtree instead of a full org subtree.
+            return self.get_subtree_irs()
 
         return Ir.objects.filter(ir_id=self.ir_id)
 
