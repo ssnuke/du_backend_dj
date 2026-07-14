@@ -24,12 +24,18 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure--r2i(9o1^qmfun!t%yci+ga0!m1b!q+j-s-kex*#3as_1m#9!5'
+SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure--r2i(9o1^qmfun!t%yci+ga0!m1b!q+j-s-kex*#3as_1m#9!5')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# 2026-07-15: this was hardcoded True, ignoring the DEBUG=False already set in
+# .env / the Render env — meaning the app was actually always running with
+# DEBUG on regardless of that setting. DEBUG=True keeps every executed SQL
+# query (with full parameters) in memory for each request's lifetime, which
+# is a real cost on the multi-query aggregation views in core/views/get.py,
+# on top of leaking stack traces/settings on any unhandled exception.
+DEBUG = os.getenv('DEBUG', 'False').lower() in ('true', '1', 'yes')
 
-ALLOWED_HOSTS = ['0.0.0.0','*']
+ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '*').split(',')
 
 
 # Application definition

@@ -5,6 +5,7 @@ from rest_framework import status
 from django.db.models import Sum, Count, Q
 from django.utils.dateparse import parse_date
 from django.shortcuts import get_object_or_404
+from django.core.cache import cache
 
 from core.models import (
     IrId,
@@ -40,6 +41,19 @@ from core.utils.dates import get_current_week_start, get_week_info_friday_to_fri
 
 IST = pytz.timezone("Asia/Kolkata")
 timezone = pytz.timezone
+
+# Short TTL cache for the dashboard/team aggregation views below (GetLDCs,
+# GetTargetsDashboard, GetManagerDashboard, GetVisibleTeams) — each does
+# several queries plus non-trivial Python aggregation, and is reloaded
+# repeatedly by the same small set of CTC/LDC/Admin users. Unlike the chat
+# room-list cache (core/views/chat.py), this relies on time-based expiry only
+# rather than explicit invalidation — the underlying InfoDetail/PlanDetail/
+# UVDetail rows are written from many different endpoints (add/update/delete
+# info, plan, UV, pipeline stats...), so precise invalidation would mean
+# threading cache-busting calls through all of them; a short TTL is a much
+# lower-risk way to get most of the win. 30s means dashboard numbers can lag
+# a fresh entry by at most that long, which is acceptable for this data.
+DASHBOARD_CACHE_TTL = 30
 
 
 # ===================================================
@@ -252,6 +266,11 @@ class GetLDCs(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
+        cache_key = f"ldcs:{requester_ir_id or 'none'}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
         ldcs = get_viewable_ldcs(requester)
 
         from core.utils.dates import get_week_info_friday_to_friday
@@ -354,6 +373,31 @@ class GetLDCs(APIView):
         except Exception:
             uv_rows = []
 
+        # Bucket each row by (ir_id, week_num) ONCE instead of, per LDC per
+        # week, re-scanning every row across every member of every LDC — that
+        # was O(ldcs × weeks × total_rows); this is O(total_rows) to bucket
+        # plus O(ldcs × weeks × members_per_ldc) to sum, which is the same
+        # week-number bucket for the info/plan/uv variants since
+        # get_week_info_monday_to_sunday derives its week_num from the same
+        # Friday-anchored calculation (core/utils/dates.py:122).
+        info_counts = {}   # (ir_id, week_num) -> count
+        for ir_id, dt in info_rows:
+            week_num = get_week_info_friday_to_friday(now=dt)[0]
+            key = (ir_id, week_num)
+            info_counts[key] = info_counts.get(key, 0) + 1
+
+        plan_counts = {}   # (ir_id, week_num) -> count
+        for ir_id, dt in plan_rows:
+            week_num = get_week_info_friday_to_friday(now=dt)[0]
+            key = (ir_id, week_num)
+            plan_counts[key] = plan_counts.get(key, 0) + 1
+
+        uv_sums = {}   # (ir_id, week_num) -> total uv_count
+        for ir_id, dt, cnt in uv_rows:
+            week_num = get_week_info_friday_to_friday(now=dt)[0]
+            key = (ir_id, week_num)
+            uv_sums[key] = uv_sums.get(key, 0.0) + float(cnt)
+
         data = []
         for ldc in ldcs:
             members = ldc_member_map[ldc.ir_id]
@@ -362,19 +406,9 @@ class GetLDCs(APIView):
 
             week_data = {}
             for week_num in range(1, current_week_number + 1):
-                ws, we, pws, pwe = week_ranges[week_num]
-                total_infos_done = sum(
-                    1 for ir_id, dt in info_rows
-                    if ir_id in members and ws <= dt <= we
-                )
-                total_plans_done = sum(
-                    1 for ir_id, dt in plan_rows
-                    if ir_id in members and pws <= dt <= pwe
-                )
-                uvs_fallen = sum(
-                    float(cnt) for ir_id, dt, cnt in uv_rows
-                    if ir_id in members and ws <= dt <= we
-                )
+                total_infos_done = sum(info_counts.get((ir_id, week_num), 0) for ir_id in members)
+                total_plans_done = sum(plan_counts.get((ir_id, week_num), 0) for ir_id in members)
+                uvs_fallen = sum(uv_sums.get((ir_id, week_num), 0.0) for ir_id in members)
                 week_data[week_num] = {
                     "total_infos_done": total_infos_done,
                     "total_plans_done": total_plans_done,
@@ -389,6 +423,7 @@ class GetLDCs(APIView):
                 "team_member_count": member_count,
                 "week": week_data,
             })
+        cache.set(cache_key, data, DASHBOARD_CACHE_TTL)
         return Response(data)
 
 
@@ -820,7 +855,12 @@ class GetTargetsDashboard(APIView):
         except Exception:
             logging.exception("Error computing week bounds for targets_dashboard ir_id=%s", ir_id)
             return Response({"detail": "Invalid week parameters"}, status=status.HTTP_400_BAD_REQUEST)
-        
+
+        cache_key = f"targets_dashboard:{ir_id}:{week_number}:{year}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
         # Get weekly targets for current week
         ir_weekly_target = WeeklyTarget.objects.filter(
             ir=ir,
@@ -857,7 +897,9 @@ class GetTargetsDashboard(APIView):
         }
 
         if ir.ir_access_level not in [2, 3]:
-            return Response({"personal": personal, "teams": "NA"})
+            response_body = {"personal": personal, "teams": "NA"}
+            cache.set(cache_key, response_body, DASHBOARD_CACHE_TTL)
+            return Response(response_body)
 
         # Get teams visible to this IR (hierarchy-based)
         viewable_teams = list(get_viewable_teams_for_ir(ir).select_related('created_by'))
@@ -936,7 +978,9 @@ class GetTargetsDashboard(APIView):
                 "info_week_end": week_end.isoformat(),
             })
 
-        return Response({"personal": personal, "teams": teams_progress})
+        response_body = {"personal": personal, "teams": teams_progress}
+        cache.set(cache_key, response_body, DASHBOARD_CACHE_TTL)
+        return Response(response_body)
 
 
 class DashboardMappingConfigView(APIView):
@@ -1020,6 +1064,11 @@ class GetManagerDashboard(APIView):
         _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday(
             week_number=week_number, year=year
         )
+
+        cache_key = f"manager_dashboard:{requester_ir_id}:{week_number}:{year}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
 
         viewable_ldcs = list(get_viewable_ldcs(requester))
         viewable_ldc_ids = {ldc.ir_id for ldc in viewable_ldcs}
@@ -1153,12 +1202,14 @@ class GetManagerDashboard(APIView):
             "uv_done": round(sum(gr["totals"]["uv_done"] for gr in groups_out), 2),
         }
 
-        return Response({
+        response_body = {
             "week_number": week_number,
             "year": year,
             "groups": groups_out,
             "overall_totals": overall_totals,
-        })
+        }
+        cache.set(cache_key, response_body, DASHBOARD_CACHE_TTL)
+        return Response(response_body)
 
 
 class GetTargets(APIView):
@@ -1261,7 +1312,7 @@ class GetTargets(APIView):
                 # Check hierarchy permission if requester provided
                 if requester:
                     viewable_teams = get_viewable_teams_for_ir(requester)
-                    if team not in viewable_teams:
+                    if not viewable_teams.filter(pk=team.pk).exists():
                         return Response(
                             {"detail": "Not authorized to view this team's targets"},
                             status=status.HTTP_403_FORBIDDEN
@@ -1377,7 +1428,7 @@ class GetTeamInfoTotal(APIView):
             try:
                 requester = Ir.objects.get(ir_id=requester_ir_id)
                 viewable_teams = get_viewable_teams_for_ir(requester)
-                if team not in viewable_teams:
+                if not viewable_teams.filter(pk=team.pk).exists():
                     return Response(
                         {"detail": "Not authorized to view this team"},
                         status=status.HTTP_403_FORBIDDEN
@@ -1599,7 +1650,7 @@ class GetTeamUVTotal(APIView):
                 try:
                     requester = Ir.objects.get(ir_id=requester_ir_id)
                     viewable_teams = get_viewable_teams_for_ir(requester)
-                    if team not in viewable_teams:
+                    if not viewable_teams.filter(pk=team.pk).exists():
                         return Response(
                             {"detail": "Not authorized to view this team's UV total"},
                             status=status.HTTP_403_FORBIDDEN
@@ -1712,7 +1763,12 @@ class GetVisibleTeams(APIView):
             # Get current week
             week_number, year, info_week_start, info_week_end = get_week_info_friday_to_friday()
             _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday()
-        
+
+        cache_key = f"visible_teams:{ir_id}:{week_number}:{year}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
         # ── Batch all per-team queries into bulk lookups ──────────────────────
         viewable_teams = list(
             viewable_teams.select_related('created_by')
@@ -1806,7 +1862,7 @@ class GetVisibleTeams(APIView):
                 }
             })
         
-        return Response({
+        response_body = {
             "ir_id": ir.ir_id,
             "ir_name": ir.ir_name,
             "hierarchy_level": ir.hierarchy_level,
@@ -1816,7 +1872,9 @@ class GetVisibleTeams(APIView):
             "week_end": info_week_end.isoformat(),
             "total_visible_teams": len(teams_data),
             "teams": teams_data
-        })
+        }
+        cache.set(cache_key, response_body, DASHBOARD_CACHE_TTL)
+        return Response(response_body)
 
 
 # ---------------------------------------------------
@@ -1834,10 +1892,15 @@ class GetDownlineData(APIView):
         downlines = ir.get_all_downlines()
         direct_downlines = ir.get_direct_downlines()
 
-        # Aggregate stats
-        total_info = sum(i.info_count or 0 for i in viewable_irs)
-        total_plan = sum(i.plan_count or 0 for i in viewable_irs)
-        total_uv = sum(i.uv_count or 0 for i in viewable_irs)
+        # Aggregate stats — one query instead of three separate Python-side
+        # sums, each of which was re-evaluating (and re-fetching every row
+        # of) the same viewable_irs queryset.
+        totals = viewable_irs.aggregate(
+            total_info=Sum('info_count'), total_plan=Sum('plan_count'), total_uv=Sum('uv_count')
+        )
+        total_info = totals['total_info'] or 0
+        total_plan = totals['total_plan'] or 0
+        total_uv = totals['total_uv'] or 0
 
         # Get teams created by viewable IRs
         viewable_teams = Team.objects.filter(created_by__in=viewable_irs)

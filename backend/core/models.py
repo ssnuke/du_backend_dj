@@ -886,6 +886,14 @@ class InfoDetail(models.Model):
     info_name = models.CharField(max_length=100)
     monitored_by = models.CharField(max_length=100, default='Self', null=True, blank=True)
 
+    class Meta:
+        # Nearly every dashboard/team view filters InfoDetail by
+        # ir_id__in=[...] plus an info_date range — without this, only the
+        # ir_id half of that filter is index-backed.
+        indexes = [
+            models.Index(fields=['ir', 'info_date']),
+        ]
+
 
 class PlanDetail(models.Model):
     STATUS_CHOICES = [
@@ -913,6 +921,13 @@ class PlanDetail(models.Model):
     follow_up_date = models.DateField(null=True, blank=True)
     uv_value = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
 
+    class Meta:
+        # Same rationale as InfoDetail.Meta.indexes above — filtered by
+        # ir_id__in=[...] plus a plan_date range on every dashboard view.
+        indexes = [
+            models.Index(fields=['ir', 'plan_date']),
+        ]
+
 
 class UVDetail(models.Model):
     ir = models.ForeignKey(Ir, on_delete=models.CASCADE)
@@ -921,6 +936,13 @@ class UVDetail(models.Model):
     uv_date = models.DateTimeField(default=timezone.now)
     uv_count = models.DecimalField(max_digits=10, decimal_places=2, default=1)
     comments = models.TextField(null=True, blank=True)
+
+    class Meta:
+        # Same rationale as InfoDetail.Meta.indexes above — filtered by
+        # ir_id__in=[...] plus a uv_date range on every dashboard view.
+        indexes = [
+            models.Index(fields=['ir', 'uv_date']),
+        ]
 
 
 class TeamWeek(models.Model):

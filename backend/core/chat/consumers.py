@@ -784,8 +784,18 @@ class UserInboxConsumer(AsyncWebsocketConsumer):
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive(self, text_data=None, bytes_data=None):
-        # Inbox socket is receive-only for the server — ignore client messages
-        pass
+        # Inbox socket is receive-only for real events — the client only ever
+        # sends heartbeat pings, which need a reply so the frontend can detect
+        # a half-open connection (see chatService.js sendInboxPing) and force
+        # a reconnect instead of sitting on a dead socket indefinitely.
+        if not text_data:
+            return
+        try:
+            payload = json.loads(text_data)
+        except (TypeError, ValueError):
+            return
+        if payload.get("type") == "ping":
+            await self.send(text_data=json.dumps({"type": "pong"}))
 
     async def room_preview_updated(self, event):
         await self.send(text_data=json.dumps({
