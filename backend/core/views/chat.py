@@ -628,6 +628,7 @@ class ChatRoomMessages(APIView):
     def get(self, request, room_id):
         requester_ir_id = request.GET.get("requester_ir_id")
         before_id = request.GET.get("before_id")
+        after_id = request.GET.get("after_id")
         limit = request.GET.get("limit", PAGE_SIZE_DEFAULT)
 
         requester = _get_ir(requester_ir_id)
@@ -645,6 +646,50 @@ class ChatRoomMessages(APIView):
                 limit = PAGE_SIZE_DEFAULT
         except (TypeError, ValueError):
             limit = PAGE_SIZE_DEFAULT
+
+        # after_id is a gap-fill cursor (e.g. after a WebSocket reconnect): fetch
+        # everything newer than the last message the client already has, oldest
+        # first, so the client can append pages in order without missing any.
+        if after_id:
+            try:
+                after_id_int = int(after_id)
+            except (TypeError, ValueError):
+                return Response({"detail": "after_id must be an integer"}, status=status.HTTP_400_BAD_REQUEST)
+
+            qs = (
+                ChatMessage.objects
+                .filter(room=room, id__gt=after_id_int)
+                .select_related("sender", "reply_to", "reply_to__sender")
+                .prefetch_related("reactions__ir")
+                .annotate(read_count=Count("receipts"))
+                .order_by("id")   # oldest-of-the-gap first
+            )
+
+            if membership.hide_history_before_join:
+                qs = qs.filter(created_at__gte=membership.joined_at)
+
+            messages = list(qs[:limit])
+            next_after_id = messages[-1].id if messages else after_id_int
+
+            read_message_ids = set(
+                ChatMessageReceipt.objects.filter(
+                    reader=requester, message_id__in=[m.id for m in messages]
+                ).values_list("message_id", flat=True)
+            )
+
+            return Response(
+                {
+                    "messages": [
+                        _serialize_message(
+                            message,
+                            read_by_me=(message.sender_id == requester.ir_id or message.id in read_message_ids),
+                        )
+                        for message in messages
+                    ],
+                    "next_after_id": next_after_id,
+                    "has_more": len(messages) == limit,
+                }
+            )
 
         qs = (
             ChatMessage.objects
