@@ -854,26 +854,25 @@ def _round_bucket(bucket):
 
 
 # ---------------------------------------------------
-# MONTHLY PLAN SUMMARY (weeks-as-columns, role-scoped)
+# MONTHLY PLAN SUMMARY (weekly totals only, no per-IR breakdown)
 # ---------------------------------------------------
 class GetMonthlyPlanSummary(APIView):
     """
-    One month of PlanDetail activity, broken down by week and status.
+    One month of PlanDetail activity, aggregated per week across the
+    viewer's whole visible scope — deliberately NOT broken down per IR/LDC
+    here. The per-IR breakdown for a given week is available on demand via
+    the existing GetTeamAggregatedPlans endpoint (what PlanTracker.jsx
+    already renders) once the user picks a specific week on the frontend.
 
-    - ADMIN/CTC: rows are LDCs (row_type="ldc"), each aggregating that LDC's
-      managed-team members — mirrors GetLDCs' own grouping (see
-      get_viewable_ldcs above) so "who counts as an LDC's team" never drifts
-      between the two views.
-    - Everyone else (LDC/LS/GC/IR): rows are individually viewable IRs
-      (row_type="rep"), via get_viewable_irs_for_name_list() — the same
-      scoping rule PipelineTracker and GetTeamAggregatedPlans already use.
+    Scope is get_viewable_irs_for_name_list() — the same rule
+    PipelineTracker/GetTeamAggregatedPlans already use, and it naturally
+    covers every tier: GC/LS see their pocket/team, LDC sees their subtree,
+    and CTC/ADMIN see their subtree/everyone without any special-casing
+    needed here.
 
     Same trust convention as GetTeamAggregatedPlans/GetLDCs: the ir_id in
     the URL path IS the viewer — its own scope determines what's returned,
-    no separate requester_ir_id needed. This also means CTC/Admin drilling
-    into a specific LDC (existing /teams/by-manager/:ldcId route) naturally
-    gets row_type="rep" scoped to that LDC's own subtree, since the branch
-    above is keyed off the *viewed* ir_id's access level.
+    no separate requester_ir_id needed.
     """
     def get(self, request, ir_id):
         try:
@@ -893,52 +892,14 @@ class GetMonthlyPlanSummary(APIView):
         weeks = get_weeks_in_month(month, year)
         if not weeks:
             return Response({
-                "month": month, "year": year, "row_type": "rep",
-                "weeks": [], "rows": [], "grand_total": _round_bucket(_empty_plan_bucket()),
+                "month": month, "year": year,
+                "weeks": [], "weekly": {}, "month_total": _round_bucket(_empty_plan_bucket()),
             })
 
-        # ── Determine rows + each row's member set ──────────────────────
-        if ir.ir_access_level in [AccessLevel.ADMIN, AccessLevel.CTC]:
-            row_type = "ldc"
-            ldcs = list(get_viewable_ldcs(ir))
-            ldc_ids_list = [l.ir_id for l in ldcs]
-
-            # Same "LDC's managed team members" computation as GetLDCs above
-            # (ldc_created_team_ids / team_to_members) — kept in sync
-            # deliberately so the two views never disagree on team membership.
-            ldc_created_teams = list(
-                Team.objects.filter(created_by_id__in=ldc_ids_list)
-                            .values_list('created_by_id', 'id')
-            )
-            ldc_created_team_ids = {}
-            for ldc_ir_id, team_id in ldc_created_teams:
-                ldc_created_team_ids.setdefault(ldc_ir_id, set()).add(team_id)
-
-            all_team_ids = set(t for ids in ldc_created_team_ids.values() for t in ids)
-            all_team_members = list(
-                TeamMember.objects.filter(team_id__in=all_team_ids)
-                                  .values_list('team_id', 'ir_id')
-            )
-            team_to_members = {}
-            for team_id, member_ir_id in all_team_members:
-                team_to_members.setdefault(team_id, set()).add(member_ir_id)
-
-            entities = []
-            for ldc in ldcs:
-                created = ldc_created_team_ids.get(ldc.ir_id, set())
-                members = set()
-                for tid in created:
-                    members.update(team_to_members.get(tid, set()))
-                members.discard(ldc.ir_id)
-                entities.append({"ir_id": ldc.ir_id, "ir_name": ldc.ir_name, "member_ids": members})
+        if ir.ir_access_level == AccessLevel.ADMIN:
+            member_ids = set(Ir.objects.filter(status=True).values_list('ir_id', flat=True))
         else:
-            row_type = "rep"
-            viewable = list(ir.get_viewable_irs_for_name_list().values_list('ir_id', 'ir_name'))
-            entities = [{"ir_id": rid, "ir_name": rname, "member_ids": {rid}} for rid, rname in viewable]
-
-        all_member_ids = set()
-        for e in entities:
-            all_member_ids.update(e["member_ids"])
+            member_ids = set(ir.get_viewable_irs_for_name_list().values_list('ir_id', flat=True))
 
         span_start = weeks[0]["start"]
         span_end = weeks[-1]["end"]
@@ -947,11 +908,11 @@ class GetMonthlyPlanSummary(APIView):
         # week) — same rationale as GetLDCs' bulk-fetch-then-bucket pattern.
         plan_rows = list(
             PlanDetail.objects.filter(
-                ir_id__in=all_member_ids,
+                ir_id__in=member_ids,
                 plan_date__gte=span_start,
                 plan_date__lte=span_end,
-            ).values_list('ir_id', 'plan_date', 'status', 'uv_value')
-        ) if all_member_ids else []
+            ).values_list('plan_date', 'status', 'uv_value')
+        ) if member_ids else []
 
         def _week_for(dt):
             for w in weeks:
@@ -959,14 +920,12 @@ class GetMonthlyPlanSummary(APIView):
                     return w["week_number"]
             return None
 
-        # Bucket once by (ir_id, week_num) instead of re-scanning plan_rows
-        # per entity per week.
-        buckets = {}
-        for member_ir_id, dt, plan_status, uv_value in plan_rows:
+        weekly_buckets = {w["week_number"]: _empty_plan_bucket() for w in weeks}
+        for dt, plan_status, uv_value in plan_rows:
             week_num = _week_for(dt)
             if week_num is None:
                 continue
-            bucket = buckets.setdefault((member_ir_id, week_num), _empty_plan_bucket())
+            bucket = weekly_buckets[week_num]
             bucket["total"] += 1
             status_key = plan_status or "closing_pending"
             if status_key in bucket:
@@ -974,39 +933,14 @@ class GetMonthlyPlanSummary(APIView):
             if uv_value and float(uv_value) > 0:
                 bucket["uv_value_sum"] += float(uv_value)
 
-        def _sum_buckets(member_ids, week_num):
-            result = _empty_plan_bucket()
-            for member_id in member_ids:
-                b = buckets.get((member_id, week_num))
-                if not b:
-                    continue
-                for k in result:
-                    result[k] += b[k]
-            return result
-
-        rows = []
-        grand_total = _empty_plan_bucket()
-        for e in entities:
-            weekly = {}
-            month_total = _empty_plan_bucket()
-            for w in weeks:
-                wb = _sum_buckets(e["member_ids"], w["week_number"])
-                weekly[w["week_number"]] = _round_bucket(wb)
-                for k in month_total:
-                    month_total[k] += wb[k]
-            for k in grand_total:
-                grand_total[k] += month_total[k]
-            rows.append({
-                "ir_id": e["ir_id"],
-                "ir_name": e["ir_name"],
-                "weekly": weekly,
-                "month_total": _round_bucket(month_total),
-            })
+        month_total = _empty_plan_bucket()
+        for bucket in weekly_buckets.values():
+            for k in month_total:
+                month_total[k] += bucket[k]
 
         return Response({
             "month": month,
             "year": year,
-            "row_type": row_type,
             "weeks": [
                 {
                     "week_number": w["week_number"],
@@ -1017,8 +951,8 @@ class GetMonthlyPlanSummary(APIView):
                 }
                 for w in weeks
             ],
-            "rows": rows,
-            "grand_total": _round_bucket(grand_total),
+            "weekly": {wn: _round_bucket(b) for wn, b in weekly_buckets.items()},
+            "month_total": _round_bucket(month_total),
         })
 
 
