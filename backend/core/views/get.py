@@ -864,11 +864,12 @@ class GetMonthlyPlanSummary(APIView):
     the existing GetTeamAggregatedPlans endpoint (what PlanTracker.jsx
     already renders) once the user picks a specific week on the frontend.
 
-    Scope is get_viewable_irs_for_name_list() — the same rule
-    PipelineTracker/GetTeamAggregatedPlans already use, and it naturally
-    covers every tier: GC/LS see their pocket/team, LDC sees their subtree,
-    and CTC/ADMIN see their subtree/everyone without any special-casing
-    needed here.
+    Scope MUST exactly match GetTeamAggregatedPlans's own scoping
+    (get_subtree_irs(), or all IRs for ADMIN) rather than the superficially
+    similar get_viewable_irs_for_name_list() — the two differ for the LS
+    role specifically (team-membership-based vs hierarchy-subtree-based),
+    which previously made this endpoint's totals silently disagree with the
+    PlanTracker drill-down it's paired with on the frontend.
 
     Same trust convention as GetTeamAggregatedPlans/GetLDCs: the ir_id in
     the URL path IS the viewer — its own scope determines what's returned,
@@ -899,7 +900,7 @@ class GetMonthlyPlanSummary(APIView):
         if ir.ir_access_level == AccessLevel.ADMIN:
             member_ids = set(Ir.objects.filter(status=True).values_list('ir_id', flat=True))
         else:
-            member_ids = set(ir.get_viewable_irs_for_name_list().values_list('ir_id', flat=True))
+            member_ids = set(ir.get_subtree_irs().values_list('ir_id', flat=True))
 
         span_start = weeks[0]["start"]
         span_end = weeks[-1]["end"]
