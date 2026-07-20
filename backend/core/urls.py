@@ -27,6 +27,7 @@ from core.views.get import (
     SearchProspects,
     DashboardMappingConfigView,
     GetManagerDashboard,
+    GetLdcPocketDashboard,
 )
 from core.views.post import (
     AddIrId,
@@ -169,6 +170,7 @@ urlpatterns = [
     path("teams/", GetAllTeams.as_view()),
     path("ldcs/", GetLDCs.as_view()),
     path("manager_dashboard/", GetManagerDashboard.as_view()),
+    path("ldc_pocket_dashboard/", GetLdcPocketDashboard.as_view()),
     path("dashboard_mapping/<str:ir_id>/", DashboardMappingConfigView.as_view()),
     path("teams_by_ldc/<str:ldc_id>/", GetTeamsByLDC.as_view()),
     path("team_members/<int:team_id>/", GetTeamMembers.as_view()),

@@ -21,6 +21,8 @@ from core.models import (
     TeamWeeklyTargets,
     DashboardMappingConfig,
     AccessLevel,
+    Pocket,
+    PocketMember,
 )
 from core.serializers import (
     IrIdSerializer,
@@ -1368,6 +1370,135 @@ class GetManagerDashboard(APIView):
             "week_number": week_number,
             "year": year,
             "groups": groups_out,
+            "overall_totals": overall_totals,
+        }
+        cache.set(cache_key, response_body, DASHBOARD_CACHE_TTL)
+        return Response(response_body)
+
+
+class GetLdcPocketDashboard(APIView):
+    """
+    Pocket-level analog of GetManagerDashboard, for an LDC's own pockets
+    instead of a CTC/Admin's LDC groups: one row per pocket with done-vs-
+    target totals for the week, bulk-queried and cached the same way.
+
+    Scope is pockets in teams the requester LDC created
+    (Pocket.objects.filter(team__created_by=requester)) — the same "LDC's
+    own stuff = teams they created" rule already established elsewhere this
+    session (GetMonthlyPlanSummary's LDC branch, GetManagerDashboard's own
+    Team.objects.filter(created_by_id__in=...) scoping), not the broader
+    can_view_team()/TeamMember-membership rule used for merely *viewing* a
+    team — this endpoint is specifically "my pockets to track," not "every
+    pocket I have any visibility into."
+    """
+
+    def get(self, request):
+        requester_ir_id = request.GET.get("requester_ir_id")
+        if not requester_ir_id:
+            return Response({"detail": "requester_ir_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            requester = Ir.objects.get(ir_id=requester_ir_id)
+        except Ir.DoesNotExist:
+            return Response({"detail": "Requester IR not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if requester.ir_access_level != AccessLevel.LDC:
+            return Response({"detail": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
+
+        week_param = request.GET.get("week")
+        year_param = request.GET.get("year")
+        try:
+            if week_param and year_param:
+                week_number, year, week_start, week_end = get_week_info_friday_to_friday(
+                    week_number=int(week_param), year=int(year_param)
+                )
+            else:
+                week_number, year, week_start, week_end = get_week_info_friday_to_friday()
+        except Exception:
+            return Response({"detail": "Invalid week parameters"}, status=status.HTTP_400_BAD_REQUEST)
+        _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday(
+            week_number=week_number, year=year
+        )
+
+        cache_key = f"ldc_pocket_dashboard:{requester_ir_id}:{week_number}:{year}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
+        pockets = list(
+            Pocket.objects.filter(team__created_by=requester, is_active=True).select_related("team")
+        )
+        pocket_ids = [p.id for p in pockets]
+
+        member_rows = list(
+            PocketMember.objects.filter(pocket_id__in=pocket_ids, ir__status=True).values_list("pocket_id", "ir_id")
+        )
+        pocket_to_members = {}
+        for pocket_id, ir_id in member_rows:
+            pocket_to_members.setdefault(pocket_id, set()).add(ir_id)
+        all_member_ids = set(ir_id for ids in pocket_to_members.values() for ir_id in ids)
+
+        info_rows = list(
+            InfoDetail.objects.filter(
+                ir_id__in=all_member_ids, info_date__gte=week_start, info_date__lte=week_end
+            ).values_list("ir_id", flat=True)
+        ) if all_member_ids else []
+        plan_rows = list(
+            PlanDetail.objects.filter(
+                ir_id__in=all_member_ids, plan_date__gte=plan_week_start, plan_date__lte=plan_week_end
+            ).values_list("ir_id", flat=True)
+        ) if all_member_ids else []
+        try:
+            uv_rows = list(
+                UVDetail.objects.filter(
+                    ir_id__in=all_member_ids, uv_date__gte=week_start, uv_date__lte=week_end
+                ).values_list("ir_id", "uv_count")
+            ) if all_member_ids else []
+        except Exception:
+            uv_rows = []
+
+        info_count_by_ir = Counter(info_rows)
+        plan_count_by_ir = Counter(plan_rows)
+        uv_sum_by_ir = {}
+        for ir_id, cnt in uv_rows:
+            uv_sum_by_ir[ir_id] = uv_sum_by_ir.get(ir_id, 0) + float(cnt or 0)
+
+        targets_by_pocket = {}
+        for wt in WeeklyTarget.objects.filter(pocket_id__in=pocket_ids, week_number=week_number, year=year):
+            targets_by_pocket[wt.pocket_id] = {
+                "info_target": wt.pocket_weekly_info_target or 0,
+                "plan_target": wt.pocket_weekly_plan_target or 0,
+                "uv_target": float(wt.pocket_weekly_uv_target or 0),
+            }
+
+        pockets_out = []
+        for p in pockets:
+            members = pocket_to_members.get(p.id, set())
+            t = targets_by_pocket.get(p.id, {})
+            pockets_out.append({
+                "id": p.id,
+                "label": p.name,
+                "team_id": p.team_id,
+                "team_name": p.team.name,
+                "totals": {
+                    "info_done": sum(info_count_by_ir.get(m, 0) for m in members),
+                    "plan_done": sum(plan_count_by_ir.get(m, 0) for m in members),
+                    "uv_done": round(sum(uv_sum_by_ir.get(m, 0) for m in members), 2),
+                    "info_target": t.get("info_target", 0),
+                    "plan_target": t.get("plan_target", 0),
+                    "uv_target": round(t.get("uv_target", 0), 2),
+                },
+            })
+
+        overall_totals = {
+            "info_done": sum(pk["totals"]["info_done"] for pk in pockets_out),
+            "plan_done": sum(pk["totals"]["plan_done"] for pk in pockets_out),
+            "uv_done": round(sum(pk["totals"]["uv_done"] for pk in pockets_out), 2),
+        }
+
+        response_body = {
+            "week_number": week_number,
+            "year": year,
+            "pockets": pockets_out,
             "overall_totals": overall_totals,
         }
         cache.set(cache_key, response_body, DASHBOARD_CACHE_TTL)
