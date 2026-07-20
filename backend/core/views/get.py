@@ -782,6 +782,7 @@ class GetTeamAggregatedPlans(APIView):
             return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
 
         week_param = request.GET.get("week")
+        month_param = request.GET.get("month")
         year_param = request.GET.get("year")
 
         if week_param and year_param:
@@ -793,6 +794,19 @@ class GetTeamAggregatedPlans(APIView):
                 )
             except (ValueError, Exception):
                 return Response({"detail": "Invalid week or year"}, status=status.HTTP_400_BAD_REQUEST)
+        elif month_param and year_param:
+            try:
+                month = int(month_param)
+                year = int(year_param)
+                if not (1 <= month <= 12):
+                    raise ValueError("month out of range")
+            except (TypeError, ValueError):
+                return Response({"detail": "Invalid month or year"}, status=status.HTTP_400_BAD_REQUEST)
+            weeks = get_weeks_in_month(month, year)
+            if not weeks:
+                return Response({"plans": [], "presenters": [], "summary": {"total_plans": 0, "closed_count": 0, "total_positive_uvs": 0}})
+            plan_week_start = weeks[0]["start"]
+            plan_week_end = weeks[-1]["end"]
         else:
             _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday()
 
