@@ -692,7 +692,7 @@ class GetPlanDetails(APIView):
                 qs = PlanDetail.objects.filter(
                     ir_id=ir_id,
                     follow_up_date__lte=today,
-                    status__in=['closing_pending', 'kiv'],
+                    status__in=['closing_pending', 'kiv', 'fg'],
                 ).order_by('follow_up_date')
                 qs = apply_optional_pagination(qs, request)
                 return Response(PlanDetailSerializer(qs, many=True).data)
@@ -872,6 +872,7 @@ def _empty_plan_bucket():
         "rejected": 0,
         "kiv": 0,
         "uvs_on_counter": 0,
+        "fg": 0,
         "uv_value_sum": 0.0,
     }
 

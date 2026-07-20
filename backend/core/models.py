@@ -912,6 +912,7 @@ class PlanDetail(models.Model):
         ('rejected', 'Rejected'),
         ('kiv', 'KIV'),
         ('uvs_on_counter', "UV's on Counter"),
+        ('fg', 'FG'),
     ]
 
     REJECTION_REASON_CHOICES = [
