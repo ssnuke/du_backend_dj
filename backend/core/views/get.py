@@ -739,6 +739,41 @@ class GetPlanDetails(APIView):
 # ---------------------------------------------------
 # TEAM-AGGREGATED PLANS (all plans across visible teams)
 # ---------------------------------------------------
+def get_plan_visible_member_ids(ir):
+    """
+    Which IRs' PlanDetail rows `ir` can see — shared by GetTeamAggregatedPlans
+    (single week, what PlanTracker.jsx renders) and GetMonthlyPlanSummary
+    (whole month) so the two can never silently disagree the way they did
+    twice already (once for LS, once for LDC) when this logic lived
+    separately in each view.
+
+    - ADMIN: everyone.
+    - LDC: self + members of teams they created (Team.created_by = this
+      LDC) — matches GetLDCs' own established convention for computing an
+      LDC's team totals (ldc_member_map, built from ldc_created_team_ids,
+      not from mere TeamMember presence), and matches who they're actually
+      authorized to add plan data for (can_add_data_for_ir). NOT their full
+      hierarchy subtree, which can pull in people from other branches they
+      don't manage, and NOT teams they were merely added to (e.g. by their
+      own CTC) without having created/leading them.
+    - Everyone else (CTC, LS, GC, IR): hierarchy subtree (self + downlines)
+      — deliberately never "merely shares a team with", per the original
+      GetTeamAggregatedPlans design.
+    """
+    if ir.ir_access_level == AccessLevel.ADMIN:
+        return set(Ir.objects.filter(status=True).values_list('ir_id', flat=True))
+
+    if ir.ir_access_level == AccessLevel.LDC:
+        my_created_team_ids = Team.objects.filter(created_by=ir).values_list('id', flat=True)
+        member_ids = set(
+            TeamMember.objects.filter(team_id__in=my_created_team_ids).values_list('ir_id', flat=True)
+        )
+        member_ids.add(ir.ir_id)
+        return member_ids
+
+    return set(ir.get_subtree_irs().values_list('ir_id', flat=True))
+
+
 class GetTeamAggregatedPlans(APIView):
     def get(self, request, ir_id):
         try:
@@ -761,13 +796,7 @@ class GetTeamAggregatedPlans(APIView):
         else:
             _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday()
 
-        # Plan visibility follows each person's own downline (hierarchy subtree),
-        # never other branches/lines they merely share a team with. Admin alone
-        # sees the whole org.
-        if ir.ir_access_level == AccessLevel.ADMIN:
-            all_member_ids = set(Ir.objects.filter(status=True).values_list('ir_id', flat=True))
-        else:
-            all_member_ids = set(ir.get_subtree_irs().values_list('ir_id', flat=True))
+        all_member_ids = get_plan_visible_member_ids(ir)
 
         if not all_member_ids:
             return Response({"plans": [], "presenters": [], "summary": {"total_plans": 0, "closed_count": 0, "total_positive_uvs": 0}})
@@ -864,12 +893,11 @@ class GetMonthlyPlanSummary(APIView):
     the existing GetTeamAggregatedPlans endpoint (what PlanTracker.jsx
     already renders) once the user picks a specific week on the frontend.
 
-    Scope MUST exactly match GetTeamAggregatedPlans's own scoping
-    (get_subtree_irs(), or all IRs for ADMIN) rather than the superficially
-    similar get_viewable_irs_for_name_list() — the two differ for the LS
-    role specifically (team-membership-based vs hierarchy-subtree-based),
-    which previously made this endpoint's totals silently disagree with the
-    PlanTracker drill-down it's paired with on the frontend.
+    Scope is get_plan_visible_member_ids() — the exact same helper
+    GetTeamAggregatedPlans uses, so this endpoint's totals can never
+    silently disagree with the PlanTracker drill-down it's paired with on
+    the frontend (this already happened twice from the two views computing
+    scope independently: once for LS, once for LDC).
 
     Same trust convention as GetTeamAggregatedPlans/GetLDCs: the ir_id in
     the URL path IS the viewer — its own scope determines what's returned,
@@ -897,10 +925,7 @@ class GetMonthlyPlanSummary(APIView):
                 "weeks": [], "weekly": {}, "month_total": _round_bucket(_empty_plan_bucket()),
             })
 
-        if ir.ir_access_level == AccessLevel.ADMIN:
-            member_ids = set(Ir.objects.filter(status=True).values_list('ir_id', flat=True))
-        else:
-            member_ids = set(ir.get_subtree_irs().values_list('ir_id', flat=True))
+        member_ids = get_plan_visible_member_ids(ir)
 
         span_start = weeks[0]["start"]
         span_end = weeks[-1]["end"]
