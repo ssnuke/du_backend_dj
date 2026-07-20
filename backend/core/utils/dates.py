@@ -135,6 +135,52 @@ def get_week_info_monday_to_sunday(
     return week_num, yr, plan_start, plan_end
 
 
+def get_weeks_in_month(month: int, year: int) -> list[dict]:
+    """
+    All (Friday-anchored) weeks whose Monday-Sunday plan window
+    (get_week_info_monday_to_sunday) falls in the given calendar month/year.
+
+    A week is numbered off the Friday anchor of ITS OWN week-year, but the
+    calendar month its plan window actually falls in can differ from that
+    week-year near year boundaries — so this scans week numbers across the
+    three adjacent week-year anchors (year-1, year, year+1) rather than
+    assuming week numbers 1..52 of `year` alone would cover it.
+
+    Different (week_number, week-year) pairs can compute to the identical
+    Monday-Sunday date range — e.g. 2026's hardcoded YEAR_2026_WEEK_1_START
+    anchor happens to coincide with 2025's generically-computed week 53 —
+    so dedup by actual date range, not by (week_number, year), or the same
+    calendar week would appear twice. Anchor years are scanned as
+    (year, year-1, year+1) so that when a duplicate date range does occur,
+    the week-number/year label attributed to the requested `year` wins.
+
+    Returns weeks sorted ascending by start date, each as:
+        {"week_number": int, "year": int, "start": datetime, "end": datetime,
+         "label": str}
+    """
+    weeks = []
+    seen_dates = set()
+    for anchor_year in (year, year - 1, year + 1):
+        for week_num in range(1, 54):
+            _, wk_year, plan_start, plan_end = get_week_info_monday_to_sunday(
+                week_number=week_num, year=anchor_year
+            )
+            if plan_start.month == month and plan_start.year == year:
+                date_key = (plan_start.date(), plan_end.date())
+                if date_key in seen_dates:
+                    continue
+                seen_dates.add(date_key)
+                weeks.append({
+                    "week_number": week_num,
+                    "year": wk_year,
+                    "start": plan_start,
+                    "end": plan_end,
+                    "label": f"Wk {week_num} ({plan_start.strftime('%b %d')}–{plan_end.strftime('%d')})",
+                })
+    weeks.sort(key=lambda w: w["start"])
+    return weeks
+
+
 def get_current_week_start(now: datetime | None = None) -> datetime:
     """
     Compute the current week start datetime using
