@@ -1166,7 +1166,15 @@ class AdjustIrCounters(APIView):
 class ToggleIrStatus(APIView):
     """
     Set an IR's active/inactive status. Restricted to LDC acting on an IR
-    in their own subtree. Inactive IRs are excluded from System Count.
+    that shares a team with them — the same TeamMember-based scoping
+    GetIrsForStatusManagement (the list this toggle is paired with on the
+    frontend) and GetDownlineData's LDC System Count both use. Previously
+    checked is_in_subtree() instead (hierarchy-path scoping), a DIFFERENT
+    population from "teams I'm a member of" whenever team membership and
+    hierarchy position diverge — that mismatch meant an LDC could see
+    someone in the status-management list (because they share a team) but
+    get rejected on toggle (because they weren't a hierarchy descendant),
+    with no visible reason why. Inactive IRs are excluded from System Count.
     """
     def patch(self, request, ir_id):
         requester_ir_id = request.data.get("requester_ir_id")
@@ -1189,7 +1197,7 @@ class ToggleIrStatus(APIView):
         if requester.ir_id == target.ir_id:
             return Response({"detail": "Cannot change your own status"}, status=status.HTTP_403_FORBIDDEN)
 
-        if not requester.is_in_subtree(target):
+        if not requester._is_in_same_team(target):
             return Response({"detail": "Not authorized to change status for this IR"}, status=status.HTTP_403_FORBIDDEN)
 
         target.status = new_status
