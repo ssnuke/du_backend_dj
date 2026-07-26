@@ -1012,7 +1012,10 @@ class UpdateUVCount(APIView):
             if requester_ir_id:
                 try:
                     requester = Ir.objects.get(ir_id=requester_ir_id)
-                    if not requester.can_view_ir(ir):
+                    # can_view_ir doesn't cover GC pocket heads updating UVs for
+                    # their downlines, so fall back to the same check AddUV/
+                    # UpdatePlanDetail/UpdateInfoDetail already use for that case.
+                    if not requester.can_view_ir(ir) and not requester.can_add_data_for_ir(ir):
                         return Response(
                             {"detail": "Not authorized to update this UV record"},
                             status=status.HTTP_403_FORBIDDEN

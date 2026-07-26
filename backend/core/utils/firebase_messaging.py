@@ -6,6 +6,7 @@ from firebase_admin import credentials, messaging
 import os
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +15,35 @@ logger = logging.getLogger(__name__)
 # Or set FIREBASE_SERVICE_ACCOUNT_PATH with the full path or JSON string
 
 firebase_initialized = False
+
+# Shared pool for FCM/webpush sends triggered from synchronous code paths —
+# Django model-save signals (core/signals.py) and plain REST views (the
+# chat REST attachment path, the admin SendFCMNotification endpoint).
+# send_multicast/send_each_for_multicast fires one HTTP request per token, so
+# waiting on it inline can block the calling request or signal handler for
+# many seconds on a large recipient list. This app runs as a single Daphne
+# process (see django-app/render.yaml + docker/entrypoint.sh), so that block
+# ties up the one shared worker pool used for every other request in the
+# process — not just a slow push, but app-wide lag and health-check timeouts
+# under load. Mirrors the dedicated _fcm_executor already used by the
+# WebSocket chat send path in core/chat/consumers.py.
+_background_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="fcm-bg-send")
+
+
+def run_in_background(fn, *args, **kwargs):
+    """
+    Submit fn to the shared background executor and return immediately,
+    instead of blocking the caller for the duration of fn (typically a
+    network-bound push send). fn's exceptions are caught and logged here
+    since there's no caller left to observe them once this returns.
+    """
+    def _wrapped():
+        try:
+            fn(*args, **kwargs)
+        except Exception:
+            logger.exception('Background push/notification task failed')
+
+    _background_executor.submit(_wrapped)
 
 def initialize_firebase():
     global firebase_initialized

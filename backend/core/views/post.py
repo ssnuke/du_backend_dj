@@ -1678,32 +1678,31 @@ class SendFCMNotification(APIView):
                     "target_devices": []
                 }, status=status.HTTP_200_OK)
             
-            # Send notification
-            logging.info(f"SendFCMNotification: Sending to {len(all_fcm_tokens)} tokens across {ir_count} IRs")
-            logging.info(f">>> ABOUT TO SEND NOTIFICATION TO DEVICE. Tokens: {all_fcm_tokens}, Title: {title}")
-            
+            # Queue the send instead of waiting on it inline: send_multicast/
+            # send_notification are one HTTP request per token, and this is a
+            # plain synchronous view — blocking here for a large ir_ids list
+            # ties up this app's single shared worker pool (see
+            # firebase_messaging.run_in_background) for however long that
+            # takes, stalling every other request in the process. Since the
+            # send is now async, we can no longer report per-token
+            # success/failure synchronously — see run_in_background's logging
+            # for delivery outcomes.
+            logging.info(f"SendFCMNotification: Queuing send to {len(all_fcm_tokens)} tokens across {ir_count} IRs")
+
+            from core.utils.firebase_messaging import run_in_background
+
             if len(all_fcm_tokens) == 1:
-                response = send_notification(all_fcm_tokens[0], title, body, data)
-                return Response({
-                    "status": "success" if response else "failed",
-                    "message": "Notification sent successfully" if response else "Failed to send notification",
-                    "irs_targeted": ir_count,
-                    "tokens_sent": 1,
-                    "response": str(response) if response else None,
-                    "target_devices": token_details
-                }, status=status.HTTP_200_OK if response else status.HTTP_500_INTERNAL_SERVER_ERROR)
+                run_in_background(send_notification, all_fcm_tokens[0], title, body, data)
             else:
-                logging.info(f">>> ABOUT TO SEND MULTICAST NOTIFICATION TO DEVICES. Tokens: {all_fcm_tokens}, Title: {title}")
-                result = send_multicast(all_fcm_tokens, title, body, data)
-                return Response({
-                    "status": "success",
-                    "message": f"Notification sent to {result['success']} device(s)",
-                    "irs_targeted": ir_count,
-                    "tokens_sent": result['success'],
-                    "tokens_failed": result['failure'],
-                    "failure_details": result.get('failure_details', []),
-                    "target_devices": token_details
-                }, status=status.HTTP_200_OK)
+                run_in_background(send_multicast, all_fcm_tokens, title, body, data)
+
+            return Response({
+                "status": "queued",
+                "message": f"Notification queued for {len(all_fcm_tokens)} device(s)",
+                "irs_targeted": ir_count,
+                "tokens_queued": len(all_fcm_tokens),
+                "target_devices": token_details
+            }, status=status.HTTP_202_ACCEPTED)
             
         except Exception as e:
             logging.exception(f"Error sending FCM notification: {str(e)}")

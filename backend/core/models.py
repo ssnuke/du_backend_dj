@@ -395,7 +395,9 @@ class Ir(models.Model):
         - CTC: Can add for subtree
         - LDC: Can add for members of teams they created
         - LS: Can add for team members (in teams they belong to)
-        - GC/IR: Can add only for self
+        - GC: Can add only for self, unless they're a pocket head, in which
+          case they can also add for their downlines (hierarchy subtree)
+        - IR: Can add only for self
         """
         # Can always add for self
         if self.ir_id == target_ir.ir_id:
@@ -416,8 +418,12 @@ class Ir(models.Model):
         # LS can add for team members
         if self.ir_access_level == AccessLevel.LS:
             return self._is_in_same_team(target_ir)
-        
-        # GC/IR can only add for themselves
+
+        # GC pocket heads can add for their downlines (hierarchy subtree)
+        if self.ir_access_level == AccessLevel.GC:
+            return self.is_pocket_head() and self.is_in_subtree(target_ir)
+
+        # IR can only add for themselves
         return False
 
     def _is_in_same_team(self, target_ir):
@@ -431,6 +437,11 @@ class Ir(models.Model):
         from core.models import Team, TeamMember
         my_created_teams = Team.objects.filter(created_by=self).values_list('id', flat=True)
         return TeamMember.objects.filter(ir=target_ir, team_id__in=my_created_teams).exists()
+
+    def is_pocket_head(self):
+        """Check if this IR is marked as the head of any pocket."""
+        from core.models import PocketMember
+        return PocketMember.objects.filter(ir=self, is_head=True).exists()
 
     def can_view_name_list(self, target_ir):
         """

@@ -2,6 +2,7 @@ from typing import Iterable
 import json
 
 from django.conf import settings
+from django.db import transaction
 from pywebpush import WebPushException, webpush
 
 from core.models import Notification, Ir, AccessLevel, TeamMember, TeamRole, PushSubscription
@@ -154,16 +155,32 @@ def create_notifications(
 
     if notifications_to_create:
         Notification.objects.bulk_create(notifications_to_create)
-        send_push_notifications(
-            notifications=notifications_to_create,
-            title=title,
-            message=message,
-        )
-        send_fcm_notifications(
-            notifications=notifications_to_create,
-            title=title,
-            message=message,
-        )
+
+        # create_notifications is called from post_save/post_delete signals
+        # (core/signals.py) that fire inline inside whatever request created
+        # or deleted the triggering Plan/UV/Ir/TeamMember row — e.g. every
+        # "Add Plan"/"Add UV" across the whole user base, not just admin
+        # actions. The actual sends below are network calls to Google/VAPID
+        # (one HTTP request per token), so running them inline here would
+        # block that request until every recipient's push finishes. Deferred
+        # to a background thread, and to transaction.on_commit so it only
+        # fires once the triggering row is actually committed (no pushes for
+        # changes that get rolled back). See firebase_messaging.run_in_background.
+        from core.utils.firebase_messaging import run_in_background
+
+        def _dispatch():
+            send_push_notifications(
+                notifications=notifications_to_create,
+                title=title,
+                message=message,
+            )
+            send_fcm_notifications(
+                notifications=notifications_to_create,
+                title=title,
+                message=message,
+            )
+
+        transaction.on_commit(lambda: run_in_background(_dispatch))
 
 
 def send_push_notifications(notifications: Iterable[Notification], title: str, message: str) -> None:

@@ -8,13 +8,16 @@
 # file has no effect until it's synced as a Blueprint there.
 #
 # The app is already horizontally scale-safe (Redis-backed Channels layer,
-# no per-process in-memory state), but actually running more than one
-# instance still requires either:
-#   - bumping "Instance Count" for this service in the Render dashboard, or
-#   - upgrading to a plan that supports the `scaling` block below and
-#     uncommenting it.
-# That's a billing/plan decision for the account owner, not something this
-# file can do on its own.
+# no per-process in-memory state) — added after an incident where a request
+# spike overwhelmed the single "starter"-plan instance (docker/entrypoint.sh
+# runs one bare `daphne` process handling every HTTP + WebSocket connection)
+# and its health check started timing out, causing Render to kill the
+# instance. The `scaling` block below is uncommented so autoscaling is ready
+# to go, but it still needs one manual step from the account owner: Render's
+# `scaling` block requires a plan above "starter" (this file can't change
+# billing on its own) — upgrade the plan, then sync this service as a
+# Blueprint for it to take effect. Until then, "Instance Count" can also be
+# bumped manually in the dashboard as an immediate stopgap on the current plan.
 
 services:
   - type: web
@@ -34,7 +37,7 @@ services:
         sync: false
       - key: FIREBASE_SERVICE_ACCOUNT_PATH
         sync: false
-    # scaling:
-    #   minInstances: 2
-    #   maxInstances: 4
-    #   targetCPUPercent: 70
+    scaling:
+      minInstances: 2
+      maxInstances: 4
+      targetCPUPercent: 70

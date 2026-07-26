@@ -841,9 +841,19 @@ class ChatRoomMessages(APIView):
         # (core/chat/consumers.py _notify_room_members) — this REST endpoint is
         # the only send path for attachments/stickers/GIFs/forwards, and was
         # previously silent for all of them.
+        #
+        # notify_chat_room_members sends one HTTP request per recipient
+        # token, so — unlike the WS path, which already offloads this to its
+        # own executor — calling it inline here would block this (plain,
+        # synchronous) view for the full multicast send. run_in_background
+        # queues it on the same shared executor create_notifications uses;
+        # any failure is logged inside it, not here, since this try/except
+        # only covers the (fast) queuing step now.
         try:
             from core.chat.notify import notify_chat_room_members
-            notify_chat_room_members(
+            from core.utils.firebase_messaging import run_in_background
+            run_in_background(
+                notify_chat_room_members,
                 room.id,
                 requester.ir_id,
                 requester.chat_name,
@@ -853,7 +863,7 @@ class ChatRoomMessages(APIView):
             )
         except Exception:
             logging.getLogger(__name__).exception(
-                "Failed to send chat FCM notifications for room %s (REST path)", room.id
+                "Failed to queue chat FCM notifications for room %s (REST path)", room.id
             )
 
         return Response(
