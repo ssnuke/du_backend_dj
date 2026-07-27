@@ -240,7 +240,11 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / "staticfiles"
-STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+# core.storage.LenientManifestStaticFilesStorage instead of WhiteNoise's
+# CompressedManifestStaticFilesStorage directly — see its docstring: a
+# missing manifest entry (stale/incomplete collectstatic) falls back to the
+# unhashed filename instead of 500ing the whole page.
+STATICFILES_STORAGE = "core.storage.LenientManifestStaticFilesStorage"
 
 # ── Cloudinary (legacy media storage — old uploads only) ─────────────────────
 # No longer the active storage backend (see R2 below) — its free tier ran

@@ -5,6 +5,24 @@ import cloudinary.uploader
 from cloudinary_storage.storage import MediaCloudinaryStorage
 from django.core.files.base import ContentFile
 from storages.backends.s3boto3 import S3Boto3Storage
+from whitenoise.storage import CompressedManifestStaticFilesStorage
+
+
+class LenientManifestStaticFilesStorage(CompressedManifestStaticFilesStorage):
+    """
+    WhiteNoise's manifest storage is strict by default: if collectstatic
+    didn't run (or ran against a different STATIC_ROOT/environment) before
+    the app starts serving traffic, ANY {% static %} tag for a file missing
+    from staticfiles.json raises ValueError and 500s the whole page — not
+    just a broken image, the entire response. Hit this on /admin/login/,
+    which is often the first page anyone loads while debugging a deploy.
+
+    manifest_strict = False makes a missing entry fall back to the plain
+    (unhashed) filename instead of raising, so a static-pipeline hiccup
+    degrades to a page that renders (possibly with an uncached/unhashed
+    asset) instead of a hard crash.
+    """
+    manifest_strict = False
 
 
 class AutoCloudinaryStorage(MediaCloudinaryStorage):
