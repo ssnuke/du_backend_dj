@@ -839,7 +839,7 @@ class GetTeamAggregatedPlans(APIView):
         total_plans_count = plans_qs.count()
         closed_count = plans_qs.filter(status='closed').count()
         total_positive_uvs = float(
-            plans_qs.filter(uv_value__gt=0).aggregate(total=Sum('uv_value'))['total'] or 0
+            plans_qs.filter(uv_value__gt=0, status='closed').aggregate(total=Sum('uv_value'))['total'] or 0
         )
         presenters_set = dict(
             plans_qs.exclude(presented_by__isnull=True)
@@ -973,7 +973,7 @@ class GetMonthlyPlanSummary(APIView):
             status_key = plan_status or "closing_pending"
             if status_key in bucket:
                 bucket[status_key] += 1
-            if uv_value and float(uv_value) > 0:
+            if uv_value and float(uv_value) > 0 and status_key == "closed":
                 bucket["uv_value_sum"] += float(uv_value)
 
         month_total = _empty_plan_bucket()
@@ -2205,24 +2205,26 @@ class GetDownlineData(APIView):
         # Others → generic viewable count
         if ir.ir_access_level == AccessLevel.ADMIN:
             system_count = Ir.objects.filter(status=True).count()
+            inactive_count = Ir.objects.filter(status=False).count()
         elif ir.ir_access_level == AccessLevel.CTC:
-            system_count = ir.get_all_downlines().filter(status=True).count()
+            scope = ir.get_all_downlines()
+            system_count = scope.filter(status=True).count()
+            inactive_count = scope.filter(status=False).count()
         elif ir.ir_access_level == AccessLevel.LDC:
             ldc_team_ids = (
                 TeamMember.objects
                 .filter(ir=ir)
                 .values_list('team_id', flat=True)
             )
-            system_count = (
-                TeamMember.objects
-                .filter(team_id__in=ldc_team_ids, ir__status=True)
-                .exclude(ir=ir)
-                .values('ir_id')
-                .distinct()
-                .count()
-            )
+            ldc_scope = TeamMember.objects.filter(team_id__in=ldc_team_ids).exclude(ir=ir)
+            system_count = ldc_scope.filter(ir__status=True).values('ir_id').distinct().count()
+            inactive_count = ldc_scope.filter(ir__status=False).values('ir_id').distinct().count()
         else:
             system_count = viewable_irs.filter(status=True).count()
+            inactive_count = viewable_irs.filter(status=False).count()
+
+        total_member_count = system_count + inactive_count
+        retention_ratio = round((system_count / total_member_count) * 100, 2) if total_member_count else 0.0
 
         # Get current week info using Friday→Friday; accept optional week/year
         week_param = request.GET.get("week")
@@ -2246,6 +2248,9 @@ class GetDownlineData(APIView):
             "year": year,
             "counts": {
                 "total_viewable_irs": system_count,
+                "active_count": system_count,
+                "inactive_count": inactive_count,
+                "retention_ratio": retention_ratio,
                 "total_downlines": downlines.count(),
                 "direct_downlines": direct_downlines.count(),
                 "teams_created_by_downlines": viewable_teams.count(),
