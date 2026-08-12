@@ -10,7 +10,9 @@ from core.views.learn import _generate_bunny_token, raw_thumbnail_url, _with_cac
 def _visible_filter(ir):
     """Visibility values the given IR may see."""
     if AccessLevel.is_ldc_and_above(ir.ir_access_level):
-        return ["everyone", "leadership"]
+        return ["everyone", "gc_and_above", "leadership"]
+    if AccessLevel.is_gc_and_above(ir.ir_access_level):
+        return ["everyone", "gc_and_above"]
     return ["everyone"]
 
 

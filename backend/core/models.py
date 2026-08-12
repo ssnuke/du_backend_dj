@@ -49,6 +49,11 @@ class AccessLevel:
         """Check if actor is LDC or above (ADMIN, CTC, LDC)"""
         return actor_level in [cls.ADMIN, cls.CTC, cls.LDC]
 
+    @classmethod
+    def is_gc_and_above(cls, actor_level):
+        """Check if actor is GC or above (ADMIN, CTC, LDC, LS, GC)"""
+        return actor_level in [cls.ADMIN, cls.CTC, cls.LDC, cls.LS, cls.GC]
+
 
 class InfoResponse(models.TextChoices):
     A = "A"
@@ -1270,8 +1275,9 @@ class DreamVideo(models.Model):
 
 
 INVENTORY_VISIBILITY_CHOICES = [
-    ("everyone", "Everyone"),
-    ("leadership", "Leadership (LDC and above)"),
+    ("everyone", "Everyone — Products tab"),
+    ("gc_and_above", "GC and above — Financial Documents tab"),
+    ("leadership", "LDC and above — LDC Inventory tab"),
 ]
 
 
