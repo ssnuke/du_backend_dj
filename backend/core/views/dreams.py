@@ -19,6 +19,7 @@ def _dream_video_list_item(video: DreamVideo) -> dict:
         "description": video.description,
         "thumbnail_url": _bunny_thumbnail_url(video),
         "duration_seconds": video.duration_seconds,
+        "category": video.category,
         "order": video.order,
     }
 

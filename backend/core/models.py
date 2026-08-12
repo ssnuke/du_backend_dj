@@ -1252,6 +1252,12 @@ class LearnVideo(models.Model):
         return self.title
 
 
+DREAM_VIDEO_CATEGORY_CHOICES = [
+    ("dream_tick", "Dream Tick"),
+    ("success_story", "Success Story"),
+]
+
+
 class DreamVideo(models.Model):
     """A dream tick / success story video hosted on Bunny.net Stream."""
     title = models.CharField(max_length=200)
@@ -1260,6 +1266,7 @@ class DreamVideo(models.Model):
     bunny_library_id = models.CharField(max_length=100)
     thumbnail_url = models.URLField(blank=True)
     duration_seconds = models.IntegerField(default=0)
+    category = models.CharField(max_length=20, choices=DREAM_VIDEO_CATEGORY_CHOICES, default="dream_tick")
     order = models.IntegerField(default=0, help_text='Sort order in the list')
     is_published = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
