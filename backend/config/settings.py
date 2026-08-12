@@ -309,9 +309,13 @@ DEFAULT_FILE_STORAGE = 'core.storage.R2Storage'
 MEDIA_URL = '/media/'   # kept for local fallback / admin compatibility
 MEDIA_ROOT = BASE_DIR / "media"
 
-# Max upload size: 50 MB
-DATA_UPLOAD_MAX_MEMORY_SIZE = 52428800
-FILE_UPLOAD_MAX_MEMORY_SIZE = 52428800
+# Max upload size: 500 MB. Kept in lockstep with ChatMessageUpload's own
+# max_size check (core/views/chat.py) — this setting is enforced earlier, at
+# Django's request-parsing layer, so a mismatch here would reject large chat
+# attachments with a generic 400 before the view's own (friendlier) error
+# message ever runs.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 524288000
+FILE_UPLOAD_MAX_MEMORY_SIZE = 524288000
 
 # Web Push (VAPID)
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")

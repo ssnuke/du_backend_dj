@@ -1309,7 +1309,7 @@ class ChatMessageUpload(APIView):
             uploaded,
             folder=f"chat/{room_id}",
             allowed_mimes=_IMAGE_TYPES | _VIDEO_TYPES | _VOICE_TYPES | _FILE_TYPES,
-            max_size=50 * 1024 * 1024,  # 50 MB
+            max_size=500 * 1024 * 1024,  # 500 MB — kept in lockstep with DATA_UPLOAD_MAX_MEMORY_SIZE in settings.py
         )
         if error:
             return Response({"detail": error}, status=status.HTTP_400_BAD_REQUEST)
