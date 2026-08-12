@@ -1,6 +1,6 @@
 from django.conf import settings
 from django.contrib import admin
-from core.models import LearnVideo, DreamVideo, StickerPack, Sticker
+from core.models import LearnVideo, DreamVideo, StickerPack, Sticker, InventoryFile, InventoryVideo
 from core.views.learn import raw_thumbnail_url
 from core.utils.bunny import purge_bunny_url, get_bunny_thumbnail_filename
 
@@ -74,6 +74,41 @@ class LearnVideoAdmin(admin.ModelAdmin):
             ),
         }),
     )
+
+
+@admin.register(InventoryVideo)
+class InventoryVideoAdmin(admin.ModelAdmin):
+    list_display = ('title', 'visibility', 'order', 'duration_seconds', 'is_published', 'created_at')
+    list_editable = ('visibility', 'order', 'duration_seconds', 'is_published')
+    list_filter = ('visibility', 'is_published')
+    search_fields = ('title', 'description', 'bunny_video_id')
+    ordering = ('order', 'created_at')
+    actions = [refresh_thumbnail_cache]
+    fieldsets = (
+        (None, {
+            'fields': ('title', 'description', 'visibility', 'order', 'is_published'),
+        }),
+        ('Bunny.net Stream', {
+            'fields': ('bunny_video_id', 'bunny_library_id', 'thumbnail_url', 'duration_seconds'),
+            'description': (
+                'bunny_video_id: the GUID from Bunny Stream dashboard (e.g. abc123de-…). '
+                'Leave thumbnail_url blank to use the auto-generated Bunny thumbnail. '
+                'After replacing a thumbnail on Bunny\'s dashboard, select this video and run '
+                '"Refresh thumbnail cache" below — otherwise the app keeps showing the old image.'
+            ),
+        }),
+    )
+
+
+@admin.register(InventoryFile)
+class InventoryFileAdmin(admin.ModelAdmin):
+    list_display = ('title', 'visibility', 'order', 'file_size', 'is_published', 'created_at')
+    list_editable = ('visibility', 'order', 'is_published')
+    list_filter = ('visibility', 'is_published')
+    search_fields = ('title', 'description')
+    ordering = ('order', 'created_at')
+    readonly_fields = ('file_url', 'file_size')
+    fields = ('title', 'description', 'admin_upload', 'file_url', 'file_size', 'visibility', 'order', 'is_published')
 
 
 class StickerInline(admin.TabularInline):

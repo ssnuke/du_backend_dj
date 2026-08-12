@@ -44,6 +44,11 @@ class AccessLevel:
         """Check if actor has full system access"""
         return actor_level in [cls.ADMIN, cls.CTC]
 
+    @classmethod
+    def is_ldc_and_above(cls, actor_level):
+        """Check if actor is LDC or above (ADMIN, CTC, LDC)"""
+        return actor_level in [cls.ADMIN, cls.CTC, cls.LDC]
+
 
 class InfoResponse(models.TextChoices):
     A = "A"
@@ -1259,6 +1264,73 @@ class DreamVideo(models.Model):
         ordering = ['order', 'created_at']
         verbose_name = "Dream Video"
         verbose_name_plural = "Dream Videos"
+
+    def __str__(self):
+        return self.title
+
+
+INVENTORY_VISIBILITY_CHOICES = [
+    ("everyone", "Everyone"),
+    ("leadership", "Leadership (LDC and above)"),
+]
+
+
+class InventoryFile(models.Model):
+    """A downloadable file (document, brochure, etc.) uploaded by an admin."""
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    # Admin-only upload; goes through the same default_storage (R2) as every
+    # other upload in the app. On save(), if this is set and file_url is
+    # blank, file_url is auto-populated from it — the rest of the app (API
+    # responses, download links) only ever reads file_url, same contract as
+    # Sticker.image_url/admin_upload.
+    admin_upload = models.FileField(upload_to="inventory/files/", blank=True, null=True)
+    file_url = models.URLField(max_length=1000, blank=True)
+    file_size = models.PositiveIntegerField(default=0, blank=True, help_text="Bytes, auto-populated from admin_upload")
+    visibility = models.CharField(max_length=20, choices=INVENTORY_VISIBILITY_CHOICES, default="everyone")
+    order = models.IntegerField(default=0, help_text='Sort order in the list')
+    is_published = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order', 'created_at']
+        verbose_name = "Inventory File"
+        verbose_name_plural = "Inventory Files"
+
+    def __str__(self):
+        return self.title
+
+    def save(self, *args, **kwargs):
+        # admin_upload.url/.size aren't valid until the base save() actually
+        # commits the file to storage (assigns it a name/URL), so populate
+        # file_url/file_size in a follow-up save rather than before the first.
+        needs_data_from_upload = bool(self.admin_upload) and not self.file_url
+        super().save(*args, **kwargs)
+        if needs_data_from_upload:
+            self.file_url = self.admin_upload.url
+            self.file_size = self.admin_upload.size
+            super().save(update_fields=['file_url', 'file_size'])
+
+
+class InventoryVideo(models.Model):
+    """A downloadable-section video hosted on Bunny.net Stream (Inventory tab)."""
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    bunny_video_id = models.CharField(max_length=100, unique=True)
+    bunny_library_id = models.CharField(max_length=100)
+    thumbnail_url = models.URLField(blank=True)
+    duration_seconds = models.IntegerField(default=0)
+    visibility = models.CharField(max_length=20, choices=INVENTORY_VISIBILITY_CHOICES, default="everyone")
+    order = models.IntegerField(default=0, help_text='Sort order in the list')
+    is_published = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order', 'created_at']
+        verbose_name = "Inventory Video"
+        verbose_name_plural = "Inventory Videos"
 
     def __str__(self):
         return self.title

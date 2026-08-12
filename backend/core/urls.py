@@ -137,6 +137,11 @@ from core.views.dreams import (
     GetDreamVideos,
     GetDreamVideoStream,
 )
+from core.views.inventory import (
+    GetInventoryFiles,
+    GetInventoryVideos,
+    GetInventoryVideoStream,
+)
 
 # IR registration/deletion approval workflow
 from core.views.approvals import (
@@ -319,4 +324,9 @@ urlpatterns = [
     # ============ DREAMS ENDPOINTS ============
     path("dreams/<str:ir_id>/videos/", GetDreamVideos.as_view()),
     path("dreams/<str:ir_id>/videos/<int:video_id>/stream/", GetDreamVideoStream.as_view()),
+
+    # ============ INVENTORY ENDPOINTS ============
+    path("inventory/<str:ir_id>/files/", GetInventoryFiles.as_view()),
+    path("inventory/<str:ir_id>/videos/", GetInventoryVideos.as_view()),
+    path("inventory/<str:ir_id>/videos/<int:video_id>/stream/", GetInventoryVideoStream.as_view()),
 ]
