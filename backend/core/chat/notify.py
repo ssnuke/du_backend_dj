@@ -71,12 +71,32 @@ def preview_for_message(content, message_type, attachment_name=None):
     return text if len(text) <= 100 else text[:100] + "…"
 
 
-def gather_notification_targets(room_id, sender_ir_id):
+def validate_mentioned_ir_ids(room_id, sender_ir_id, candidate_ir_ids):
     """
-    Return (room_type, room_name, tokens, token_owner) for FCM push to every
-    room member except the sender, skipping members currently muted for this
-    room. token_owner maps token -> ir_id, used to prune dead tokens after send.
+    Filter client-supplied @mention ir_ids down to actual current members of
+    the room, excluding the sender — never trust the client list directly,
+    since it drives a mute bypass and a distinct "mentioned you" push below.
     """
+    if not candidate_ir_ids:
+        return set()
+    return set(
+        ChatRoomMember.objects.filter(room_id=room_id, ir_id__in=candidate_ir_ids)
+        .exclude(ir_id=sender_ir_id)
+        .values_list("ir_id", flat=True)
+    )
+
+
+def gather_notification_targets(room_id, sender_ir_id, mentioned_ir_ids=None):
+    """
+    Return (room_type, room_name, tokens, token_owner, mentioned_tokens) for
+    FCM push to every room member except the sender, skipping members
+    currently muted for this room — unless they were @mentioned, which
+    bypasses mute the same way most chat apps treat a direct mention.
+    token_owner maps token -> ir_id, used to prune dead tokens after send.
+    mentioned_tokens is the subset of tokens belonging to mentioned members,
+    so the caller can send them a distinct "mentioned you" notification.
+    """
+    mentioned_ir_ids = set(mentioned_ir_ids or ())
     room = ChatRoom.objects.get(id=room_id)
     now = timezone.now()
 
@@ -93,8 +113,10 @@ def gather_notification_targets(room_id, sender_ir_id):
     present = present_ir_ids(room_id, [m.ir_id for m in members])
 
     token_owner = {}
+    mentioned_tokens = set()
     for member in members:
-        if member.is_muted and (member.muted_until is None or member.muted_until > now):
+        is_mentioned = member.ir_id in mentioned_ir_ids
+        if member.is_muted and not is_mentioned and (member.muted_until is None or member.muted_until > now):
             continue
         # Skip members who currently have this room open (this tab or another
         # tab/device) — they're already seeing the message live over the
@@ -106,8 +128,27 @@ def gather_notification_targets(room_id, sender_ir_id):
             valid = [t for t in ir.fcm_tokens if t and isinstance(t, str) and len(t) > 10]
             for token in valid:
                 token_owner[token] = ir.ir_id
+                if is_mentioned:
+                    mentioned_tokens.add(token)
 
-    return room.room_type, room.room_name, list(token_owner.keys()), token_owner
+    return room.room_type, room.room_name, list(token_owner.keys()), token_owner, mentioned_tokens
+
+
+def build_notification_batches(tokens, mentioned_tokens, sender_name, room_type, room_name):
+    """
+    Split targets into (batch_tokens, title) groups: mentioned members get a
+    distinct "{sender} mentioned you" title, everyone else gets the existing
+    generic title. Pure — no I/O — so it's safe to call from either the sync
+    view path or inside the WS consumer's network-only executor.
+    """
+    regular_tokens = [t for t in tokens if t not in mentioned_tokens]
+    batches = []
+    if regular_tokens:
+        title = sender_name if room_type == "direct" else f"{sender_name} · {room_name}"
+        batches.append((regular_tokens, title))
+    if mentioned_tokens:
+        batches.append((list(mentioned_tokens), f"{sender_name} mentioned you"))
+    return batches
 
 
 def prune_dead_tokens(bad_tokens_by_ir_id):
@@ -124,43 +165,50 @@ def prune_dead_tokens(bad_tokens_by_ir_id):
             ir.save(update_fields=["fcm_tokens"])
 
 
-def notify_chat_room_members(room_id, sender_ir_id, sender_name, content, message_type="text", attachment_name=None):
+def notify_chat_room_members(
+    room_id, sender_ir_id, sender_name, content, message_type="text", attachment_name=None, mentioned_ir_ids=None
+):
     """
-    Synchronous end-to-end push: gather targets, send, prune dead tokens.
-    Safe to call directly from a normal (sync) Django view. Callers running
-    inside an asyncio event loop (the WS consumer) should instead reuse
-    gather_notification_targets/prune_dead_tokens directly and run the network
-    send in an executor — see core/chat/consumers.py.
+    Synchronous end-to-end push: gather targets, send (one batch per
+    mentioned/non-mentioned group — see build_notification_batches), prune
+    dead tokens. Safe to call directly from a normal (sync) Django view.
+    Callers running inside an asyncio event loop (the WS consumer) should
+    instead reuse gather_notification_targets/build_notification_batches/
+    prune_dead_tokens directly and run the network send in an executor — see
+    core/chat/consumers.py.
     """
     from core.utils.firebase_messaging import is_dead_token_error, send_multicast
 
-    room_type, room_name, tokens, token_owner = gather_notification_targets(room_id, sender_ir_id)
+    room_type, room_name, tokens, token_owner, mentioned_tokens = gather_notification_targets(
+        room_id, sender_ir_id, mentioned_ir_ids
+    )
     if not tokens:
         return
 
-    title = sender_name if room_type == "direct" else f"{sender_name} · {room_name}"
     preview = preview_for_message(content, message_type, attachment_name)
+    batches = build_notification_batches(tokens, mentioned_tokens, sender_name, room_type, room_name)
 
-    result = send_multicast(
-        fcm_tokens=tokens,
-        title=title,
-        body=preview,
-        data={"notification_type": "chat_message", "room_id": str(room_id)},
-    )
+    bad_tokens_by_ir_id = {}
+    for batch_tokens, title in batches:
+        result = send_multicast(
+            fcm_tokens=batch_tokens,
+            title=title,
+            body=preview,
+            data={"notification_type": "chat_message", "room_id": str(room_id)},
+        )
+        if result.get("failure"):
+            for detail in result.get("failure_details", []):
+                if is_dead_token_error(detail.get("code"), detail.get("message"), detail.get("exception_type")):
+                    token = detail.get("token")
+                    owner_ir_id = token_owner.get(token)
+                    if owner_ir_id:
+                        bad_tokens_by_ir_id.setdefault(owner_ir_id, set()).add(token)
 
-    if result.get("failure"):
-        bad_tokens_by_ir_id = {}
-        for detail in result.get("failure_details", []):
-            if is_dead_token_error(detail.get("code"), detail.get("message"), detail.get("exception_type")):
-                token = detail.get("token")
-                owner_ir_id = token_owner.get(token)
-                if owner_ir_id:
-                    bad_tokens_by_ir_id.setdefault(owner_ir_id, set()).add(token)
-        if bad_tokens_by_ir_id:
-            logger.info(
-                "Pruning %d dead FCM token(s) across %d member(s) after chat push to room %s",
-                sum(len(v) for v in bad_tokens_by_ir_id.values()),
-                len(bad_tokens_by_ir_id),
-                room_id,
-            )
-            prune_dead_tokens(bad_tokens_by_ir_id)
+    if bad_tokens_by_ir_id:
+        logger.info(
+            "Pruning %d dead FCM token(s) across %d member(s) after chat push to room %s",
+            sum(len(v) for v in bad_tokens_by_ir_id.values()),
+            len(bad_tokens_by_ir_id),
+            room_id,
+        )
+        prune_dead_tokens(bad_tokens_by_ir_id)

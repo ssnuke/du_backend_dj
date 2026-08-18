@@ -2322,6 +2322,64 @@ class GetIrsForStatusManagement(APIView):
 
 
 # ---------------------------------------------------
+# GET REFERRER CANDIDATES (name search for "Register New IR" — Referrer/Parent picker)
+# ---------------------------------------------------
+class GetReferrerCandidates(APIView):
+    """
+    Name/ID search for the "Referrer (Parent)" picker on the Register New IR
+    form, scoped to the requester's own people so nobody can pick an
+    arbitrary IR elsewhere in the system as a referrer:
+      - LDC: same roster as GetIrsForStatusManagement — everyone in any
+        Team the LDC is a member of.
+      - ADMIN/CTC: LDCs don't own a Team of their own, so fall back to
+        their full hierarchical downline instead.
+    Only reachable by ADMIN/CTC/LDC, mirroring RequestRegisterIr's own gate
+    (they're the only roles allowed to register a new IR at all).
+    """
+    def get(self, request, ir_id):
+        try:
+            requester = Ir.objects.get(ir_id=ir_id)
+        except Ir.DoesNotExist:
+            return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if requester.ir_access_level > AccessLevel.LDC:
+            return Response({"detail": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
+
+        search = (request.GET.get("search") or "").strip()
+        try:
+            limit = min(max(int(request.GET.get("limit", 10)), 1), 50)
+            offset = max(int(request.GET.get("offset", 0)), 0)
+        except (TypeError, ValueError):
+            return Response({"detail": "Invalid limit/offset"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if requester.ir_access_level == AccessLevel.LDC:
+            team_ids = TeamMember.objects.filter(ir=requester).values_list('team_id', flat=True)
+            member_ids = (
+                TeamMember.objects
+                .filter(team_id__in=team_ids)
+                .exclude(ir=requester)
+                .values_list('ir_id', flat=True)
+                .distinct()
+            )
+            queryset = Ir.objects.filter(ir_id__in=member_ids)
+        else:
+            queryset = requester.get_all_downlines()
+
+        if search:
+            queryset = queryset.filter(Q(ir_name__icontains=search) | Q(ir_id__icontains=search))
+
+        queryset = queryset.order_by("ir_name")
+        total = queryset.count()
+        page = queryset[offset:offset + limit].values("ir_id", "ir_name", "ir_access_level")
+
+        return Response({
+            "results": list(page),
+            "total": total,
+            "has_more": offset + limit < total,
+        })
+
+
+# ---------------------------------------------------
 # GET DIRECT DOWNLINES (List of direct children)
 # ---------------------------------------------------
 class GetDirectDownlines(APIView):

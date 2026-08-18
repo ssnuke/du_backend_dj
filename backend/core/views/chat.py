@@ -767,6 +767,11 @@ class ChatRoomMessages(APIView):
 
         forwarded_from = (request.data.get("forwarded_from") or "").strip() or None
 
+        from core.chat.notify import validate_mentioned_ir_ids
+        mentioned_ir_ids = validate_mentioned_ir_ids(
+            room_id, requester.ir_id, request.data.get("mentioned_ir_ids")
+        )
+
         message = ChatMessage.objects.create(
             room=room,
             sender=requester,
@@ -778,6 +783,8 @@ class ChatRoomMessages(APIView):
             attachment_duration=attachment_duration,
             forwarded_from=forwarded_from,
         )
+        if mentioned_ir_ids:
+            message.mentioned.set(mentioned_ir_ids)
         room.save(update_fields=["updated_at"])
         invalidate_chat_rooms_cache(_room_member_ir_ids(room.id))
 
@@ -860,6 +867,7 @@ class ChatRoomMessages(APIView):
                 content,
                 message_type=message_type,
                 attachment_name=attachment_name,
+                mentioned_ir_ids=mentioned_ir_ids,
             )
         except Exception:
             logging.getLogger(__name__).exception(
@@ -1190,10 +1198,37 @@ class ChatMessageEdit(APIView):
         if message.is_deleted:
             return Response({"detail": "Cannot edit a deleted message"}, status=status.HTTP_400_BAD_REQUEST)
 
+        from core.chat.notify import validate_mentioned_ir_ids
+        mentioned_ir_ids = validate_mentioned_ir_ids(
+            room_id, requester.ir_id, request.data.get("mentioned_ir_ids")
+        )
+
         message.content = new_content
         message.edited_at = timezone.now()
         message.save(update_fields=["content", "edited_at"])
+        message.mentioned.set(mentioned_ir_ids)
         invalidate_chat_rooms_cache(_room_member_ir_ids(room.id))
+
+        # Fire FCM push notifications the same way a new message does — edits
+        # previously never notified at all, silently even when the edit added
+        # a fresh @mention. Queued via run_in_background for the same reason
+        # as the send path above: don't block this response on FCM's
+        # per-token HTTP calls.
+        try:
+            from core.chat.notify import notify_chat_room_members
+            from core.utils.firebase_messaging import run_in_background
+            run_in_background(
+                notify_chat_room_members,
+                room.id,
+                requester.ir_id,
+                requester.chat_name,
+                new_content,
+                mentioned_ir_ids=mentioned_ir_ids,
+            )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Failed to queue chat FCM notifications for room %s (edit REST path)", room.id
+            )
 
         return Response({
             "message": "Message updated",

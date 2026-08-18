@@ -58,9 +58,17 @@ class InfoDetailSerializer(serializers.ModelSerializer):
 
 
 class PlanDetailSerializer(serializers.ModelSerializer):
+    # presented_by (UL2) is only an ir_id on the model — the frontend needs
+    # the display name too, e.g. to prefill the "Plan Taker / UL2" picker
+    # when editing an existing plan instead of showing the raw id.
+    presented_by_name = serializers.SerializerMethodField()
+
     class Meta:
         model = PlanDetail
         fields = "__all__"
+
+    def get_presented_by_name(self, obj):
+        return obj.presented_by.ir_name if obj.presented_by else None
 
 
 class UVDetailSerializer(serializers.ModelSerializer):

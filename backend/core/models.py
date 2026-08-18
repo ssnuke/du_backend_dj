@@ -738,6 +738,7 @@ class ChatMessage(models.Model):
     is_deleted = models.BooleanField(default=False)
     edited_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    mentioned = models.ManyToManyField(Ir, related_name="chat_mentions", blank=True)
 
     class Meta:
         ordering = ["-id"]
@@ -1113,6 +1114,7 @@ class Notification(models.Model):
         MEMBER_DELETED = 'MEMBER_DELETED', 'Team Member Deleted'
         IR_APPROVAL_REQUEST = 'IR_APPROVAL_REQUEST', 'IR Approval Request'
         IR_REQUEST_REJECTED = 'IR_REQUEST_REJECTED', 'IR Request Rejected'
+        IR_REQUEST_APPROVED = 'IR_REQUEST_APPROVED', 'IR Request Approved'
 
     recipient = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name='notifications')
     title = models.CharField(max_length=255)

@@ -229,6 +229,19 @@ class ApproveIrRequest(APIView):
                 pending.reviewed_at = timezone.now()
                 pending.save(update_fields=["request_status", "reviewed_by", "reviewed_at"])
 
+                # Let the LDC/CTC/Admin who submitted the request know their
+                # new IR is live — distinct from the NEW_IR signal above,
+                # which fans out to admins/uplines/team members of the new
+                # IR, not necessarily the original submitter.
+                create_notifications(
+                    recipients=[pending.requested_by],
+                    title="IR registration request approved",
+                    message=f"Your registration request for {ir.ir_name} ({ir.ir_id}) was approved and the IR has been created.",
+                    notification_type='IR_REQUEST_APPROVED',
+                    related_object_id=str(pending.id),
+                    metadata={"request_id": pending.id, "ir_id": ir.ir_id, "ir_name": ir.ir_name},
+                )
+
         else:  # DELETE
             target_ir = pending.target_ir
             if not target_ir:
