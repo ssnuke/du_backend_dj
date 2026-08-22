@@ -13,13 +13,75 @@ from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 from decimal import Decimal, InvalidOperation
 
+from collections import Counter
+import pytz
+
 from core.models import (
     Ir, Team, Pocket, PocketMember, WeeklyTarget,
     AccessLevel, TeamRole, TeamWeeklyTargets,
+    InfoDetail, PlanDetail, UVDetail,
 )
 from core.serializers import (
     PocketSerializer, PocketDetailedSerializer, PocketMemberSerializer
 )
+from core.utils.dates import (
+    get_week_info_friday_to_friday, get_week_info_monday_to_sunday,
+)
+
+IST = pytz.timezone("Asia/Kolkata")
+
+
+def build_pocket_week_metrics(member_ids, week_number, year):
+    """
+    Per-member info/plan/UV totals for one week, in three bulk queries.
+
+    Exists so a pocket screen can render every member's numbers from one
+    request: the previous approach issued three sequential API calls *per
+    member*, so a 20-person pocket cost 60 round trips before anything
+    appeared. Infos are also bucketed per IST calendar day for the daily
+    activity dots — IST specifically, because the info week opens at
+    9:30 PM Friday and bucketing on the stored UTC date would file a
+    Friday-evening info under Saturday.
+    """
+    _, _, week_start, week_end = get_week_info_friday_to_friday(
+        week_number=week_number, year=year
+    )
+    _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday(
+        week_number=week_number, year=year
+    )
+
+    if not member_ids:
+        return {}, {}, {}, {}, (week_start, week_end)
+
+    info_rows = InfoDetail.objects.filter(
+        ir_id__in=member_ids, info_date__gte=week_start, info_date__lte=week_end
+    ).values_list("ir_id", "info_date")
+
+    info_counts = Counter()
+    info_days = {}
+    for ir_id, info_date in info_rows:
+        info_counts[ir_id] += 1
+        if info_date:
+            day = info_date.astimezone(IST).strftime("%Y-%m-%d")
+            per_ir = info_days.setdefault(ir_id, {})
+            per_ir[day] = per_ir.get(day, 0) + 1
+
+    plan_counts = Counter(
+        PlanDetail.objects.filter(
+            ir_id__in=member_ids, plan_date__gte=plan_week_start, plan_date__lte=plan_week_end
+        ).values_list("ir_id", flat=True)
+    )
+
+    uv_sums = {}
+    try:
+        for ir_id, cnt in UVDetail.objects.filter(
+            ir_id__in=member_ids, uv_date__gte=week_start, uv_date__lte=week_end
+        ).values_list("ir_id", "uv_count"):
+            uv_sums[ir_id] = uv_sums.get(ir_id, 0) + float(cnt or 0)
+    except Exception:
+        uv_sums = {}
+
+    return info_counts, plan_counts, uv_sums, info_days, (week_start, week_end)
 
 
 def parse_decimal_value(value, field_name):
@@ -179,7 +241,52 @@ class GetPocketDetail(APIView):
                     )
             
             serializer = PocketDetailedSerializer(pocket)
-            return Response(serializer.data, status=status.HTTP_200_OK)
+            data = dict(serializer.data)
+
+            # ?week=&year= attaches each member's numbers for that week, in
+            # three bulk queries. Optional so existing callers that only need
+            # the roster don't pay for the aggregation.
+            week_param = request.query_params.get("week")
+            year_param = request.query_params.get("year")
+            if week_param and year_param:
+                try:
+                    week_number, year = int(week_param), int(year_param)
+                except (TypeError, ValueError):
+                    return Response(
+                        {"error": "Invalid week or year"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                member_ids = [pm.ir_id for pm in pocket.members.all()]
+                infos, plans, uvs, info_days, (week_start, week_end) = build_pocket_week_metrics(
+                    member_ids, week_number, year
+                )
+
+                for member in data.get("members", []):
+                    mid = member.get("ir_id")
+                    member["info_done"] = infos.get(mid, 0)
+                    member["plan_done"] = plans.get(mid, 0)
+                    member["uv_done"] = round(uvs.get(mid, 0), 2)
+                    member["info_days"] = info_days.get(mid, {})
+
+                wt = WeeklyTarget.objects.filter(
+                    pocket=pocket, week_number=week_number, year=year
+                ).first()
+                data["week_number"] = week_number
+                data["year"] = year
+                data["week_start"] = week_start.isoformat()
+                data["week_end"] = week_end.isoformat()
+                data["active_count"] = sum(1 for m in data.get("members", []) if m.get("info_done", 0) > 0)
+                data["totals"] = {
+                    "info_done": sum(infos.values()),
+                    "plan_done": sum(plans.values()),
+                    "uv_done": round(sum(uvs.values()), 2),
+                    "info_target": (wt.pocket_weekly_info_target or 0) if wt else 0,
+                    "plan_target": (wt.pocket_weekly_plan_target or 0) if wt else 0,
+                    "uv_target": float(wt.pocket_weekly_uv_target or 0) if wt else 0,
+                }
+
+            return Response(data, status=status.HTTP_200_OK)
         
         except Exception as e:
             return Response(

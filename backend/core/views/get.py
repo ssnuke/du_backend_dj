@@ -1048,11 +1048,24 @@ class GetTargetsDashboard(APIView):
             plan_date__lte=plan_week_end
         ).count()
 
+        # UV done for the selected week, on the same Friday→Friday window as
+        # infos. `ir.uv_count` below is the lifetime counter and is left
+        # untouched — the dashboard needs the week figure to sit next to a
+        # weekly target, which the lifetime total can't answer.
+        current_week_uv_total = UVDetail.objects.filter(
+            ir_id=ir.ir_id,
+            uv_date__gte=week_start,
+            uv_date__lte=week_end
+        ).aggregate(total=Sum("uv_count"))["total"] or 0
+
         personal = {
             "weekly_info_target": ir_weekly_target.ir_weekly_info_target if ir_weekly_target else 0,
             "weekly_plan_target": ir_weekly_target.ir_weekly_plan_target if ir_weekly_target else 0,
+            "weekly_uv_target": float(ir_weekly_target.ir_weekly_uv_target)
+                if (ir_weekly_target and ir_weekly_target.ir_weekly_uv_target is not None) else 0,
             "info_count": current_week_info_count,
             "plan_count": current_week_plan_count,
+            "uv_done": float(current_week_uv_total),
             "week_number": week_number,
             "year": year,
             "uv_count": ir.uv_count if ir.ir_access_level in [2, 3] else None,
@@ -1229,7 +1242,25 @@ class GetManagerDashboard(APIView):
             week_number=week_number, year=year
         )
 
-        cache_key = f"manager_dashboard:{requester_ir_id}:{week_number}:{year}"
+        # Week-over-week movement is what turns a board of numbers into a
+        # board of trends ("who slipped since last week"). Opt-in via
+        # ?compare=prev so callers that don't render arrows don't pay for
+        # the second date range.
+        compare_prev = request.GET.get("compare") == "prev"
+        if compare_prev:
+            prev_week_number = week_number - 1 if week_number > 1 else 52
+            prev_year = year if week_number > 1 else year - 1
+            try:
+                _, _, prev_week_start, prev_week_end = get_week_info_friday_to_friday(
+                    week_number=prev_week_number, year=prev_year
+                )
+                _, _, prev_plan_week_start, prev_plan_week_end = get_week_info_monday_to_sunday(
+                    week_number=prev_week_number, year=prev_year
+                )
+            except Exception:
+                compare_prev = False
+
+        cache_key = f"manager_dashboard:{requester_ir_id}:{week_number}:{year}:{int(compare_prev)}"
         cached = cache.get(cache_key)
         if cached is not None:
             return Response(cached)
@@ -1283,51 +1314,79 @@ class GetManagerDashboard(APIView):
             team_to_members.setdefault(team_id, set()).add(ir_id)
         all_member_ids = set(ir_id for ids in team_to_members.values() for ir_id in ids)
 
-        info_rows = list(
-            InfoDetail.objects.filter(
-                ir_id__in=all_member_ids, info_date__gte=week_start, info_date__lte=week_end
-            ).values_list("ir_id", flat=True)
-        ) if all_member_ids else []
-        plan_rows = list(
-            PlanDetail.objects.filter(
-                ir_id__in=all_member_ids, plan_date__gte=plan_week_start, plan_date__lte=plan_week_end
-            ).values_list("ir_id", flat=True)
-        ) if all_member_ids else []
-        try:
-            uv_rows = list(
-                UVDetail.objects.filter(
-                    ir_id__in=all_member_ids, uv_date__gte=week_start, uv_date__lte=week_end
-                ).values_list("ir_id", "uv_count")
-            ) if all_member_ids else []
-        except Exception:
-            uv_rows = []
+        def counts_for_window(ws, we, pws, pwe):
+            """Per-IR info/plan/UV totals for one week window. Same three
+            bulk queries the single-week path always ran — factored out so
+            the ?compare=prev pass reuses it instead of duplicating it."""
+            if not all_member_ids:
+                return Counter(), Counter(), {}
+            infos = Counter(
+                InfoDetail.objects.filter(
+                    ir_id__in=all_member_ids, info_date__gte=ws, info_date__lte=we
+                ).values_list("ir_id", flat=True)
+            )
+            plans = Counter(
+                PlanDetail.objects.filter(
+                    ir_id__in=all_member_ids, plan_date__gte=pws, plan_date__lte=pwe
+                ).values_list("ir_id", flat=True)
+            )
+            uvs = {}
+            try:
+                for ir_id, cnt in UVDetail.objects.filter(
+                    ir_id__in=all_member_ids, uv_date__gte=ws, uv_date__lte=we
+                ).values_list("ir_id", "uv_count"):
+                    uvs[ir_id] = uvs.get(ir_id, 0) + float(cnt or 0)
+            except Exception:
+                uvs = {}
+            return infos, plans, uvs
 
-        info_count_by_ir = Counter(info_rows)
-        plan_count_by_ir = Counter(plan_rows)
-        uv_sum_by_ir = {}
-        for ir_id, cnt in uv_rows:
-            uv_sum_by_ir[ir_id] = uv_sum_by_ir.get(ir_id, 0) + float(cnt or 0)
+        info_count_by_ir, plan_count_by_ir, uv_sum_by_ir = counts_for_window(
+            week_start, week_end, plan_week_start, plan_week_end
+        )
 
+        twt_rows = list(TeamWeeklyTargets.objects.filter(team_id__in=team_ids))
         targets_by_team = {}
-        for twt in TeamWeeklyTargets.objects.filter(team_id__in=team_ids):
+        for twt in twt_rows:
             targets_by_team[twt.team_id] = twt.get_week_targets(year, week_number) or {}
+
+        if compare_prev:
+            prev_info_by_ir, prev_plan_by_ir, prev_uv_by_ir = counts_for_window(
+                prev_week_start, prev_week_end, prev_plan_week_start, prev_plan_week_end
+            )
+            prev_targets_by_team = {
+                twt.team_id: (twt.get_week_targets(prev_year, prev_week_number) or {})
+                for twt in twt_rows
+            }
 
         teams_by_ldc = {}
         for t in teams:
             teams_by_ldc.setdefault(t.created_by_id, []).append(t)
 
-        def team_stats(team):
+        def team_stats(team, infos=None, plans=None, uvs=None, targets=None):
             members = team_to_members.get(team.id, set())
-            week_data = targets_by_team.get(team.id) or {}
+            infos = info_count_by_ir if infos is None else infos
+            plans = plan_count_by_ir if plans is None else plans
+            uvs = uv_sum_by_ir if uvs is None else uvs
+            week_data = (targets_by_team if targets is None else targets).get(team.id) or {}
             return {
                 "team_id": team.id,
                 "team_name": team.name,
-                "info_progress": sum(info_count_by_ir.get(m, 0) for m in members),
-                "plan_progress": sum(plan_count_by_ir.get(m, 0) for m in members),
-                "uv_progress": sum(uv_sum_by_ir.get(m, 0) for m in members),
+                "info_progress": sum(infos.get(m, 0) for m in members),
+                "plan_progress": sum(plans.get(m, 0) for m in members),
+                "uv_progress": sum(uvs.get(m, 0) for m in members),
                 "weekly_info_target": week_data.get("team_weekly_info_target", 0),
                 "weekly_plan_target": week_data.get("team_weekly_plan_target", 0),
                 "weekly_uv_target": week_data.get("team_weekly_uv_target", 0),
+            }
+
+        def totals_from(team_rows):
+            return {
+                "info_done": sum(t["info_progress"] for t in team_rows),
+                "plan_done": sum(t["plan_progress"] for t in team_rows),
+                "uv_done": round(sum(t["uv_progress"] for t in team_rows), 2),
+                "info_target": sum(t["weekly_info_target"] for t in team_rows),
+                "plan_target": sum(t["weekly_plan_target"] for t in team_rows),
+                "uv_target": round(sum(t["weekly_uv_target"] for t in team_rows), 2),
             }
 
         groups_out = []
@@ -1344,26 +1403,41 @@ class GetManagerDashboard(APIView):
 
             label = g["label"] or (ldc_by_id[g["member_ldc_ids"][0]].ir_name if g["member_ldc_ids"][0] in ldc_by_id else g["member_ldc_ids"][0])
 
-            groups_out.append({
+            group_row = {
                 "id": g["id"],
                 "label": label,
                 "member_ldc_ids": g["member_ldc_ids"],
                 "member_ldc_names": [ldc_by_id[m].ir_name if m in ldc_by_id else m for m in g["member_ldc_ids"]],
+                "member_count": len(set(
+                    ir_id
+                    for mid in g["member_ldc_ids"]
+                    for t in teams_by_ldc.get(mid, [])
+                    for ir_id in team_to_members.get(t.id, set())
+                )),
+                "team_count": len(group_teams),
                 "teams": group_teams,
-                "totals": {
-                    "info_done": sum(t["info_progress"] for t in group_teams),
-                    "plan_done": sum(t["plan_progress"] for t in group_teams),
-                    "uv_done": round(sum(t["uv_progress"] for t in group_teams), 2),
-                    "info_target": sum(t["weekly_info_target"] for t in group_teams),
-                    "plan_target": sum(t["weekly_plan_target"] for t in group_teams),
-                    "uv_target": round(sum(t["weekly_uv_target"] for t in group_teams), 2),
-                },
-            })
+                "totals": totals_from(group_teams),
+            }
 
+            if compare_prev:
+                prev_teams = [
+                    team_stats(t, prev_info_by_ir, prev_plan_by_ir, prev_uv_by_ir, prev_targets_by_team)
+                    for mid in g["member_ldc_ids"]
+                    for t in teams_by_ldc.get(mid, [])
+                ]
+                group_row["prev_totals"] = totals_from(prev_teams)
+
+            groups_out.append(group_row)
+
+        # Targets roll up alongside the done figures so the org headline can
+        # be an attainment percentage rather than three context-free numbers.
         overall_totals = {
             "info_done": sum(gr["totals"]["info_done"] for gr in groups_out),
             "plan_done": sum(gr["totals"]["plan_done"] for gr in groups_out),
             "uv_done": round(sum(gr["totals"]["uv_done"] for gr in groups_out), 2),
+            "info_target": sum(gr["totals"]["info_target"] for gr in groups_out),
+            "plan_target": sum(gr["totals"]["plan_target"] for gr in groups_out),
+            "uv_target": round(sum(gr["totals"]["uv_target"] for gr in groups_out), 2),
         }
 
         response_body = {
@@ -1372,6 +1446,9 @@ class GetManagerDashboard(APIView):
             "groups": groups_out,
             "overall_totals": overall_totals,
         }
+        if compare_prev:
+            response_body["prev_week_number"] = prev_week_number
+            response_body["prev_year"] = prev_year
         cache.set(cache_key, response_body, DASHBOARD_CACHE_TTL)
         return Response(response_body)
 
@@ -1429,18 +1506,31 @@ class GetLdcPocketDashboard(APIView):
         )
         pocket_ids = [p.id for p in pockets]
 
+        # Name and role come along for the ride so the response can carry
+        # per-member rows — previously the frontend re-fetched all of this
+        # one IR at a time (3 sequential calls per member) in
+        # PocketDashboard.jsx, which this makes unnecessary.
         member_rows = list(
-            PocketMember.objects.filter(pocket_id__in=pocket_ids, ir__status=True).values_list("pocket_id", "ir_id")
+            PocketMember.objects.filter(pocket_id__in=pocket_ids, ir__status=True)
+            .select_related("ir")
+            .values_list("pocket_id", "ir_id", "ir__ir_name", "role", "is_head")
         )
         pocket_to_members = {}
-        for pocket_id, ir_id in member_rows:
-            pocket_to_members.setdefault(pocket_id, set()).add(ir_id)
+        member_meta = {}
+        for pocket_id, ir_id, ir_name, role, is_head in member_rows:
+            pocket_to_members.setdefault(pocket_id, []).append(ir_id)
+            member_meta[(pocket_id, ir_id)] = {
+                "ir_id": ir_id,
+                "ir_name": ir_name or ir_id,
+                "role": role,
+                "is_head": is_head,
+            }
         all_member_ids = set(ir_id for ids in pocket_to_members.values() for ir_id in ids)
 
         info_rows = list(
             InfoDetail.objects.filter(
                 ir_id__in=all_member_ids, info_date__gte=week_start, info_date__lte=week_end
-            ).values_list("ir_id", flat=True)
+            ).values_list("ir_id", "info_date")
         ) if all_member_ids else []
         plan_rows = list(
             PlanDetail.objects.filter(
@@ -1456,7 +1546,21 @@ class GetLdcPocketDashboard(APIView):
         except Exception:
             uv_rows = []
 
-        info_count_by_ir = Counter(info_rows)
+        # Infos bucketed per IR per IST calendar day, for the daily activity
+        # dots on each member row. Converting to IST matters here: the info
+        # week opens at 9:30 PM Friday, so bucketing on the stored UTC date
+        # would file a Friday-evening info under Saturday. NB this module
+        # rebinds `timezone` to pytz.timezone (line ~45), so Django's
+        # timezone.localtime() is not available — hence the IST constant.
+        info_count_by_ir = Counter()
+        info_days_by_ir = {}
+        for ir_id, info_date in info_rows:
+            info_count_by_ir[ir_id] += 1
+            if info_date:
+                day = info_date.astimezone(IST).strftime("%Y-%m-%d")
+                per_ir = info_days_by_ir.setdefault(ir_id, {})
+                per_ir[day] = per_ir.get(day, 0) + 1
+
         plan_count_by_ir = Counter(plan_rows)
         uv_sum_by_ir = {}
         for ir_id, cnt in uv_rows:
@@ -1472,13 +1576,37 @@ class GetLdcPocketDashboard(APIView):
 
         pockets_out = []
         for p in pockets:
-            members = pocket_to_members.get(p.id, set())
+            members = pocket_to_members.get(p.id, [])
             t = targets_by_pocket.get(p.id, {})
+
+            member_rows_out = []
+            for m in members:
+                meta = member_meta.get((p.id, m), {"ir_id": m, "ir_name": m, "role": "IR", "is_head": False})
+                member_rows_out.append({
+                    **meta,
+                    "info_done": info_count_by_ir.get(m, 0),
+                    "plan_done": plan_count_by_ir.get(m, 0),
+                    "uv_done": round(uv_sum_by_ir.get(m, 0), 2),
+                    "info_days": info_days_by_ir.get(m, {}),
+                })
+            # Heads first, then busiest — a leader chasing a quiet pocket
+            # wants the dormant members at the bottom where the gap is
+            # obvious, not scattered through an arbitrary insertion order.
+            member_rows_out.sort(key=lambda r: (not r["is_head"], -r["info_done"], r["ir_name"]))
+
+            # "Active" = logged at least one info this week. It's the
+            # cheapest honest signal that somebody is still working.
+            active_count = sum(1 for r in member_rows_out if r["info_done"] > 0)
+
             pockets_out.append({
                 "id": p.id,
                 "label": p.name,
                 "team_id": p.team_id,
                 "team_name": p.team.name,
+                "member_count": len(members),
+                "active_count": active_count,
+                "inactive_count": len(members) - active_count,
+                "members": member_rows_out,
                 "totals": {
                     "info_done": sum(info_count_by_ir.get(m, 0) for m in members),
                     "plan_done": sum(plan_count_by_ir.get(m, 0) for m in members),
@@ -1493,11 +1621,16 @@ class GetLdcPocketDashboard(APIView):
             "info_done": sum(pk["totals"]["info_done"] for pk in pockets_out),
             "plan_done": sum(pk["totals"]["plan_done"] for pk in pockets_out),
             "uv_done": round(sum(pk["totals"]["uv_done"] for pk in pockets_out), 2),
+            "info_target": sum(pk["totals"]["info_target"] for pk in pockets_out),
+            "plan_target": sum(pk["totals"]["plan_target"] for pk in pockets_out),
+            "uv_target": round(sum(pk["totals"]["uv_target"] for pk in pockets_out), 2),
         }
 
         response_body = {
             "week_number": week_number,
             "year": year,
+            "week_start": week_start.isoformat(),
+            "week_end": week_end.isoformat(),
             "pockets": pockets_out,
             "overall_totals": overall_totals,
         }
@@ -2517,11 +2650,20 @@ class GetAvailableWeeks(APIView):
             week_number, year_calc, week_start, week_end = get_week_info_friday_to_friday(
                 week_number=week_num, year=year
             )
+            # Plans live on a Monday→Sunday cycle while infos/UVs live on
+            # Friday→Friday, both under the same week number. Both windows
+            # are returned so the frontend can bin records by day against
+            # the correct 7-day span instead of guessing one from the other.
+            _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday(
+                week_number=week_num, year=year
+            )
             weeks.append({
                 "week_number": week_number,
                 "year": year_calc,
                 "week_start": week_start.isoformat(),
                 "week_end": week_end.isoformat(),
+                "plan_week_start": plan_week_start.isoformat(),
+                "plan_week_end": plan_week_end.isoformat(),
                 "is_current": (week_number == current_week_number and year_calc == current_year),
                 "display_name": f"Week {week_number}"
             })
