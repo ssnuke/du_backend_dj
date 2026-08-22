@@ -1058,11 +1058,41 @@ class GetTargetsDashboard(APIView):
             uv_date__lte=week_end
         ).aggregate(total=Sum("uv_count"))["total"] or 0
 
+        # ── Derived target fallback ───────────────────────────────────────
+        # Nobody in this org sets WeeklyTarget rows at IR level — targets are
+        # set on teams and pockets — so personal dashboards had no number to
+        # measure against. When an IR has no target of their own, an equal
+        # share of their pocket's target is returned SEPARATELY, never merged
+        # into weekly_*_target: a derived figure must not be mistakable for
+        # one a leader personally assigned, so the UI labels it differently.
+        derived = None
+        if not ir_weekly_target:
+            pocket_ids = list(
+                PocketMember.objects.filter(ir=ir).values_list("pocket_id", flat=True)
+            )
+            if pocket_ids:
+                pocket_target = WeeklyTarget.objects.filter(
+                    pocket_id__in=pocket_ids, week_number=week_number, year=year
+                ).first()
+                if pocket_target:
+                    head_count = PocketMember.objects.filter(
+                        pocket_id=pocket_target.pocket_id, ir__status=True
+                    ).count() or 1
+                    derived = {
+                        "source": "pocket",
+                        "pocket_id": pocket_target.pocket_id,
+                        "member_count": head_count,
+                        "info_target": round((pocket_target.pocket_weekly_info_target or 0) / head_count, 1),
+                        "plan_target": round((pocket_target.pocket_weekly_plan_target or 0) / head_count, 1),
+                        "uv_target": round(float(pocket_target.pocket_weekly_uv_target or 0) / head_count, 2),
+                    }
+
         personal = {
             "weekly_info_target": ir_weekly_target.ir_weekly_info_target if ir_weekly_target else 0,
             "weekly_plan_target": ir_weekly_target.ir_weekly_plan_target if ir_weekly_target else 0,
             "weekly_uv_target": float(ir_weekly_target.ir_weekly_uv_target)
                 if (ir_weekly_target and ir_weekly_target.ir_weekly_uv_target is not None) else 0,
+            "derived_target": derived,
             "info_count": current_week_info_count,
             "plan_count": current_week_plan_count,
             "uv_done": float(current_week_uv_total),
@@ -2759,3 +2789,114 @@ class SearchProspects(APIView):
             ],
         })
 
+
+
+class GetWeeklyActivitySummary(APIView):
+    """
+    Info / plan / UV totals for the last N weeks ending at a given week.
+
+    Powers the trend strip on a personal dashboard: a week total on its own
+    says nothing about whether the week is good, and scrolling the week
+    picker back one week at a time to find out is four round trips and a lot
+    of thumb work. Everything is counted in two bulk queries regardless of
+    how many weeks are asked for.
+
+    GET /api/weekly_activity_summary/<ir_id>/?weeks=5&week=34&year=2026
+    """
+
+    MAX_WEEKS = 12
+
+    def get(self, request, ir_id):
+        ir = get_object_or_404(Ir, ir_id=ir_id)
+
+        try:
+            span = int(request.GET.get("weeks", 5))
+        except (TypeError, ValueError):
+            span = 5
+        span = max(1, min(span, self.MAX_WEEKS))
+
+        week_param = request.GET.get("week")
+        year_param = request.GET.get("year")
+        try:
+            if week_param and year_param:
+                end_week, end_year, _, _ = get_week_info_friday_to_friday(
+                    week_number=int(week_param), year=int(year_param)
+                )
+            else:
+                end_week, end_year, _, _ = get_week_info_friday_to_friday()
+        except Exception:
+            return Response({"detail": "Invalid week parameters"}, status=status.HTTP_400_BAD_REQUEST)
+
+        cache_key = f"weekly_activity:{ir_id}:{end_week}:{end_year}:{span}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
+        # Walk backwards from the requested week, rolling the year over at 1.
+        windows = []
+        wk, yr = end_week, end_year
+        for _ in range(span):
+            _, _, ws, we = get_week_info_friday_to_friday(week_number=wk, year=yr)
+            _, _, pws, pwe = get_week_info_monday_to_sunday(week_number=wk, year=yr)
+            windows.append({"week_number": wk, "year": yr,
+                            "info_range": (ws, we), "plan_range": (pws, pwe)})
+            wk -= 1
+            if wk < 1:
+                wk, yr = 52, yr - 1
+        windows.reverse()
+
+        # Two range queries spanning the whole period, then bucketed in
+        # Python — not one query per week, which is what "just call it five
+        # times from the frontend" would have cost.
+        overall_info_start = min(w["info_range"][0] for w in windows)
+        overall_info_end = max(w["info_range"][1] for w in windows)
+        overall_plan_start = min(w["plan_range"][0] for w in windows)
+        overall_plan_end = max(w["plan_range"][1] for w in windows)
+
+        info_dates = list(
+            InfoDetail.objects.filter(
+                ir_id=ir.ir_id, info_date__gte=overall_info_start, info_date__lte=overall_info_end
+            ).values_list("info_date", flat=True)
+        )
+        plan_dates = list(
+            PlanDetail.objects.filter(
+                ir_id=ir.ir_id, plan_date__gte=overall_plan_start, plan_date__lte=overall_plan_end
+            ).values_list("plan_date", flat=True)
+        )
+        try:
+            uv_rows = list(
+                UVDetail.objects.filter(
+                    ir_id=ir.ir_id, uv_date__gte=overall_info_start, uv_date__lte=overall_info_end
+                ).values_list("uv_date", "uv_count")
+            )
+        except Exception:
+            uv_rows = []
+
+        targets_by_week = {
+            (t.week_number, t.year): t
+            for t in WeeklyTarget.objects.filter(
+                ir=ir, week_number__in=[w["week_number"] for w in windows]
+            )
+        }
+
+        weeks_out = []
+        for w in windows:
+            ws, we = w["info_range"]
+            pws, pwe = w["plan_range"]
+            t = targets_by_week.get((w["week_number"], w["year"]))
+            weeks_out.append({
+                "week_number": w["week_number"],
+                "year": w["year"],
+                "week_start": ws.isoformat(),
+                "week_end": we.isoformat(),
+                "info_done": sum(1 for d in info_dates if ws <= d <= we),
+                "plan_done": sum(1 for d in plan_dates if pws <= d <= pwe),
+                "uv_done": round(sum(float(c or 0) for d, c in uv_rows if ws <= d <= we), 2),
+                "info_target": (t.ir_weekly_info_target or 0) if t else 0,
+                "plan_target": (t.ir_weekly_plan_target or 0) if t else 0,
+                "is_current": (w["week_number"] == end_week and w["year"] == end_year),
+            })
+
+        response_body = {"ir_id": ir.ir_id, "weeks": weeks_out}
+        cache.set(cache_key, response_body, DASHBOARD_CACHE_TTL)
+        return Response(response_body)

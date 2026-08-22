@@ -23,6 +23,7 @@ from core.views.get import (
     GetDirectDownlines,
     GetHierarchyTree,
     GetAvailableWeeks,
+    GetWeeklyActivitySummary,
     GetTeamAggregatedPlans,
     GetMonthlyPlanSummary,
     SearchProspects,
@@ -198,6 +199,7 @@ urlpatterns = [
     path("direct_downlines/<str:ir_id>/", GetDirectDownlines.as_view()),
     path("hierarchy_tree/<str:ir_id>/", GetHierarchyTree.as_view()),
     path("available_weeks/", GetAvailableWeeks.as_view()),
+    path("weekly_activity_summary/<str:ir_id>/", GetWeeklyActivitySummary.as_view()),
     path("search_prospects/", SearchProspects.as_view()),
     #POST endpoints
     path("add_ir_id/", AddIrId.as_view()),

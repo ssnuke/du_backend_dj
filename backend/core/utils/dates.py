@@ -3,8 +3,22 @@ import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
 
+
+def ist(*args):
+    """
+    Build an IST-aware datetime correctly.
+
+    `datetime(..., tzinfo=IST)` looks right but is a documented pytz trap: a
+    pytz zone carries every historical offset it has ever had, and attaching
+    it directly picks the *first* one — Local Mean Time, +05:53:20 for
+    Kolkata. Every week boundary in this file was therefore 23 minutes early,
+    so an info logged on a Friday between 21:07 and 21:30 IST was filed into
+    the following week. localize() resolves the offset for the actual date.
+    """
+    return IST.localize(datetime(*args))
+
 # Define Year 2026 Week 1 Start: January 2, 2026, 9:30 PM IST
-YEAR_2026_WEEK_1_START = datetime(2026, 1, 2, 21, 30, 0, 0, tzinfo=IST)
+YEAR_2026_WEEK_1_START = ist(2026, 1, 2, 21, 30, 0, 0)
 
 
 def get_week_info_friday_to_friday(now: datetime | None = None, week_number: int | None = None, year: int | None = None) -> tuple[int, int, datetime, datetime]:
@@ -43,7 +57,7 @@ def get_week_info_friday_to_friday(now: datetime | None = None, week_number: int
             first_week_start = YEAR_2026_WEEK_1_START
         else:
             # For other years, Week 1 starts on first Friday of January at 9:30 PM
-            jan_1 = datetime(year, 1, 1, tzinfo=IST)
+            jan_1 = ist(year, 1, 1)
             # Friday = 4 in weekday() (Monday=0, ..., Friday=4, Saturday=5, Sunday=6)
             days_to_first_friday = (4 - jan_1.weekday()) % 7
             if days_to_first_friday == 0:  # Jan 1 is a Friday
@@ -68,7 +82,7 @@ def get_week_info_friday_to_friday(now: datetime | None = None, week_number: int
     if current_year == 2026:
         first_week_start = YEAR_2026_WEEK_1_START
     else:
-        jan_1 = datetime(current_year, 1, 1, tzinfo=IST)
+        jan_1 = ist(current_year, 1, 1)
         days_to_first_friday = (4 - jan_1.weekday()) % 7
         if days_to_first_friday == 0:
             days_to_first_friday = 0
@@ -82,7 +96,7 @@ def get_week_info_friday_to_friday(now: datetime | None = None, week_number: int
         if current_year == 2026:
             first_week_start = YEAR_2026_WEEK_1_START
         else:
-            jan_1 = datetime(current_year, 1, 1, tzinfo=IST)
+            jan_1 = ist(current_year, 1, 1)
             days_to_first_friday = (4 - jan_1.weekday()) % 7
             if days_to_first_friday == 0:
                 days_to_first_friday = 0
@@ -238,7 +252,7 @@ def get_saturday_friday_week_info(now: datetime | None = None) -> tuple[int, int
     year = week_start.year
     
     # Find the first Saturday of the year
-    jan_1 = datetime(year, 1, 1, tzinfo=IST)
+    jan_1 = ist(year, 1, 1)
     days_to_first_saturday = (5 - jan_1.weekday()) % 7  # Saturday is 5 in Monday=0 system
     first_saturday = jan_1 + timedelta(days=days_to_first_saturday)
     
