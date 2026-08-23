@@ -1176,24 +1176,41 @@ def build_group_week_block(ir, week_number, year, week_start, week_end,
 
     totals.update({"info_target": info_t, "plan_target": plan_t, "uv_target": uv_t})
 
-    members = []
+    # Both shapes list people, not just groups. An LS asking "who do I push?"
+    # needs the name, and routing them through a pocket first put the answer
+    # two screens away — the pocket rows above are the summary, not the
+    # destination. Each team row carries the pocket it belongs to instead.
     if kind == "pocket":
         head_ids = set(
             PocketMember.objects.filter(pocket_id=group_id, is_head=True)
             .values_list("ir_id", flat=True)
         )
-        for m in Ir.objects.filter(ir_id__in=member_ids).only("ir_id", "ir_name"):
-            members.append({
-                "ir_id": m.ir_id,
-                "ir_name": m.ir_name,
-                "is_head": m.ir_id in head_ids,
-                "is_self": m.ir_id == ir.ir_id,
-                "info_done": info_by_ir.get(m.ir_id, 0),
-                "plan_done": plan_by_ir.get(m.ir_id, 0),
-                "uv_done": round(float(uv_by_ir.get(m.ir_id, 0) or 0), 2),
-                "info_days": info_days.get(m.ir_id, {}),
-            })
-        members.sort(key=lambda r: (-r["info_done"], r["ir_name"] or ""))
+        pocket_name_by_ir = {}
+    else:
+        head_ids = set(
+            PocketMember.objects.filter(pocket__in=pockets, is_head=True)
+            .values_list("ir_id", flat=True)
+        )
+        pocket_name_by_ir = {}
+        names = {pk.id: pk.name for pk in pockets}
+        for pid, ids in pocket_member_map.items():
+            for mid in ids:
+                pocket_name_by_ir[mid] = names.get(pid)
+
+    members = []
+    for m in Ir.objects.filter(ir_id__in=member_ids).only("ir_id", "ir_name"):
+        members.append({
+            "ir_id": m.ir_id,
+            "ir_name": m.ir_name,
+            "is_head": m.ir_id in head_ids,
+            "is_self": m.ir_id == ir.ir_id,
+            "pocket_name": pocket_name_by_ir.get(m.ir_id),
+            "info_done": info_by_ir.get(m.ir_id, 0),
+            "plan_done": plan_by_ir.get(m.ir_id, 0),
+            "uv_done": round(float(uv_by_ir.get(m.ir_id, 0) or 0), 2),
+            "info_days": info_days.get(m.ir_id, {}),
+        })
+    members.sort(key=lambda r: (-r["info_done"], r["ir_name"] or ""))
 
     # Worst first: this view exists to answer "who do I push?", so the
     # answer sits at the top instead of being hunted for.

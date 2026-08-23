@@ -109,6 +109,23 @@ class GroupWeekBlockTests(TestCase):
             g["member_count"],
         )
 
+    def test_ls_sees_every_team_member_without_drilling_into_a_pocket(self):
+        """The roster is the answer to "who do I push?", so it must be on the
+        team view itself rather than a pocket screen away."""
+        g = self.block(self.ls)
+        names = [m["ir_name"] for m in g["members"]]
+        self.assertEqual(len(names), g["member_count"])
+        # ranked worst-last: top of the list is the busiest
+        self.assertEqual(names[0], "Kiran Madivalar")
+        self.assertIn("Harshit", names)
+        # every row says which pocket to chase it through
+        by_name = {m["ir_name"]: m for m in g["members"]}
+        self.assertEqual(by_name["Kiran Madivalar"]["pocket_name"], "Gagan's pocket")
+        self.assertEqual(by_name["Sunayana"]["pocket_name"], "Sunayana V Rao")
+        self.assertTrue(by_name["Sunayana"]["is_head"])
+        # someone in no pocket still appears, with no pocket to name
+        self.assertIsNone(by_name["Unpocketed Person"]["pocket_name"])
+
     def test_gc_head_sees_own_pocket_members_ranked(self):
         g = self.block(self.gc_head)
         self.assertEqual(g["kind"], "pocket")
@@ -121,6 +138,8 @@ class GroupWeekBlockTests(TestCase):
         self.assertEqual(g["active_count"], 4)          # Harshit logged nothing
         self.assertEqual(g["member_count"], 5)
         self.assertEqual(g["children"], [])
+        # a pocket has no pockets inside it, so no pocket tag on its rows
+        self.assertTrue(all(m["pocket_name"] is None for m in g["members"]))
 
     def test_gc_sees_self_and_head_flags_and_day_buckets(self):
         g = self.block(self.gc_head)
