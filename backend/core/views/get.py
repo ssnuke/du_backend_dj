@@ -1002,6 +1002,220 @@ class GetMonthlyPlanSummary(APIView):
 # ---------------------------------------------------
 # DASHBOARD TARGETS (with hierarchy-based team filtering)
 # ---------------------------------------------------
+def build_group_week_block(ir, week_number, year, week_start, week_end,
+                           plan_week_start, plan_week_end):
+    """
+    The group an LS or a pocket-head GC is responsible for, for one week.
+
+    Exists because GetTargetsDashboard only ever built group data for CTC and
+    LDC — every other role got {"teams": "NA"}, so an LS could see their own
+    numbers but never their team's, and a GC running a pocket had no view of
+    it at all. Returns None for anyone with no group to answer for (a GC who
+    heads nothing, an IR), who keeps the personal-only dashboard.
+
+    LS gets their team broken down by pocket; a GC gets their own pocket
+    broken down by member. Both shapes share the same envelope so the client
+    renders them with one component.
+    """
+    level = ir.ir_access_level
+
+    if level == AccessLevel.LS:
+        team = (
+            Team.objects.filter(teammember__ir=ir).order_by("id").first()
+        )
+        if not team:
+            return None
+        member_ids = list(
+            TeamMember.objects.filter(team=team, ir__status=True)
+            .values_list("ir_id", flat=True).distinct()
+        )
+        pockets = list(
+            Pocket.objects.filter(team=team, is_active=True).order_by("id")
+        )
+        kind, group_id, group_name = "team", team.id, team.name
+
+    elif level == AccessLevel.GC:
+        # Only pockets this GC actually heads. Pockets are head-owned here —
+        # each has exactly one is_head member and is usually named after them.
+        pocket = (
+            Pocket.objects.filter(members__ir=ir, members__is_head=True, is_active=True)
+            .order_by("id").first()
+        )
+        if not pocket:
+            return None
+        member_ids = list(
+            PocketMember.objects.filter(pocket=pocket, ir__status=True)
+            .values_list("ir_id", flat=True).distinct()
+        )
+        pockets = []
+        kind, group_id, group_name = "pocket", pocket.id, pocket.name
+
+    else:
+        return None
+
+    if not member_ids:
+        return None
+
+    # One bulk query per metric across every member in scope, pockets
+    # included — the per-pocket rows below are sliced out of these dicts
+    # rather than re-queried, so pocket count doesn't drive query count.
+    pocket_member_map = {}
+    for pid, mid in PocketMember.objects.filter(
+        pocket__in=pockets, ir__status=True
+    ).values_list("pocket_id", "ir_id"):
+        pocket_member_map.setdefault(pid, []).append(mid)
+
+    scope_ids = set(member_ids)
+    for ids in pocket_member_map.values():
+        scope_ids.update(ids)
+
+    info_rows = InfoDetail.objects.filter(
+        ir_id__in=scope_ids, info_date__gte=week_start, info_date__lte=week_end
+    ).values_list("ir_id", "info_date")
+    info_by_ir = Counter()
+    info_days = {}
+    for mid, info_date in info_rows:
+        info_by_ir[mid] += 1
+        if info_date:
+            day = info_date.astimezone(IST).strftime("%Y-%m-%d")
+            per = info_days.setdefault(mid, {})
+            per[day] = per.get(day, 0) + 1
+
+    plan_by_ir = Counter(
+        PlanDetail.objects.filter(
+            ir_id__in=scope_ids, plan_date__gte=plan_week_start, plan_date__lte=plan_week_end
+        ).values_list("ir_id", flat=True)
+    )
+    try:
+        uv_by_ir = dict(
+            UVDetail.objects.filter(
+                ir_id__in=scope_ids, uv_date__gte=week_start, uv_date__lte=week_end
+            ).values("ir_id").annotate(t=Sum("uv_count")).values_list("ir_id", "t")
+        )
+    except Exception:
+        uv_by_ir = {}
+
+    def totals_for(ids):
+        return {
+            "info_done": sum(info_by_ir.get(i, 0) for i in ids),
+            "plan_done": sum(plan_by_ir.get(i, 0) for i in ids),
+            "uv_done": round(float(sum(uv_by_ir.get(i, 0) or 0 for i in ids)), 2),
+        }
+
+    def active_count(ids):
+        return sum(1 for i in ids if info_by_ir.get(i, 0) > 0)
+
+    pocket_targets = {
+        wt.pocket_id: wt
+        for wt in WeeklyTarget.objects.filter(
+            pocket__in=pockets, week_number=week_number, year=year
+        )
+    } if pockets else {}
+
+    children = []
+    for pk in pockets:
+        ids = pocket_member_map.get(pk.id, [])
+        wt = pocket_targets.get(pk.id)
+        child = totals_for(ids)
+        child.update({
+            "kind": "pocket",
+            "id": pk.id,
+            "name": pk.name,
+            "member_count": len(ids),
+            "active_count": active_count(ids),
+            "info_target": (wt.pocket_weekly_info_target or 0) if wt else 0,
+            "plan_target": (wt.pocket_weekly_plan_target or 0) if wt else 0,
+            "uv_target": float(wt.pocket_weekly_uv_target or 0) if wt else 0,
+        })
+        children.append(child)
+
+    # Team members who belong to no pocket are invisible to every pocket
+    # head, so they get their own row rather than being silently dropped —
+    # otherwise the pocket rows quietly fail to add up to the team total.
+    if kind == "team":
+        pocketed = {mid for ids in pocket_member_map.values() for mid in ids}
+        loose = [m for m in member_ids if m not in pocketed]
+        if loose:
+            child = totals_for(loose)
+            child.update({
+                "kind": "unassigned",
+                "id": None,
+                "name": "Not in a pocket",
+                "member_count": len(loose),
+                "active_count": active_count(loose),
+                "info_target": 0, "plan_target": 0, "uv_target": 0,
+            })
+            children.append(child)
+
+    totals = totals_for(member_ids)
+
+    if kind == "team":
+        # Team-level WeeklyTarget rows are unset in this org (targets are
+        # assigned to pockets), so a team target of 0 would render the whole
+        # view as "no target". Fall back to the sum of its pockets'.
+        team_wt = WeeklyTarget.objects.filter(
+            team_id=group_id, week_number=week_number, year=year
+        ).first()
+        info_t = (team_wt.team_weekly_info_target or 0) if team_wt else 0
+        plan_t = (team_wt.team_weekly_plan_target or 0) if team_wt else 0
+        uv_t = float(team_wt.team_weekly_uv_target or 0) if team_wt else 0
+        target_source = "assigned"
+        if not (info_t or plan_t or uv_t):
+            info_t = sum(c["info_target"] for c in children)
+            plan_t = sum(c["plan_target"] for c in children)
+            uv_t = round(sum(c["uv_target"] for c in children), 2)
+            target_source = "rolled_up"
+    else:
+        wt = WeeklyTarget.objects.filter(
+            pocket_id=group_id, week_number=week_number, year=year
+        ).first()
+        info_t = (wt.pocket_weekly_info_target or 0) if wt else 0
+        plan_t = (wt.pocket_weekly_plan_target or 0) if wt else 0
+        uv_t = float(wt.pocket_weekly_uv_target or 0) if wt else 0
+        target_source = "assigned"
+
+    totals.update({"info_target": info_t, "plan_target": plan_t, "uv_target": uv_t})
+
+    members = []
+    if kind == "pocket":
+        head_ids = set(
+            PocketMember.objects.filter(pocket_id=group_id, is_head=True)
+            .values_list("ir_id", flat=True)
+        )
+        for m in Ir.objects.filter(ir_id__in=member_ids).only("ir_id", "ir_name"):
+            members.append({
+                "ir_id": m.ir_id,
+                "ir_name": m.ir_name,
+                "is_head": m.ir_id in head_ids,
+                "is_self": m.ir_id == ir.ir_id,
+                "info_done": info_by_ir.get(m.ir_id, 0),
+                "plan_done": plan_by_ir.get(m.ir_id, 0),
+                "uv_done": round(float(uv_by_ir.get(m.ir_id, 0) or 0), 2),
+                "info_days": info_days.get(m.ir_id, {}),
+            })
+        members.sort(key=lambda r: (-r["info_done"], r["ir_name"] or ""))
+
+    # Worst first: this view exists to answer "who do I push?", so the
+    # answer sits at the top instead of being hunted for.
+    children.sort(key=lambda c: (
+        (c["info_done"] / c["info_target"]) if c["info_target"] else 999
+    ))
+
+    return {
+        "kind": kind,
+        "id": group_id,
+        "name": group_name,
+        "member_count": len(member_ids),
+        "active_count": active_count(member_ids),
+        "week_number": week_number,
+        "year": year,
+        "target_source": target_source,
+        "totals": totals,
+        "children": children,
+        "members": members,
+    }
+
+
 class GetTargetsDashboard(APIView):
     def get(self, request, ir_id):
         ir = get_object_or_404(Ir, ir_id=ir_id)
@@ -1104,7 +1318,11 @@ class GetTargetsDashboard(APIView):
         }
 
         if ir.ir_access_level not in [2, 3]:
-            response_body = {"personal": personal, "teams": "NA"}
+            group = build_group_week_block(
+                ir, week_number, year, week_start, week_end,
+                plan_week_start, plan_week_end,
+            )
+            response_body = {"personal": personal, "teams": "NA", "group": group}
             cache.set(cache_key, response_body, DASHBOARD_CACHE_TTL)
             return Response(response_body)
 
