@@ -26,7 +26,10 @@ class AccessLevel:
     
     @classmethod
     def get_role_name(cls, level):
-        mapping = {1: "ADMIN", 2: "CTC", 3: "LDC", 4: "LS", 5: "GC", 6: "IR"}
+        # Display names. Level 5 reads as "PRO"; the stored TeamRole value
+        # is still "GC" (see TeamRole above and role_map in views/get.py),
+        # so this is a label change and not a schema one.
+        mapping = {1: "ADMIN", 2: "CTC", 3: "LDC", 4: "LS", 5: "PRO", 6: "IR"}
         return mapping.get(level, "IR")
     
     @classmethod
