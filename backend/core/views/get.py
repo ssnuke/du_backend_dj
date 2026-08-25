@@ -767,8 +767,12 @@ def get_plan_visible_member_ids(ir):
 
     if ir.ir_access_level == AccessLevel.LDC:
         my_created_team_ids = Team.objects.filter(created_by=ir).values_list('id', flat=True)
+        # ir__status=True to match the ADMIN branch above: without it an
+        # LDC's monthly plans counted people who have left the org, so the
+        # same month read differently depending on who opened it.
         member_ids = set(
-            TeamMember.objects.filter(team_id__in=my_created_team_ids).values_list('ir_id', flat=True)
+            TeamMember.objects.filter(team_id__in=my_created_team_ids, ir__status=True)
+            .values_list('ir_id', flat=True)
         )
         member_ids.add(ir.ir_id)
         return member_ids
@@ -1811,6 +1815,27 @@ class GetLdcPocketDashboard(APIView):
         )
         pocket_ids = [p.id for p in pockets]
 
+        # A team that has no pockets yet still has people doing work, and it
+        # was invisible on this grid — the LDC saw nothing for it until
+        # someone happened to create a pocket. Those teams are rendered as a
+        # single whole-team card in the same shape, so the screen covers
+        # everyone the LDC is responsible for rather than only the parts
+        # that have been subdivided.
+        pocketed_team_ids = {p.team_id for p in pockets}
+        teamless = list(
+            Team.objects.filter(created_by=requester).exclude(id__in=pocketed_team_ids)
+        )
+        team_to_members = {}
+        team_member_meta = {}
+        for team_id, m_ir_id, m_name in TeamMember.objects.filter(
+            team__in=teamless, ir__status=True
+        ).values_list("team_id", "ir_id", "ir__ir_name").distinct():
+            team_to_members.setdefault(team_id, []).append(m_ir_id)
+            team_member_meta[(team_id, m_ir_id)] = {
+                "ir_id": m_ir_id, "ir_name": m_name or m_ir_id,
+                "role": "IR", "is_head": False,
+            }
+
         # Name and role come along for the ride so the response can carry
         # per-member rows — previously the frontend re-fetched all of this
         # one IR at a time (3 sequential calls per member) in
@@ -1831,6 +1856,7 @@ class GetLdcPocketDashboard(APIView):
                 "is_head": is_head,
             }
         all_member_ids = set(ir_id for ids in pocket_to_members.values() for ir_id in ids)
+        all_member_ids |= set(m for ids in team_to_members.values() for m in ids)
 
         info_rows = list(
             InfoDetail.objects.filter(
@@ -1908,6 +1934,59 @@ class GetLdcPocketDashboard(APIView):
                 "label": p.name,
                 "team_id": p.team_id,
                 "team_name": p.team.name,
+                "member_count": len(members),
+                "active_count": active_count,
+                "inactive_count": len(members) - active_count,
+                "members": member_rows_out,
+                "totals": {
+                    "info_done": sum(info_count_by_ir.get(m, 0) for m in members),
+                    "plan_done": sum(plan_count_by_ir.get(m, 0) for m in members),
+                    "uv_done": round(sum(uv_sum_by_ir.get(m, 0) for m in members), 2),
+                    "info_target": t.get("info_target", 0),
+                    "plan_target": t.get("plan_target", 0),
+                    "uv_target": round(t.get("uv_target", 0), 2),
+                },
+            })
+
+        # Whole-team cards for the teams above, in the same shape as a pocket
+        # so the grid renders them without special-casing. `kind` lets the
+        # client label them; `id` is namespaced so it cannot collide with a
+        # pocket id in React keys or selection state.
+        team_targets = {}
+        if teamless:
+            for wt in WeeklyTarget.objects.filter(
+                team_id__in=[t.id for t in teamless], week_number=week_number, year=year
+            ):
+                team_targets[wt.team_id] = {
+                    "info_target": wt.team_weekly_info_target or 0,
+                    "plan_target": wt.team_weekly_plan_target or 0,
+                    "uv_target": float(wt.team_weekly_uv_target or 0),
+                }
+
+        for team in teamless:
+            members = team_to_members.get(team.id, [])
+            if not members:
+                continue
+            t = team_targets.get(team.id, {})
+            member_rows_out = []
+            for m in members:
+                meta = team_member_meta.get((team.id, m), {"ir_id": m, "ir_name": m, "role": "IR", "is_head": False})
+                member_rows_out.append({
+                    **meta,
+                    "info_done": info_count_by_ir.get(m, 0),
+                    "plan_done": plan_count_by_ir.get(m, 0),
+                    "uv_done": round(uv_sum_by_ir.get(m, 0), 2),
+                    "info_days": info_days_by_ir.get(m, {}),
+                })
+            member_rows_out.sort(key=lambda r: (-r["info_done"], r["ir_name"]))
+            active_count = sum(1 for r in member_rows_out if r["info_done"] > 0)
+
+            pockets_out.append({
+                "id": f"team-{team.id}",
+                "kind": "team",
+                "label": team.name,
+                "team_id": team.id,
+                "team_name": team.name,
                 "member_count": len(members),
                 "active_count": active_count,
                 "inactive_count": len(members) - active_count,
