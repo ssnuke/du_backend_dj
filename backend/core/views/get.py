@@ -1081,11 +1081,21 @@ def build_group_week_block(ir, week_number, year, week_start, week_end,
             per = info_days.setdefault(mid, {})
             per[day] = per.get(day, 0) + 1
 
-    plan_by_ir = Counter(
-        PlanDetail.objects.filter(
-            ir_id__in=scope_ids, plan_date__gte=plan_week_start, plan_date__lte=plan_week_end
-        ).values_list("ir_id", flat=True)
-    )
+    # Plans are bucketed per day too, on their own Mon-Sun window. Infos run
+    # Friday->Friday and plans Monday->Sunday, so the two cannot share an
+    # axis — they are returned as separate series and drawn as separate
+    # strips rather than being forced onto one row of day labels.
+    plan_rows = PlanDetail.objects.filter(
+        ir_id__in=scope_ids, plan_date__gte=plan_week_start, plan_date__lte=plan_week_end
+    ).values_list("ir_id", "plan_date")
+    plan_by_ir = Counter()
+    plan_days = {}
+    for mid, plan_date in plan_rows:
+        plan_by_ir[mid] += 1
+        if plan_date:
+            day = plan_date.astimezone(IST).strftime("%Y-%m-%d")
+            per = plan_days.setdefault(mid, {})
+            per[day] = per.get(day, 0) + 1
     try:
         uv_by_ir = dict(
             UVDetail.objects.filter(
@@ -1105,6 +1115,14 @@ def build_group_week_block(ir, week_number, year, week_start, week_end,
     def active_count(ids):
         return sum(1 for i in ids if info_by_ir.get(i, 0) > 0)
 
+    def days_for(ids, per_ir):
+        """Sum a set of members' per-day counts into one series."""
+        out = {}
+        for i in ids:
+            for day, n in (per_ir.get(i) or {}).items():
+                out[day] = out.get(day, 0) + n
+        return out
+
     pocket_targets = {
         wt.pocket_id: wt
         for wt in WeeklyTarget.objects.filter(
@@ -1123,6 +1141,8 @@ def build_group_week_block(ir, week_number, year, week_start, week_end,
             "name": pk.name,
             "member_count": len(ids),
             "active_count": active_count(ids),
+            "info_days": days_for(ids, info_days),
+            "plan_days": days_for(ids, plan_days),
             "info_target": (wt.pocket_weekly_info_target or 0) if wt else 0,
             "plan_target": (wt.pocket_weekly_plan_target or 0) if wt else 0,
             "uv_target": float(wt.pocket_weekly_uv_target or 0) if wt else 0,
@@ -1143,6 +1163,8 @@ def build_group_week_block(ir, week_number, year, week_start, week_end,
                 "name": "Not in a pocket",
                 "member_count": len(loose),
                 "active_count": active_count(loose),
+                "info_days": days_for(loose, info_days),
+                "plan_days": days_for(loose, plan_days),
                 "info_target": 0, "plan_target": 0, "uv_target": 0,
             })
             children.append(child)
@@ -1186,16 +1208,19 @@ def build_group_week_block(ir, week_number, year, week_start, week_end,
             .values_list("ir_id", flat=True)
         )
         pocket_name_by_ir = {}
+        pocket_id_by_ir = {}
     else:
         head_ids = set(
             PocketMember.objects.filter(pocket__in=pockets, is_head=True)
             .values_list("ir_id", flat=True)
         )
         pocket_name_by_ir = {}
+        pocket_id_by_ir = {}
         names = {pk.id: pk.name for pk in pockets}
         for pid, ids in pocket_member_map.items():
             for mid in ids:
                 pocket_name_by_ir[mid] = names.get(pid)
+                pocket_id_by_ir[mid] = pid
 
     members = []
     for m in Ir.objects.filter(ir_id__in=member_ids).only("ir_id", "ir_name"):
@@ -1205,10 +1230,12 @@ def build_group_week_block(ir, week_number, year, week_start, week_end,
             "is_head": m.ir_id in head_ids,
             "is_self": m.ir_id == ir.ir_id,
             "pocket_name": pocket_name_by_ir.get(m.ir_id),
+            "pocket_id": pocket_id_by_ir.get(m.ir_id),
             "info_done": info_by_ir.get(m.ir_id, 0),
             "plan_done": plan_by_ir.get(m.ir_id, 0),
             "uv_done": round(float(uv_by_ir.get(m.ir_id, 0) or 0), 2),
             "info_days": info_days.get(m.ir_id, {}),
+            "plan_days": plan_days.get(m.ir_id, {}),
         })
     members.sort(key=lambda r: (-r["info_done"], r["ir_name"] or ""))
 
@@ -1226,6 +1253,12 @@ def build_group_week_block(ir, week_number, year, week_start, week_end,
         "active_count": active_count(member_ids),
         "week_number": week_number,
         "year": year,
+        "info_week_start": week_start.isoformat(),
+        "info_week_end": week_end.isoformat(),
+        "plan_week_start": plan_week_start.isoformat(),
+        "plan_week_end": plan_week_end.isoformat(),
+        "info_days": days_for(member_ids, info_days),
+        "plan_days": days_for(member_ids, plan_days),
         "target_source": target_source,
         "totals": totals,
         "children": children,
@@ -1573,7 +1606,14 @@ class GetManagerDashboard(APIView):
         teams = list(Team.objects.filter(created_by_id__in=needed_ldc_ids).only("id", "name", "created_by_id"))
         team_ids = [t.id for t in teams]
 
-        member_rows = list(TeamMember.objects.filter(team_id__in=team_ids).values_list("team_id", "ir_id"))
+        # ir__status=True: the LDC cards were counting deactivated IRs, so the
+        # headcount on an admin's board never matched the active system count
+        # shown everywhere else. Every comparable query in this file already
+        # filters on status.
+        member_rows = list(
+            TeamMember.objects.filter(team_id__in=team_ids, ir__status=True)
+            .values_list("team_id", "ir_id")
+        )
         team_to_members = {}
         for team_id, ir_id in member_rows:
             team_to_members.setdefault(team_id, set()).add(ir_id)

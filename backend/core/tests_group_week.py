@@ -150,6 +150,22 @@ class GroupWeekBlockTests(TestCase):
         zero = [m for m in g["members"] if m["ir_name"] == "Harshit"][0]
         self.assertEqual(zero["info_days"], {})
 
+    def test_pockets_carry_their_own_daily_series(self):
+        """Infos and plans are bucketed per day, each on its own window."""
+        g = self.block(self.ls)
+        gagan = [c for c in g["children"] if c["name"] == "Gagan's pocket"][0]
+        # 57 infos in that pocket, spread across the info week
+        self.assertEqual(sum(gagan["info_days"].values()), gagan["info_done"])
+        self.assertEqual(sum(gagan["plan_days"].values()), gagan["plan_done"])
+        # the two series are keyed on different windows and must not be merged
+        self.assertTrue(set(gagan["info_days"]) - set(gagan["plan_days"]) or not gagan["plan_days"])
+        # and the group total reconciles with its own series
+        self.assertEqual(sum(g["info_days"].values()), g["totals"]["info_done"])
+        self.assertEqual(sum(g["plan_days"].values()), g["totals"]["plan_done"])
+        # both windows are published so the client can build each axis
+        for k in ("info_week_start", "info_week_end", "plan_week_start", "plan_week_end"):
+            self.assertIn(k, g)
+
     def test_gc_without_a_pocket_and_plain_ir_get_nothing(self):
         gc = Ir.objects.create(ir_id="TSTGC9", ir_name="GC No Pocket", ir_email="g@t.t",
                                ir_password="x", ir_access_level=AccessLevel.GC, status=True)
