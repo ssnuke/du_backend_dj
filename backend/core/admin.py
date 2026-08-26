@@ -54,15 +54,18 @@ refresh_thumbnail_cache.short_description = "Refresh thumbnail cache (after upda
 
 @admin.register(LearnVideo)
 class LearnVideoAdmin(admin.ModelAdmin):
-    list_display = ('title', 'order', 'duration_seconds', 'is_published', 'created_at')
-    list_editable = ('order', 'duration_seconds', 'is_published')
-    list_filter = ('is_published',)
+    list_display = ('title', 'category', 'order', 'duration_seconds', 'is_published', 'created_at')
+    list_editable = ('category', 'order', 'duration_seconds', 'is_published')
+    list_filter = ('category', 'is_published')
     search_fields = ('title', 'description', 'bunny_video_id')
-    ordering = ('order', 'created_at')
+    ordering = ('category', 'order', 'created_at')
     actions = [refresh_thumbnail_cache]
     fieldsets = (
         (None, {
-            'fields': ('title', 'description', 'order', 'is_published'),
+            'fields': ('title', 'description', 'category', 'order', 'is_published'),
+            'description': (
+                'category picks the sub-tab in Learn. "8 Basic Building Blocks" is an ordered curriculum, so set order 1-8 on those.'
+            ),
         }),
         ('Bunny.net Stream', {
             'fields': ('bunny_video_id', 'bunny_library_id', 'thumbnail_url', 'duration_seconds'),

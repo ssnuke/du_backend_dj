@@ -1235,9 +1235,21 @@ class PipelineStats(models.Model):
         verbose_name_plural = "Pipeline Stats"
 
 
+LEARN_VIDEO_CATEGORY_CHOICES = [
+    ("basic_training", "Basic Training Videos"),
+    ("building_blocks", "8 Basic Building Blocks"),
+]
+
+
 class LearnVideo(models.Model):
     """A training/learning video hosted on Bunny.net Stream."""
     title = models.CharField(max_length=200)
+    # Which sub-tab the video appears under in Learn. Defaults to
+    # basic_training so every video that predates this field keeps showing
+    # exactly where it always did. Mirrors DreamVideo.category.
+    category = models.CharField(
+        max_length=20, choices=LEARN_VIDEO_CATEGORY_CHOICES, default="basic_training"
+    )
     description = models.TextField(blank=True)
     bunny_video_id = models.CharField(max_length=100, unique=True)
     bunny_library_id = models.CharField(max_length=100)

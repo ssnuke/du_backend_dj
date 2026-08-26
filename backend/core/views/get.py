@@ -741,7 +741,7 @@ class GetPlanDetails(APIView):
 # ---------------------------------------------------
 # TEAM-AGGREGATED PLANS (all plans across visible teams)
 # ---------------------------------------------------
-def get_plan_visible_member_ids(ir):
+def get_plan_visible_member_ids(ir, scope=None):
     """
     Which IRs' PlanDetail rows `ir` can see — shared by GetTeamAggregatedPlans
     (single week, what PlanTracker.jsx renders) and GetMonthlyPlanSummary
@@ -762,6 +762,21 @@ def get_plan_visible_member_ids(ir):
       — deliberately never "merely shares a team with", per the original
       GetTeamAggregatedPlans design.
     """
+    # scope="teams" asks the question the manager's own team page asks:
+    # "the people in the teams this person runs". Without it a CTC opened
+    # from the org board answered with their whole downline — 138 plans
+    # across 43 people on a page about a team of 12 — because the fallback
+    # below is the hierarchy subtree. Admin is not special-cased here for
+    # the same reason: on a team page they want that team, not everyone.
+    if scope == "teams":
+        team_ids = Team.objects.filter(created_by=ir).values_list('id', flat=True)
+        ids = set(
+            TeamMember.objects.filter(team_id__in=team_ids, ir__status=True)
+            .values_list('ir_id', flat=True)
+        )
+        ids.add(ir.ir_id)
+        return ids
+
     if ir.ir_access_level == AccessLevel.ADMIN:
         return set(Ir.objects.filter(status=True).values_list('ir_id', flat=True))
 
@@ -816,7 +831,7 @@ class GetTeamAggregatedPlans(APIView):
         else:
             _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday()
 
-        all_member_ids = get_plan_visible_member_ids(ir)
+        all_member_ids = get_plan_visible_member_ids(ir, request.GET.get("scope"))
 
         if not all_member_ids:
             return Response({"plans": [], "presenters": [], "summary": {"total_plans": 0, "closed_count": 0, "total_positive_uvs": 0}})
@@ -946,7 +961,7 @@ class GetMonthlyPlanSummary(APIView):
                 "weeks": [], "weekly": {}, "month_total": _round_bucket(_empty_plan_bucket()),
             })
 
-        member_ids = get_plan_visible_member_ids(ir)
+        member_ids = get_plan_visible_member_ids(ir, request.GET.get("scope"))
 
         span_start = weeks[0]["start"]
         span_end = weeks[-1]["end"]
