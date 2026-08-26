@@ -99,6 +99,23 @@ def _is_room_member(room, ir):
     return ChatRoomMember.objects.filter(room=room, ir=ir).exists()
 
 
+def _can_moderate_room(room, ir):
+    """
+    Who may delete a group or remove members from it.
+
+    Normally the group's creator only. An Admin also qualifies, but strictly
+    for groups they are themselves a member of — being Admin is not a key to
+    every conversation in the org, it is the ability to clean up the groups
+    they are actually in. Callers must still have checked _is_room_member
+    first, which is what enforces that half.
+
+    Direct chats have no owner: either participant may act on their own.
+    """
+    if room.room_type != ChatRoomType.GROUP:
+        return True
+    return room.created_by_id == ir.ir_id or ir.ir_access_level == AccessLevel.ADMIN
+
+
 ROOM_LIST_CACHE_TTL = 30  # seconds — a safety net; correctness comes from explicit invalidation below
 ROOM_LIST_CACHE_KEY_FMT = "chat_rooms:{ir_id}"
 
@@ -600,8 +617,8 @@ class ChatRoomMembersRemove(APIView):
         if not _is_room_member(room, requester):
             return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
 
-        if room.room_type == ChatRoomType.GROUP and room.created_by_id != requester.ir_id:
-            return Response({"detail": "Only the group owner can remove members"}, status=status.HTTP_403_FORBIDDEN)
+        if not _can_moderate_room(room, requester):
+            return Response({"detail": "Only the group owner or an Admin can remove members"}, status=status.HTTP_403_FORBIDDEN)
 
         if not member_ir_ids:
             return Response({"detail": "member_ir_ids is required"}, status=status.HTTP_400_BAD_REQUEST)
@@ -1111,9 +1128,10 @@ class ChatRoomDelete(APIView):
         if not _is_room_member(room, requester):
             return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
 
-        # Only the group creator can delete a group; anyone can delete their own direct chat
-        if room.room_type == ChatRoomType.GROUP and room.created_by_id != requester.ir_id:
-            return Response({"detail": "Only the group owner can delete this group"}, status=status.HTTP_403_FORBIDDEN)
+        # The group creator or an Admin who is in the group; anyone can delete
+        # their own direct chat.
+        if not _can_moderate_room(room, requester):
+            return Response({"detail": "Only the group owner or an Admin can delete this group"}, status=status.HTTP_403_FORBIDDEN)
 
         member_ir_ids = _room_member_ir_ids(room.id)
         room.delete()

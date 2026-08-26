@@ -1,4 +1,5 @@
 from rest_framework.views import APIView
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework import status
 
@@ -444,6 +445,12 @@ class UpdatePlanDetail(APIView):
             )
         except PlanDetail.DoesNotExist:
             return Response({"detail": "Plan detail not found"}, status=status.HTTP_404_NOT_FOUND)
+        except ValidationError:
+            # raise_exception=True above is meant to surface a 400 with the
+            # offending field. The broad handler below was catching it and
+            # reporting "Internal server error" instead, so a rejected value
+            # looked like the server falling over rather than bad input.
+            raise
         except Exception:
             logging.exception("Error updating plan detail with id=%s", plan_id)
             return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

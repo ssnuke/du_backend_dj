@@ -10,7 +10,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from core.models import AccessLevel, ChatMessage, ChatMessageReaction, ChatMessageReceipt, ChatRoom, ChatRoomMember, Ir
-from core.views.chat import invalidate_chat_rooms_cache, _room_member_ir_ids
+from core.views.chat import invalidate_chat_rooms_cache, _room_member_ir_ids, _can_moderate_room
 
 # Dedicated executor for outbound FCM network calls, kept separate from
 # Django's shared thread-sensitive executor (the one `database_sync_to_async`
@@ -676,8 +676,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if not ChatRoomMember.objects.filter(room=room, ir=requester).exists():
             return [], 0, "Not authorized for this room"
 
-        if room.room_type == ChatRoomType.GROUP and room.created_by_id != requester_ir_id:
-            return [], 0, "Only the group owner can remove members"
+        # Same rule as the HTTP path (ChatRoomMembersRemove): owner, or an
+        # Admin who is in the group. Both paths mutate the same table, so a
+        # rule that lives in only one of them is not a rule.
+        if not _can_moderate_room(room, requester):
+            return [], 0, "Only the group owner or an Admin can remove members"
 
         current_ids = set(ChatRoomMember.objects.filter(room=room).values_list("ir_id", flat=True))
         removable_ids = set(member_ir_ids) & current_ids

@@ -814,6 +814,15 @@ class AddInfoDetail(APIView):
 # ---------------------------------------------------
 # ADD PLAN DETAIL (with role-based check)
 # ---------------------------------------------------
+def _clean_plan_mode(value):
+    """
+    Keep plan_mode to the two real answers or nothing at all. An unrecognised
+    string would otherwise become a third silent category in the
+    virtual-vs-physical comparison this field exists to answer.
+    """
+    valid = {choice for choice, _ in PlanDetail.PLAN_MODE_CHOICES}
+    return value if value in valid else None
+
 class AddPlanDetail(APIView):
     def post(self, request, ir_id):
         requester_ir_id = request.data.get("requester_ir_id") if isinstance(request.data, dict) else None
@@ -871,6 +880,7 @@ class AddPlanDetail(APIView):
                     rejection_reason=item.get("rejection_reason") or None,
                     follow_up_date=item.get("follow_up_date") or None,
                     uv_value=item.get("uv_value") or None,
+                    plan_mode=_clean_plan_mode(item.get("plan_mode")),
                 )
                 created_ids.append(plan.id)
                 created_plans.append(plan)

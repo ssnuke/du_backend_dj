@@ -851,6 +851,15 @@ class GetTeamAggregatedPlans(APIView):
         if presented_by_filter:
             plans_qs = plans_qs.filter(presented_by__ir_id=presented_by_filter)
 
+        # Optional filter by how the plan was shown. "unset" is a real answer
+        # to ask for — it is how you find the backlog of plans recorded
+        # before the field existed, which would otherwise be invisible.
+        plan_mode_filter = request.GET.get("plan_mode")
+        if plan_mode_filter == "unset":
+            plans_qs = plans_qs.filter(plan_mode__isnull=True)
+        elif plan_mode_filter in {"virtual", "physical"}:
+            plans_qs = plans_qs.filter(plan_mode=plan_mode_filter)
+
         # Summary/presenters must reflect ALL matching plans regardless of
         # whether the `plans` list below gets paginated for display — compute
         # them via DB aggregation over the full plans_qs first (also avoids
@@ -884,6 +893,7 @@ class GetTeamAggregatedPlans(APIView):
                 "rejection_reason": p.rejection_reason,
                 "presented_by_id": presenter_id,
                 "presented_by_name": presenter_name,
+                "plan_mode": p.plan_mode,
             })
 
         presenters = [{"ir_id": k, "ir_name": v} for k, v in presenters_set.items()]
@@ -966,15 +976,41 @@ class GetMonthlyPlanSummary(APIView):
         span_start = weeks[0]["start"]
         span_end = weeks[-1]["end"]
 
+        base_qs = PlanDetail.objects.filter(
+            ir_id__in=member_ids,
+            plan_date__gte=span_start,
+            plan_date__lte=span_end,
+        ) if member_ids else PlanDetail.objects.none()
+
+        # The UL2 roster is built from the UNFILTERED month, so picking a
+        # presenter never collapses the dropdown to the one option already
+        # chosen and strand the user with no way back.
+        presenters = [
+            {"ir_id": pid, "ir_name": pname}
+            for pid, pname in sorted(
+                base_qs.exclude(presented_by__isnull=True)
+                .values_list('presented_by__ir_id', 'presented_by__ir_name')
+                .distinct(),
+                key=lambda row: (row[1] or "").lower(),
+            )
+        ]
+
+        filtered_qs = base_qs
+        presented_by_filter = request.GET.get("presented_by")
+        if presented_by_filter:
+            filtered_qs = filtered_qs.filter(presented_by__ir_id=presented_by_filter)
+
+        plan_mode_filter = request.GET.get("plan_mode")
+        if plan_mode_filter == "unset":
+            filtered_qs = filtered_qs.filter(plan_mode__isnull=True)
+        elif plan_mode_filter in {"virtual", "physical"}:
+            filtered_qs = filtered_qs.filter(plan_mode=plan_mode_filter)
+
         # One bulk query for the whole month's worth of weeks (not one per
         # week) — same rationale as GetLDCs' bulk-fetch-then-bucket pattern.
         plan_rows = list(
-            PlanDetail.objects.filter(
-                ir_id__in=member_ids,
-                plan_date__gte=span_start,
-                plan_date__lte=span_end,
-            ).values_list('plan_date', 'status', 'uv_value')
-        ) if member_ids else []
+            filtered_qs.values_list('plan_date', 'status', 'uv_value', 'plan_mode')
+        )
 
         def _week_for(dt):
             for w in weeks:
@@ -983,26 +1019,70 @@ class GetMonthlyPlanSummary(APIView):
             return None
 
         weekly_buckets = {w["week_number"]: _empty_plan_bucket() for w in weeks}
-        for dt, plan_status, uv_value in plan_rows:
+        # Virtual vs physical, side by side — the whole point of recording the
+        # mode is being able to ask which one converts better. Plans from
+        # before the field existed are kept in their own "unset" bucket rather
+        # than being folded into either answer.
+        mode_buckets = {"virtual": _empty_plan_bucket(),
+                        "physical": _empty_plan_bucket(),
+                        "unset": _empty_plan_bucket()}
+        for dt, plan_status, uv_value, plan_mode in plan_rows:
             week_num = _week_for(dt)
             if week_num is None:
                 continue
-            bucket = weekly_buckets[week_num]
-            bucket["total"] += 1
             status_key = plan_status or "closing_pending"
-            if status_key in bucket:
-                bucket[status_key] += 1
-            if uv_value and float(uv_value) > 0 and status_key == "closed":
-                bucket["uv_value_sum"] += float(uv_value)
+            mode_bucket = mode_buckets[plan_mode if plan_mode in mode_buckets else "unset"]
+            for bucket in (weekly_buckets[week_num], mode_bucket):
+                bucket["total"] += 1
+                if status_key in bucket:
+                    bucket[status_key] += 1
+                if uv_value and float(uv_value) > 0 and status_key == "closed":
+                    bucket["uv_value_sum"] += float(uv_value)
 
         month_total = _empty_plan_bucket()
         for bucket in weekly_buckets.values():
             for k in month_total:
                 month_total[k] += bucket[k]
 
+        # Infos per week, for the "Infos by week" strip beside the plan one.
+        # Deliberately bucketed on each week's own Friday->Friday info window
+        # rather than the Monday->Sunday plan weeks above: an info logged on
+        # Friday evening belongs to the info week that just opened, and
+        # reusing the plan boundaries would file it under the week before.
+        info_windows = []
+        for w in weeks:
+            _, _, iw_start, iw_end = get_week_info_friday_to_friday(
+                week_number=w["week_number"], year=w["year"]
+            )
+            info_windows.append((w["week_number"], iw_start, iw_end))
+
+        # Infos carry no presenter and no mode, so they cannot answer a
+        # filtered question. Rather than show numbers that silently ignore the
+        # active filter, the payload flags it and the client hides the strip.
+        plan_filters_active = bool(presented_by_filter) or plan_mode_filter in {"unset", "virtual", "physical"}
+
+        info_weekly = {wn: 0 for wn, _, _ in info_windows}
+        if info_windows and member_ids and not plan_filters_active:
+            # One query across the whole span, bucketed in Python — the same
+            # bulk-then-bucket shape the rest of this module uses, rather
+            # than a COUNT per week.
+            span_lo = min(lo for _, lo, _ in info_windows)
+            span_hi = max(hi for _, _, hi in info_windows)
+            for (info_dt,) in InfoDetail.objects.filter(
+                ir_id__in=list(member_ids),
+                info_date__gte=span_lo,
+                info_date__lte=span_hi,
+            ).values_list("info_date"):
+                for wn, lo, hi in info_windows:
+                    if lo <= info_dt <= hi:
+                        info_weekly[wn] += 1
+                        break
+
         return Response({
             "month": month,
             "year": year,
+            "info_weekly": info_weekly,
+            "info_month_total": sum(info_weekly.values()),
             "weeks": [
                 {
                     "week_number": w["week_number"],
@@ -1015,6 +1095,11 @@ class GetMonthlyPlanSummary(APIView):
             ],
             "weekly": {wn: _round_bucket(b) for wn, b in weekly_buckets.items()},
             "month_total": _round_bucket(month_total),
+            "presenters": presenters,
+            "mode_totals": {k: _round_bucket(b) for k, b in mode_buckets.items()},
+            "applied_presented_by": presented_by_filter or None,
+            "applied_plan_mode": plan_mode_filter or None,
+            "infos_apply_to_filter": not plan_filters_active,
         })
 
 

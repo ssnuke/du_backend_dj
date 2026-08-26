@@ -947,6 +947,15 @@ class PlanDetail(models.Model):
         ('other', 'Other'),
     ]
 
+    # How the plan was shown. Nullable on purpose: every plan recorded before
+    # this field existed genuinely has no answer, and defaulting them to
+    # either value would invent history and skew the very virtual-vs-physical
+    # conversion comparison this exists to answer.
+    PLAN_MODE_CHOICES = [
+        ('virtual', 'Virtual'),
+        ('physical', 'Physical'),
+    ]
+
     ir = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name='plan_details')
     presented_by = models.ForeignKey(Ir, on_delete=models.SET_NULL, null=True, blank=True, related_name='plans_presented')
     plan_date = models.DateTimeField(default=timezone.now)
@@ -956,6 +965,7 @@ class PlanDetail(models.Model):
     rejection_reason = models.CharField(max_length=20, choices=REJECTION_REASON_CHOICES, null=True, blank=True)
     follow_up_date = models.DateField(null=True, blank=True)
     uv_value = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    plan_mode = models.CharField(max_length=10, choices=PLAN_MODE_CHOICES, null=True, blank=True)
 
     class Meta:
         # Same rationale as InfoDetail.Meta.indexes above — filtered by
