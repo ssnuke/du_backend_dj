@@ -1247,8 +1247,18 @@ class PipelineStats(models.Model):
 
 LEARN_VIDEO_CATEGORY_CHOICES = [
     ("basic_training", "Basic Training Videos"),
-    ("building_blocks", "8 Basic Building Blocks"),
+    ("building_blocks", "Basic Building Blocks"),
+    ("growth_bites", "Growth Bites"),
 ]
+
+# Learn categories that are not for everyone, mapped to the LOWEST access
+# level allowed to see them (lower number = more senior). Enforced in
+# core/views/learn.py on BOTH the list and the stream endpoint — hiding a tab
+# in the client would still ship the videos in the list payload and leave the
+# signed stream URL fetchable by id.
+RESTRICTED_LEARN_CATEGORIES = {
+    "growth_bites": AccessLevel.LS,
+}
 
 
 class LearnVideo(models.Model):

@@ -8,7 +8,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
-from core.models import Ir, LearnVideo
+from core.models import Ir, LearnVideo, RESTRICTED_LEARN_CATEGORIES
 
 
 def _with_cache_buster(url: str, version) -> str:
@@ -82,15 +82,33 @@ def _video_list_item(video: LearnVideo) -> dict:
     }
 
 
+def _blocked_categories_for(ir) -> list:
+    """
+    Learn categories this IR may not see. Access level is a number where
+    lower is more senior, so a category needing LS (4) is blocked for anyone
+    whose level is greater than 4.
+    """
+    level = ir.ir_access_level
+    return [cat for cat, min_level in RESTRICTED_LEARN_CATEGORIES.items()
+            if level is None or level > min_level]
+
+
 class GetLearnVideos(APIView):
-    """Returns published videos list for any authenticated IR."""
+    """
+    Published videos for an IR, minus any restricted category they are not
+    senior enough for. Filtered here rather than only in the client: hiding a
+    tab still ships the videos in this payload.
+    """
     def get(self, request, ir_id):
         try:
-            Ir.objects.get(ir_id=ir_id)
+            ir = Ir.objects.get(ir_id=ir_id)
         except Ir.DoesNotExist:
             return Response({"message": "IR not found"}, status=404)
 
         videos = LearnVideo.objects.filter(is_published=True)
+        blocked = _blocked_categories_for(ir)
+        if blocked:
+            videos = videos.exclude(category__in=blocked)
         return Response([_video_list_item(v) for v in videos])
 
 
@@ -98,13 +116,20 @@ class GetLearnVideoStream(APIView):
     """Returns a signed Bunny stream URL for a specific video."""
     def get(self, request, ir_id, video_id):
         try:
-            Ir.objects.get(ir_id=ir_id)
+            ir = Ir.objects.get(ir_id=ir_id)
         except Ir.DoesNotExist:
             return Response({"message": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
 
         try:
             video = LearnVideo.objects.get(id=video_id, is_published=True)
         except LearnVideo.DoesNotExist:
+            return Response({"message": "Video not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Filtering the list is not enough on its own — this endpoint takes an
+        # id, so without the same check a restricted video stays playable by
+        # anyone who guesses or keeps one. Same 404 as a missing video, so the
+        # response does not confirm that a hidden video exists.
+        if video.category in _blocked_categories_for(ir):
             return Response({"message": "Video not found"}, status=status.HTTP_404_NOT_FOUND)
 
         cdn_hostname = settings.BUNNY_STREAM_CDN_HOSTNAME
