@@ -1577,7 +1577,24 @@ class GetManagerDashboard(APIView):
             except Exception:
                 compare_prev = False
 
-        cache_key = f"manager_dashboard:{requester_ir_id}:{week_number}:{year}:{int(compare_prev)}"
+        # The grouping this board renders comes from the requester's saved
+        # DashboardMappingConfig, so the cache key has to move when that
+        # config does. Without this, saving in Customize and refetching
+        # immediately returned the previous grouping from cache for up to
+        # DASHBOARD_CACHE_TTL — the board simply didn't show the LDC you
+        # had just added or removed.
+        try:
+            # Microseconds, not seconds: two saves inside the same second
+            # produced an identical key, so a second edit was served the
+            # first edit's board. auto_now already gives us the precision.
+            cfg_rev = int(requester.dashboard_mapping_config.updated_at.timestamp() * 1_000_000)
+        except DashboardMappingConfig.DoesNotExist:
+            cfg_rev = 0
+
+        cache_key = (
+            f"manager_dashboard:{requester_ir_id}:{week_number}:{year}"
+            f":{int(compare_prev)}:{cfg_rev}"
+        )
         cached = cache.get(cache_key)
         if cached is not None:
             return Response(cached)
