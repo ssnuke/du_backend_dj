@@ -131,6 +131,7 @@ from core.views.pipeline import (
     AutoFetchPipelineStats,
     GetViewableIRsForPipeline,
 )
+from core.views.prospect import GetProspectTrail
 from core.views.learn import (
     GetLearnVideos,
     GetLearnVideoStream,
@@ -322,6 +323,7 @@ urlpatterns = [
     path("ir/<str:ir_id>/avatar/", IrAvatarUpload.as_view()),
 
     # ============ LEARN ENDPOINTS ============
+    path("prospect_trail/<str:ir_id>/", GetProspectTrail.as_view()),
     path("learn/<str:ir_id>/videos/", GetLearnVideos.as_view()),
     path("learn/<str:ir_id>/videos/<int:video_id>/stream/", GetLearnVideoStream.as_view()),
 

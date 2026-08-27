@@ -1829,9 +1829,22 @@ class GetManagerDashboard(APIView):
 
             label = g["label"] or (ldc_by_id[g["member_ldc_ids"][0]].ir_name if g["member_ldc_ids"][0] in ldc_by_id else g["member_ldc_ids"][0])
 
+            # The board draws a rank badge from this. Without it the client fell
+            # back to "LDC" and labelled everyone an LDC — a CTC whose own
+            # header said CTC still showed as LDC on their card. A merged group
+            # has no single rank, so report the most senior one present (levels
+            # count down: 1 = Admin). None when we genuinely cannot tell, which
+            # the client renders as no badge rather than as a guess.
+            member_levels = [
+                ldc_by_id[m].ir_access_level
+                for m in g["member_ldc_ids"]
+                if m in ldc_by_id and ldc_by_id[m].ir_access_level is not None
+            ]
+
             group_row = {
                 "id": g["id"],
                 "label": label,
+                "access_level": min(member_levels) if member_levels else None,
                 "member_ldc_ids": g["member_ldc_ids"],
                 "member_ldc_names": [ldc_by_id[m].ir_name if m in ldc_by_id else m for m in g["member_ldc_ids"]],
                 "member_count": len(set(
