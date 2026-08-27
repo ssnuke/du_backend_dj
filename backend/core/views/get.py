@@ -2918,15 +2918,46 @@ class GetDownlineData(APIView):
 # ---------------------------------------------------
 # GET IRS FOR STATUS MANAGEMENT (LDC-only: subtree IRs w/ active status)
 # ---------------------------------------------------
+def get_status_manageable_irs(requester):
+    """
+    The IRs a requester may activate/deactivate.
+
+    ONE definition, shared by the list (GetIrsForStatusManagement) and the
+    toggle (ToggleIrStatus), because those two drifting apart is a bug this
+    screen has already had: an LDC could see somebody in the list and then be
+    rejected on toggle, with nothing on screen explaining why.
+
+      - LDC : everyone in any Team the LDC is a member of. Matches the LDC
+              branch of GetDownlineData's System Count, so the list agrees
+              with the count it feeds.
+      - CTC / ADMIN : their full hierarchical downline. LDCs do not own a Team
+              of their own, so team membership would return almost nobody for
+              these roles — the same reason GetReferrerCandidates splits this
+              way.
+
+    Always excludes the requester: nobody deactivates themselves.
+    """
+    if requester.ir_access_level == AccessLevel.LDC:
+        team_ids = TeamMember.objects.filter(ir=requester).values_list("team_id", flat=True)
+        member_ids = (
+            TeamMember.objects
+            .filter(team_id__in=team_ids)
+            .exclude(ir=requester)
+            .values_list("ir_id", flat=True)
+            .distinct()
+        )
+        return Ir.objects.filter(ir_id__in=member_ids)
+    return requester.get_all_downlines().exclude(ir_id=requester.ir_id)
+
+
 class GetIrsForStatusManagement(APIView):
     """
-    Returns IRs belonging to teams the requester (LDC) is a member of, with
-    their current active/inactive status, for the LDC "manage IR status"
-    screen. Same scoping as the LDC branch of GetDownlineData's System
-    Count, so this list matches what actually feeds that count.
+    IRs the requester may activate/deactivate, with their current status, for
+    the "manage IR status" screen. Open to ADMIN, CTC and LDC — see
+    get_status_manageable_irs for what each of those can reach.
 
     Supports search (?search=) and pagination (?limit=&offset=) so the
-    client never has to load the full team roster up front.
+    client never has to load the full roster up front.
     """
     def get(self, request, ir_id):
         try:
@@ -2934,7 +2965,9 @@ class GetIrsForStatusManagement(APIView):
         except Ir.DoesNotExist:
             return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        if requester.ir_access_level != AccessLevel.LDC:
+        # ADMIN(1)/CTC(2)/LDC(3). A CTC could not reach this screen at all
+        # before, because the check was an exact match on LDC.
+        if requester.ir_access_level > AccessLevel.LDC:
             return Response({"detail": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
 
         search = (request.GET.get("search") or "").strip()
@@ -2944,15 +2977,7 @@ class GetIrsForStatusManagement(APIView):
         except (TypeError, ValueError):
             return Response({"detail": "Invalid limit/offset"}, status=status.HTTP_400_BAD_REQUEST)
 
-        ldc_team_ids = TeamMember.objects.filter(ir=requester).values_list('team_id', flat=True)
-        irs = (
-            TeamMember.objects
-            .filter(team_id__in=ldc_team_ids)
-            .exclude(ir=requester)
-            .values_list('ir_id', flat=True)
-            .distinct()
-        )
-        queryset = Ir.objects.filter(ir_id__in=irs)
+        queryset = get_status_manageable_irs(requester)
 
         if search:
             queryset = queryset.filter(Q(ir_name__icontains=search) | Q(ir_id__icontains=search))

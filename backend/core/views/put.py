@@ -6,6 +6,9 @@ from rest_framework import status
 from django.shortcuts import get_object_or_404
 from django.db import transaction
 
+# get.py does not import put.py, so this direction is cycle-free.
+from core.views.get import get_status_manageable_irs
+
 from core.models import (
     IrId,
     Ir,
@@ -1175,16 +1178,16 @@ class AdjustIrCounters(APIView):
 # ---------------------------------------------------
 class ToggleIrStatus(APIView):
     """
-    Set an IR's active/inactive status. Restricted to LDC acting on an IR
-    that shares a team with them — the same TeamMember-based scoping
-    GetIrsForStatusManagement (the list this toggle is paired with on the
-    frontend) and GetDownlineData's LDC System Count both use. Previously
-    checked is_in_subtree() instead (hierarchy-path scoping), a DIFFERENT
-    population from "teams I'm a member of" whenever team membership and
-    hierarchy position diverge — that mismatch meant an LDC could see
-    someone in the status-management list (because they share a team) but
-    get rejected on toggle (because they weren't a hierarchy descendant),
-    with no visible reason why. Inactive IRs are excluded from System Count.
+    Set an IR's active/inactive status. Open to ADMIN, CTC and LDC.
+
+    Scope comes from get_status_manageable_irs — the SAME helper that builds
+    the list this toggle is paired with on the frontend. That sharing is the
+    point: this screen has already had a bug where the two definitions
+    drifted and an LDC could see somebody in the list but be rejected on
+    toggle, with nothing on screen explaining why. Whatever the list shows,
+    this accepts.
+
+    Inactive IRs are excluded from System Count.
     """
     def patch(self, request, ir_id):
         requester_ir_id = request.data.get("requester_ir_id")
@@ -1201,13 +1204,15 @@ class ToggleIrStatus(APIView):
         except Ir.DoesNotExist:
             return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        if requester.ir_access_level != AccessLevel.LDC:
+        # ADMIN(1)/CTC(2)/LDC(3). Was an exact match on LDC, so a CTC was
+        # refused even for people plainly in their own downline.
+        if requester.ir_access_level > AccessLevel.LDC:
             return Response({"detail": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
 
         if requester.ir_id == target.ir_id:
             return Response({"detail": "Cannot change your own status"}, status=status.HTTP_403_FORBIDDEN)
 
-        if not requester._is_in_same_team(target):
+        if not get_status_manageable_irs(requester).filter(ir_id=target.ir_id).exists():
             return Response({"detail": "Not authorized to change status for this IR"}, status=status.HTTP_403_FORBIDDEN)
 
         target.status = new_status
