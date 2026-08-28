@@ -132,6 +132,7 @@ from core.views.pipeline import (
     GetViewableIRsForPipeline,
 )
 from core.views.prospect import GetProspectTrail
+from core.views.plan_takers import PlanTakerCandidates
 from core.views.learn import (
     GetLearnVideos,
     GetLearnVideoStream,
@@ -304,6 +305,7 @@ urlpatterns = [
     path("chat_rooms/<int:room_id>/image/", ChatRoomImageUpload.as_view()),
     path("chat_rooms/<int:room_id>/messages/<int:message_id>/receipts/", ChatMessageReceiptDetail.as_view()),
     path("chat_rooms/<int:room_id>/messages/<int:message_id>/reactions/", ChatMessageReactionView.as_view()),
+    path("plan_taker_candidates/", PlanTakerCandidates.as_view()),
     path("chat_candidates/", ChatCandidates.as_view()),
     path("chat_tabs_config/", ChatTabsConfigView.as_view()),
     path("chat_messages/search/", ChatMessageSearch.as_view()),
