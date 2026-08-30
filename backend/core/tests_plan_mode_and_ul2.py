@@ -112,10 +112,33 @@ class PlanModeAndUl2FilterTests(TestCase):
     def test_uv_sum_is_not_double_counted_across_week_and_mode_buckets(self):
         PlanDetail.objects.create(ir=self.owner, presented_by=self.ul2_a,
                                   plan_date=self.when, plan_name="UV",
-                                  status="closed", plan_mode="virtual", uv_value=10)
+                                  status="uvs_on_counter", plan_mode="virtual", uv_value=10)
         data = self.summary()
         self.assertEqual(data["month_total"]["uv_value_sum"], 10)
         self.assertEqual(data["mode_totals"]["virtual"]["uv_value_sum"], 10)
+
+    def test_uv_total_counts_only_uvs_on_the_counter(self):
+        """
+        The figure used to sum uv_value off In-process plans, which is a
+        projection of what might land — it read as banked business while the
+        plan was still being worked.
+        """
+        PlanDetail.objects.create(ir=self.owner, plan_date=self.when, plan_name="Landed",
+                                  status="uvs_on_counter", uv_value=6)
+        PlanDetail.objects.create(ir=self.owner, plan_date=self.when, plan_name="Still working",
+                                  status="closed", uv_value=100)
+        PlanDetail.objects.create(ir=self.owner, plan_date=self.when, plan_name="Pending",
+                                  status="closing_pending", uv_value=50)
+        PlanDetail.objects.create(ir=self.owner, plan_date=self.when, plan_name="Dead",
+                                  status="rejected", uv_value=25)
+        self.assertEqual(self.summary()["month_total"]["uv_value_sum"], 6)
+
+    def test_the_in_process_COUNT_is_untouched_by_the_uv_change(self):
+        """Only the UV figure changed; the status counts must not move."""
+        before = self.summary()["month_total"]["closed"]
+        PlanDetail.objects.create(ir=self.owner, plan_date=self.when, plan_name="X",
+                                  status="closed", uv_value=100)
+        self.assertEqual(self.summary()["month_total"]["closed"], before + 1)
 
 
 @override_settings(CACHES=LOCMEM)

@@ -41,6 +41,12 @@ import logging
 
 from core.utils.dates import get_current_week_start, get_week_info_friday_to_friday, get_week_info_monday_to_sunday, get_weeks_in_month
 
+
+# A plan's uv_value is entered for both 'closed' (In-process) and
+# 'uvs_on_counter', but only the latter means the UVs have actually landed.
+# Every "total UVs" figure counts this status and no other.
+UV_COUNTED_AT = "uvs_on_counter"
+
 IST = pytz.timezone("Asia/Kolkata")
 timezone = pytz.timezone
 
@@ -866,8 +872,11 @@ class GetTeamAggregatedPlans(APIView):
         # pulling every row into Python just to sum two numbers).
         total_plans_count = plans_qs.count()
         closed_count = plans_qs.filter(status='closed').count()
+        # Same definition as the monthly summary's uv_value_sum — two
+        # contradicting notions of "total UVs" in one codebase is how the
+        # dashboards end up disagreeing.
         total_positive_uvs = float(
-            plans_qs.filter(uv_value__gt=0, status='closed').aggregate(total=Sum('uv_value'))['total'] or 0
+            plans_qs.filter(uv_value__gt=0, status=UV_COUNTED_AT).aggregate(total=Sum('uv_value'))['total'] or 0
         )
         presenters_set = dict(
             plans_qs.exclude(presented_by__isnull=True)
@@ -1036,7 +1045,12 @@ class GetMonthlyPlanSummary(APIView):
                 bucket["total"] += 1
                 if status_key in bucket:
                     bucket[status_key] += 1
-                if uv_value and float(uv_value) > 0 and status_key == "closed":
+                # Only UVs actually on the counter. This used to sum UV values
+                # from 'closed' (In-process) plans, which is a projection of
+                # what MIGHT land, not what has — so the figure read as banked
+                # business when the plan was still being worked. UV_COUNTED_AT
+                # names the one status that means the UVs are really there.
+                if uv_value and float(uv_value) > 0 and status_key == UV_COUNTED_AT:
                     bucket["uv_value_sum"] += float(uv_value)
 
         month_total = _empty_plan_bucket()
