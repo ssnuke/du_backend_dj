@@ -69,8 +69,12 @@ def get_week_info_friday_to_friday(now: datetime | None = None, week_number: int
         # Week 1 starts at first_week_start, Week 2 at first_week_start + 7 days, etc.
         week_start = first_week_start + timedelta(weeks=(week_number - 1))
         
-        # Week ends next Friday at 11:30 PM (7 days + 2 hours after start)
-        week_end = week_start + timedelta(days=7, hours=2)
+        # QNet's sales week runs Friday 21:30 to the following Friday 21:29 —
+        # see the Sales Months calendar. This was +7d2h, i.e. ending Friday
+        # 23:30, which ran two hours PAST the point the next week had already
+        # started: every pair of consecutive weeks overlapped, and anything
+        # logged on a Friday between 21:30 and 23:30 fell into both.
+        week_end = week_start + timedelta(days=7) - timedelta(seconds=1)
         
         return week_number, year, week_start, week_end
     
@@ -112,7 +116,12 @@ def get_week_info_friday_to_friday(now: datetime | None = None, week_number: int
     
     # Calculate actual week start and end
     week_start = first_week_start + timedelta(weeks=weeks_passed)
-    week_end = week_start + timedelta(days=7, hours=2)
+    # QNet's sales week runs Friday 21:30 to the following Friday 21:29 — see
+    # the Sales Months calendar. It was +7d2h, i.e. ending Friday 23:30, which
+    # ran two hours PAST the point the next week had already started: every
+    # pair of consecutive weeks overlapped, and anything logged on a Friday
+    # between 21:30 and 23:30 was counted in both.
+    week_end = week_start + timedelta(days=7) - timedelta(seconds=1)
     
     return week_number, current_year, week_start, week_end
 
