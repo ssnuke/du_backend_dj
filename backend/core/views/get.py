@@ -1092,11 +1092,33 @@ class GetMonthlyPlanSummary(APIView):
                         info_weekly[wn] += 1
                         break
 
+        # UVs per week, from the UVDetail ledger rather than from plan
+        # uv_values. Same reasoning as infos: the "by week" strips count the
+        # records themselves, and UVDetail is what every weekly UV target and
+        # dashboard total in the app is measured against. Bucketed on the same
+        # Friday->Friday window UVs are counted on everywhere else.
+        uv_weekly = {wn: 0.0 for wn, _, _ in info_windows}
+        if info_windows and member_ids and not plan_filters_active:
+            span_lo = min(lo for _, lo, _ in info_windows)
+            span_hi = max(hi for _, _, hi in info_windows)
+            for uv_dt, uv_count in UVDetail.objects.filter(
+                ir_id__in=list(member_ids),
+                uv_date__gte=span_lo,
+                uv_date__lte=span_hi,
+            ).values_list("uv_date", "uv_count"):
+                for wn, lo, hi in info_windows:
+                    if lo <= uv_dt <= hi:
+                        uv_weekly[wn] += float(uv_count or 0)
+                        break
+        uv_weekly = {wn: round(v, 2) for wn, v in uv_weekly.items()}
+
         return Response({
             "month": month,
             "year": year,
             "info_weekly": info_weekly,
             "info_month_total": sum(info_weekly.values()),
+            "uv_weekly": uv_weekly,
+            "uv_month_total": round(sum(uv_weekly.values()), 2),
             "weeks": [
                 {
                     "week_number": w["week_number"],

@@ -1,7 +1,7 @@
 import datetime
 from django.test import TestCase, override_settings
 from django.utils import timezone
-from core.models import (Ir, AccessLevel, PlanDetail, Team, TeamMember, TeamRole)
+from core.models import (Ir, AccessLevel, PlanDetail, UVDetail, Team, TeamMember, TeamRole)
 
 
 LOCMEM = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
@@ -109,6 +109,39 @@ class PlanModeAndUl2FilterTests(TestCase):
         self.assertFalse(self.summary(presented_by="MUL2A")["infos_apply_to_filter"])
         self.assertFalse(self.summary(plan_mode="virtual")["infos_apply_to_filter"])
 
+
+    # ── UVs by week ──────────────────────────────────────────────────────
+    def test_uv_weekly_comes_from_the_uv_ledger_not_from_plan_values(self):
+        """
+        The by-week strips count the records themselves — infos from
+        InfoDetail, plans from PlanDetail, UVs from UVDetail. A plan carrying
+        a uv_value is not a UV record and must not appear here.
+        """
+        UVDetail.objects.create(ir=self.owner, ir_name="x", uv_date=self.when, uv_count=6)
+        UVDetail.objects.create(ir=self.owner, ir_name="x", uv_date=self.when, uv_count=1.5)
+        PlanDetail.objects.create(ir=self.owner, plan_date=self.when, plan_name="not a UV",
+                                  status="uvs_on_counter", uv_value=99)
+        data = self.summary()
+        self.assertEqual(data["uv_month_total"], 7.5)
+        self.assertEqual(sum(data["uv_weekly"].values()), 7.5)
+
+    def test_uv_weekly_keeps_halves_rather_than_rounding_to_whole(self):
+        UVDetail.objects.create(ir=self.owner, ir_name="x", uv_date=self.when, uv_count=2.5)
+        self.assertEqual(self.summary()["uv_month_total"], 2.5)
+
+    def test_uv_weekly_is_scoped_to_the_viewers_people(self):
+        outsider = Ir.objects.create(ir_id="MOUT", ir_name="Outsider", ir_email="o@t.t",
+                                     ir_password="x", ir_access_level=AccessLevel.IR, status=True)
+        UVDetail.objects.create(ir=outsider, ir_name="x", uv_date=self.when, uv_count=50)
+        self.assertEqual(self.summary()["uv_month_total"], 0)
+
+    def test_uv_weekly_is_withheld_when_a_plan_filter_is_active(self):
+        """UVs carry no UL2 or plan mode, same as infos, so a filtered view
+        cannot answer with them."""
+        UVDetail.objects.create(ir=self.owner, ir_name="x", uv_date=self.when, uv_count=6)
+        self.assertEqual(self.summary()["uv_month_total"], 6)
+        self.assertEqual(self.summary(presented_by="MUL2A")["uv_month_total"], 0)
+
     def test_uv_sum_is_not_double_counted_across_week_and_mode_buckets(self):
         PlanDetail.objects.create(ir=self.owner, presented_by=self.ul2_a,
                                   plan_date=self.when, plan_name="UV",
@@ -205,3 +238,4 @@ class PlanPartialUpdateTests(TestCase):
         self.assertEqual(r.status_code, 400)
         self.plan.refresh_from_db()
         self.assertEqual(self.plan.plan_mode, "virtual")
+
