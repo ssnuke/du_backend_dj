@@ -32,6 +32,7 @@ from core.models import (
     Sticker,
     StickerPack,
     StickerPackSubscription,
+    TeamMember,
 )
 from core.utils.audio_transcode import SKIP_TRANSCODE_MIMES, transcode_voice_note
 
@@ -573,8 +574,11 @@ class ChatRoomMembersAdd(APIView):
         if missing:
             return Response({"detail": f"Invalid member IDs: {', '.join(missing)}"}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Same set the picker offers, so it can never show somebody the add
+        # then refuses — the exact mismatch this endpoint had.
+        reachable = get_chat_reachable_ids(requester)
         for member in members:
-            if not requester.can_view_ir(member):
+            if member.ir_id not in reachable:
                 return Response({"detail": f"Not authorized to add {member.ir_id} to room"}, status=status.HTTP_403_FORBIDDEN)
 
         existing_member_ids = set(
@@ -1036,6 +1040,83 @@ def _get_upline_irs(requester, allowed_levels):
     return Ir.objects.filter(ir_id__in=upline_ids, status=True)
 
 
+def get_chat_reachable_ids(requester):
+    """
+    Everyone `requester` may put in a chat room.
+
+    ONE definition, shared by the candidate search (ChatCandidates) and the
+    add gate (ChatRoomMembersAdd). They used to disagree: the search looked
+    only at the hierarchy subtree while the gate also allowed team members,
+    so a team member sponsored in another branch was addable but could not be
+    found in the picker — and nobody below them was reachable at all.
+
+    Reach is "who I can already see, plus everyone under them". If an LDC can
+    see and manage a team member, the people that member sponsors are part of
+    the same working group and belong in the same conversations.
+    """
+    level = requester.ir_access_level
+
+    if level == AccessLevel.ADMIN:
+        return set(Ir.objects.filter(status=True).values_list("ir_id", flat=True))
+
+    # GC/PRO sees their own line only — the handful of people directly beneath
+    # them — plus their LDC. IR sees nobody: they are in conversations because
+    # somebody added them, not because they assemble groups. Team membership
+    # is deliberately NOT part of either: these roles sit inside big teams, and
+    # counting the team would hand a junior IR the whole roster and every
+    # downline hanging off it.
+    if level == AccessLevel.GC:
+        base = set(requester.get_subtree_irs().values_list("ir_id", flat=True))
+        base |= set(_get_upline_irs(requester, [AccessLevel.LDC]).values_list("ir_id", flat=True))
+        base.discard(requester.ir_id)
+        return base
+
+    if level >= AccessLevel.IR:
+        return set()
+
+    # ── CTC / LDC / LS: reached DOWNWARD, and their downlines come too ──
+    # Expanding by subtree only makes sense going down. Doing it for upline
+    # contacts would pull in everything beneath them — an LDC's upline CTC
+    # has the whole org below them, so that turned "my people" into
+    # "everyone".
+    downward = set(requester.get_subtree_irs().values_list("ir_id", flat=True))
+
+    # Teams they lead or belong to — the half the search was missing, and the
+    # reason people under a team member were unreachable.
+    my_team_ids = TeamMember.objects.filter(ir=requester).values_list("team_id", flat=True)
+    downward |= set(
+        TeamMember.objects.filter(team_id__in=my_team_ids).values_list("ir_id", flat=True)
+    )
+
+    # ── plus everyone beneath those people ──
+    # Paths that are prefixes of other paths are dropped first, so the OR
+    # below stays small rather than carrying one clause per person.
+    paths = sorted(
+        Ir.objects.filter(ir_id__in=downward).exclude(hierarchy_path="")
+        .values_list("hierarchy_path", flat=True)
+    )
+    roots = []
+    for path in paths:
+        if not any(path.startswith(r) for r in roots):
+            roots.append(path)
+    if roots:
+        q = Q()
+        for r in roots:
+            q |= Q(hierarchy_path__startswith=r)
+        downward |= set(Ir.objects.filter(q).values_list("ir_id", flat=True))
+
+    # ── contacts reached UPWARD, on their own only ──
+    base = downward
+    if level == AccessLevel.LS:
+        base |= set(_get_upline_irs(requester, [AccessLevel.LDC, AccessLevel.CTC]).values_list("ir_id", flat=True))
+    elif level == AccessLevel.LDC:
+        base |= set(_get_upline_irs(requester, [AccessLevel.CTC]).values_list("ir_id", flat=True))
+    base |= set(Ir.objects.filter(ir_access_level=AccessLevel.ADMIN, status=True).values_list("ir_id", flat=True))
+
+    base.discard(requester.ir_id)
+    return base
+
+
 class ChatCandidates(APIView):
     def get(self, request):
         requester_ir_id = request.GET.get("requester_ir_id")
@@ -1055,31 +1136,13 @@ class ChatCandidates(APIView):
         if not requester:
             return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
 
-        base_qs = requester.get_viewable_irs().filter(status=True).exclude(ir_id=requester.ir_id)
-
-        # LS can also message their upline LDCs and CTCs
-        # LDC can also message their upline CTCs and Admin
-        if requester.ir_access_level == AccessLevel.LS:
-            upline_qs = _get_upline_irs(requester, [AccessLevel.LDC, AccessLevel.CTC])
-            admin_qs = Ir.objects.filter(ir_access_level=AccessLevel.ADMIN, status=True)
-            candidates_qs = (base_qs | upline_qs | admin_qs).distinct()
-        elif requester.ir_access_level == AccessLevel.LDC:
-            # Use subtree directly rather than get_viewable_irs() to avoid queryset
-            # union chaining issues; then add upline contacts.
-            downline_qs = requester.get_subtree_irs().filter(status=True).exclude(ir_id=requester.ir_id)
-            upline_qs = _get_upline_irs(requester, [AccessLevel.CTC])
-            admin_qs = Ir.objects.filter(ir_access_level=AccessLevel.ADMIN, status=True)
-            candidates_qs = (downline_qs | upline_qs | admin_qs).distinct()
-        elif requester.ir_access_level == AccessLevel.CTC:
-            viewable_ids = list(requester.get_viewable_irs().filter(status=True).exclude(ir_id=requester.ir_id).values_list("ir_id", flat=True))
-            admin_qs = Ir.objects.filter(ir_access_level=AccessLevel.ADMIN, status=True)
-            candidates_qs = (Ir.objects.filter(ir_id__in=viewable_ids) | admin_qs).distinct()
-        elif requester.ir_access_level == AccessLevel.GC:
-            downline_qs = requester.get_subtree_irs().filter(status=True).exclude(ir_id=requester.ir_id)
-            upline_qs = _get_upline_irs(requester, [AccessLevel.LDC])
-            candidates_qs = (downline_qs | upline_qs).distinct()
-        else:
-            candidates_qs = base_qs
+        # One definition, shared with ChatRoomMembersAdd — see
+        # get_chat_reachable_ids. Previously this listed only the hierarchy
+        # subtree, so a team member from another branch was addable but
+        # unfindable, and nobody below them was reachable at all.
+        candidates_qs = Ir.objects.filter(
+            ir_id__in=get_chat_reachable_ids(requester), status=True
+        )
 
         if query:
             candidates_qs = candidates_qs.filter(
