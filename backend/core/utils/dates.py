@@ -1,3 +1,4 @@
+import calendar
 from datetime import datetime, timedelta
 import pytz
 
@@ -158,13 +159,44 @@ def get_week_info_monday_to_sunday(
     return week_num, yr, plan_start, plan_end
 
 
+def get_calendar_month_bounds(month: int, year: int) -> tuple[datetime, datetime]:
+    """
+    The Gregorian calendar month itself, IST midnight to midnight — ground
+    truth for "which month does this day belong to", independent of either
+    week cycle.
+
+    Used to clip week-bucketed queries to real calendar days. Without this,
+    a week that straddles two months donated its WHOLE span to whichever
+    month its first day fell in: the week of Mon 31 Aug – Sun 06 Sep counted
+    all six September days as August, and symmetrically the week before it
+    (Mon 27 Jul – Sun 02 Aug) counted August's first two days as July. Every
+    month boundary had this on both ends.
+    """
+    last_day = calendar.monthrange(year, month)[1]
+    month_start = ist(year, month, 1, 0, 0, 0)
+    month_end = ist(year, month, last_day, 23, 59, 59)
+    return month_start, month_end
+
+
 def get_weeks_in_month(month: int, year: int) -> list[dict]:
     """
-    All (Friday-anchored) weeks whose Monday-Sunday plan window
-    (get_week_info_monday_to_sunday) falls in the given calendar month/year.
+    Every week that TOUCHES the given calendar month at all — on either
+    cycle (Monday-Sunday plan weeks or Friday-Friday info/UV weeks) — not
+    just the weeks that start in it.
+
+    This used to select only weeks whose plan window started in the month,
+    which silently misattributed whole weeks across a boundary (see
+    get_calendar_month_bounds). The fix is calendar-day clipping at the
+    query level in the callers; this function's job changed accordingly —
+    a boundary week has to appear in BOTH the month it starts in and the one
+    it ends in, or the days on one side would have no bucket to land in at
+    all and would simply vanish from that month's total. Checking against
+    both cycles (rather than only the plan cycle) means a week is never
+    missing from a month whose data it genuinely holds, even though the two
+    cycles' boundaries land a few hours apart from each other.
 
     A week is numbered off the Friday anchor of ITS OWN week-year, but the
-    calendar month its plan window actually falls in can differ from that
+    calendar month its window actually falls in can differ from that
     week-year near year boundaries — so this scans week numbers across the
     three adjacent week-year anchors (year-1, year, year+1) rather than
     assuming week numbers 1..52 of `year` alone would cover it.
@@ -180,7 +212,15 @@ def get_weeks_in_month(month: int, year: int) -> list[dict]:
     Returns weeks sorted ascending by start date, each as:
         {"week_number": int, "year": int, "start": datetime, "end": datetime,
          "label": str}
+    The "start"/"end" given are the week's PLAN (Monday-Sunday) window —
+    callers needing the info/UV window recompute it themselves from
+    week_number/year, same as before.
     """
+    month_start, month_end = get_calendar_month_bounds(month, year)
+
+    def overlaps(a_start, a_end):
+        return a_start <= month_end and a_end >= month_start
+
     weeks = []
     seen_dates = set()
     for anchor_year in (year, year - 1, year + 1):
@@ -188,7 +228,10 @@ def get_weeks_in_month(month: int, year: int) -> list[dict]:
             _, wk_year, plan_start, plan_end = get_week_info_monday_to_sunday(
                 week_number=week_num, year=anchor_year
             )
-            if plan_start.month == month and plan_start.year == year:
+            _, _, info_start, info_end = get_week_info_friday_to_friday(
+                week_number=week_num, year=anchor_year
+            )
+            if overlaps(plan_start, plan_end) or overlaps(info_start, info_end):
                 date_key = (plan_start.date(), plan_end.date())
                 if date_key in seen_dates:
                     continue
