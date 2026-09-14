@@ -485,6 +485,55 @@ class Ir(models.Model):
 
         return False
 
+    def get_editable_irs_for_pipeline(self):
+        """
+        Queryset companion to can_add_data_for_ir, restricted to the IRs
+        whose Pipeline Tracker stats this IR may actually SAVE — not merely
+        view. get_viewable_irs_for_name_list (below) answers a broader
+        question and populates the Pipeline Tracker's "select IR" picker,
+        but every use of that picker leads straight to an edit form with no
+        read-only mode — so offering someone from the wider view set who
+        fails the narrower edit check meant the picker could hand you
+        somebody, let you type numbers in, and then 403 on Save with no
+        warning up front.
+
+        This was already live for an LDC: their VIEW reaches their whole
+        hierarchy subtree, but their EDIT permission is members of teams
+        THEY created — a real gap whenever an LDC's subtree includes people
+        outside those teams. It would have hit a non-pocket-head GC the
+        moment Settings started offering them this screen, since GC's VIEW
+        is the same "whole subtree" while GC's EDIT is pocket-head-gated.
+        """
+        from core.models import Team, TeamMember
+
+        if self.ir_access_level == AccessLevel.ADMIN:
+            return Ir.objects.filter(status=True)
+
+        if self.ir_access_level == AccessLevel.CTC:
+            return self.get_subtree_irs()
+
+        if self.ir_access_level == AccessLevel.LDC:
+            my_created_team_ids = Team.objects.filter(created_by=self).values_list('id', flat=True)
+            member_ids = TeamMember.objects.filter(
+                team_id__in=my_created_team_ids
+            ).values_list('ir_id', flat=True)
+            return Ir.objects.filter(ir_id__in=member_ids)
+
+        if self.ir_access_level == AccessLevel.LS:
+            my_teams = TeamMember.objects.filter(ir=self).values_list('team_id', flat=True)
+            member_ids = TeamMember.objects.filter(
+                team_id__in=my_teams
+            ).values_list('ir_id', flat=True)
+            return Ir.objects.filter(ir_id__in=member_ids)
+
+        if self.ir_access_level == AccessLevel.GC and self.is_pocket_head():
+            return self.get_subtree_irs()
+
+        # Plain IR, and a GC who isn't a pocket head: nobody but self — which
+        # the frontend already excludes from the picker (it only wants
+        # OTHER people to switch to), so this correctly yields an empty list.
+        return Ir.objects.filter(ir_id=self.ir_id)
+
     def get_viewable_irs_for_name_list(self):
         """
         Queryset companion to can_view_name_list — used for the pipeline

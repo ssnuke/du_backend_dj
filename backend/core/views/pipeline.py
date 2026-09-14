@@ -145,12 +145,20 @@ class AutoFetchPipelineStats(APIView):
 
 
 class GetViewableIRsForPipeline(APIView):
-    """Returns all IR IDs + names the requester can view pipeline stats for."""
+    """
+    Returns the IRs the requester can switch the Pipeline Tracker picker to
+    and actually SAVE edits for — get_editable_irs_for_pipeline, not the
+    broader get_viewable_irs_for_name_list. Every entry this picker offers
+    leads straight to an edit form with no read-only mode, so offering
+    someone from the wider view-only set meant a save could 403 with no
+    warning after the numbers were already typed in. See
+    get_editable_irs_for_pipeline's docstring for exactly who that was.
+    """
     def get(self, request, ir_id):
         try:
             requester = Ir.objects.get(ir_id=ir_id)
         except Ir.DoesNotExist:
             return Response({'message': 'IR not found'}, status=404)
 
-        viewable = requester.get_viewable_irs_for_name_list().values('ir_id', 'ir_name').order_by('ir_name')
+        viewable = requester.get_editable_irs_for_pipeline().values('ir_id', 'ir_name').order_by('ir_name')
         return Response(list(viewable))
