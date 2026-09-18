@@ -1298,6 +1298,7 @@ LEARN_VIDEO_CATEGORY_CHOICES = [
     ("basic_training", "Basic Training Videos"),
     ("building_blocks", "Basic Building Blocks"),
     ("growth_bites", "Growth Bites"),
+    ("master_networker", "Master Networker"),
 ]
 
 # Learn categories that are not for everyone, mapped to the LOWEST access
@@ -1307,6 +1308,8 @@ LEARN_VIDEO_CATEGORY_CHOICES = [
 # signed stream URL fetchable by id.
 RESTRICTED_LEARN_CATEGORIES = {
     "growth_bites": AccessLevel.LS,
+    # LS, LDC, CTC, Admin — same floor as Growth Bites (LS and above).
+    "master_networker": AccessLevel.LS,
 }
 
 
