@@ -7,6 +7,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.contrib.auth.hashers import make_password
 from core.utils.dates import get_current_week_start, get_saturday_friday_week_info, get_week_info_friday_to_friday, get_week_info_monday_to_sunday
+from core.views.get import invalidate_ldc_pocket_dashboard_cache
 from django.db.models import F
 
 from core.models import (
@@ -767,6 +768,11 @@ class AddInfoDetail(APIView):
                 )
                 created_ids.append(info.id)
 
+                # See invalidate_ldc_pocket_dashboard_cache's docstring: without
+                # this, the LDC's pocket screen can show a stale (too-low)
+                # count for this IR for up to 30 seconds after this write.
+                invalidate_ldc_pocket_dashboard_cache(ir, info.info_date)
+
                 # ✅ Atomic IR counter update
                 Ir.objects.filter(ir_id=ir_id).update(
                     info_count=F("info_count") + 1
@@ -884,6 +890,8 @@ class AddPlanDetail(APIView):
                 )
                 created_ids.append(plan.id)
                 created_plans.append(plan)
+
+                invalidate_ldc_pocket_dashboard_cache(ir, plan.plan_date)
 
                 # ✅ Atomic IR counter update
                 Ir.objects.filter(ir_id=ir_id).update(
@@ -1013,6 +1021,8 @@ class AddUV(APIView):
                         comments=item.get("comments")
                     )
                     uv_record_ids.append(uv_detail.id)
+
+                    invalidate_ldc_pocket_dashboard_cache(ir, uv_detail.uv_date)
                     total_uvs_added += uv_count
                 
                 # ✅ Atomic IR UV counter update

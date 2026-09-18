@@ -7,7 +7,7 @@ from django.shortcuts import get_object_or_404
 from django.db import transaction
 
 # get.py does not import put.py, so this direction is cycle-free.
-from core.views.get import get_status_manageable_irs
+from core.views.get import get_status_manageable_irs, invalidate_ldc_pocket_dashboard_cache
 
 from core.models import (
     IrId,
@@ -385,6 +385,8 @@ class UpdateInfoDetail(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
+        old_ir, old_date = info.ir, info.info_date
+
         serializer = InfoDetailSerializer(
             info,
             data=request.data,
@@ -392,6 +394,12 @@ class UpdateInfoDetail(APIView):
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
+
+        # Both the old and new date, in case the edit moved this info into a
+        # different week — see invalidate_ldc_pocket_dashboard_cache's
+        # docstring. Harmless to call twice when the date did not move.
+        invalidate_ldc_pocket_dashboard_cache(old_ir, old_date)
+        invalidate_ldc_pocket_dashboard_cache(info.ir, info.info_date)
 
         return Response(
             {
@@ -430,6 +438,8 @@ class UpdatePlanDetail(APIView):
                         status=status.HTTP_404_NOT_FOUND
                     )
 
+            old_ir, old_date = plan.ir, plan.plan_date
+
             serializer = PlanDetailSerializer(
                 plan,
                 data=request.data,
@@ -438,6 +448,8 @@ class UpdatePlanDetail(APIView):
             serializer.is_valid(raise_exception=True)
             serializer.save()
 
+            invalidate_ldc_pocket_dashboard_cache(old_ir, old_date)
+            invalidate_ldc_pocket_dashboard_cache(plan.ir, plan.plan_date)
 
             return Response(
                 {

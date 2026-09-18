@@ -5,6 +5,7 @@ from django.shortcuts import get_object_or_404
 from django.db import transaction
 import logging
 
+from core.views.get import invalidate_ldc_pocket_dashboard_cache
 from core.models import (
     IrId,
     Ir,
@@ -223,7 +224,11 @@ class DeleteInfoDetail(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
+        deleted_ir, deleted_date = info.ir, info.info_date
         info.delete()
+        # See invalidate_ldc_pocket_dashboard_cache's docstring — a deleted
+        # info can just as easily leave a stale, too-HIGH count cached.
+        invalidate_ldc_pocket_dashboard_cache(deleted_ir, deleted_date)
 
         return Response(
             {"message": f"Info detail with ID {info_id} has been deleted"},
@@ -264,7 +269,9 @@ class DeletePlanDetail(APIView):
                         status=status.HTTP_404_NOT_FOUND
                     )
             
+            deleted_ir, deleted_date = plan.ir, plan.plan_date
             plan.delete()
+            invalidate_ldc_pocket_dashboard_cache(deleted_ir, deleted_date)
 
             return Response(
                 {"message": f"Plan detail with ID {plan_id} has been deleted"},

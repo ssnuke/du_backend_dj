@@ -1934,6 +1934,78 @@ class GetManagerDashboard(APIView):
         return Response(response_body)
 
 
+def invalidate_ldc_pocket_dashboard_cache(ir, moment):
+    """
+    Drop the cached ldc_pocket_dashboard response for every LDC whose pocket
+    or whole-team totals include `ir`, for the week `moment` falls into.
+
+    GetLdcPocketDashboard's cache had a 30-second TTL and NOTHING that ever
+    actively invalidated it — so for up to 30 seconds after someone logged an
+    info, plan, or UV, their own dashboard (computed live, per request) and
+    their LDC's pocket view (served from whatever was cached before the
+    write) could show two different counts for the exact same week. That is
+    the "count is 0 on the pocket screen but the personal graph shows 4"
+    report: not a counting bug, a staleness one — the pocket screen was
+    simply answering a question from before the write happened.
+
+    Called from every Info/Plan/UV create (and should be called from any
+    future edit/delete path too, for the same reason in reverse — a deleted
+    row could just as easily leave a stale HIGHER number cached).
+
+    Deliberately invalidates for BOTH the pocketed-team and teamless-team
+    paths (PocketMember and plain TeamMember) rather than trying to work out
+    which one actually applies here — GetLdcPocketDashboard renders both
+    from the same cache entry, and invalidating a key that did not need it
+    costs one extra cheap recompute, while missing one recreates this exact
+    bug.
+
+    `moment` is the write's own date field (info_date/plan_date/uv_date), NOT
+    "now" — logging a plan for last Tuesday must invalidate LAST week's
+    cache entry, not this week's. Always resolved through the Friday-anchored
+    cycle regardless of which detail type triggered it, because that is the
+    cycle GetLdcPocketDashboard's cache key itself is numbered on (plan_done
+    inside that response is bucketed into the Friday week's Monday-Sunday
+    window, not given its own key).
+    """
+    # `moment` often comes straight from a freshly-created model instance's
+    # own field, e.g. info.info_date right after InfoDetail.objects.create()
+    # in AddInfoDetail. When the request body supplied that date as a JSON
+    # string, Django does NOT parse it into a datetime until the SQL layer —
+    # the in-memory attribute is still the raw string. Passing that string
+    # straight to get_week_info_friday_to_friday (which calls .astimezone()
+    # on it) raised AttributeError, caught by a broad except and silently
+    # skipping invalidation — which would have made this fix a no-op for
+    # every real write from the app (the frontend always sends dates as
+    # strings), while every test that built its fixture with a real
+    # datetime.now()-based object kept passing. Parsing defensively here
+    # protects every call site, not just the ones that remember to convert
+    # first.
+    if isinstance(moment, str):
+        from django.utils.dateparse import parse_datetime
+        moment = parse_datetime(moment)
+    if moment is None:
+        return
+    try:
+        week_number, year, _, _ = get_week_info_friday_to_friday(moment)
+    except Exception:
+        return
+
+    ldc_ids = set(
+        PocketMember.objects.filter(ir=ir)
+        .exclude(pocket__team__created_by_id__isnull=True)
+        .values_list("pocket__team__created_by_id", flat=True)
+    )
+    ldc_ids |= set(
+        TeamMember.objects.filter(ir=ir)
+        .exclude(team__created_by_id__isnull=True)
+        .values_list("team__created_by_id", flat=True)
+    )
+    if ldc_ids:
+        cache.delete_many([
+            f"ldc_pocket_dashboard:{ldc_id}:{week_number}:{year}" for ldc_id in ldc_ids
+        ])
+
+
 class GetLdcPocketDashboard(APIView):
     """
     Pocket-level analog of GetManagerDashboard, for an LDC's own pockets
