@@ -32,6 +32,7 @@ from core.models import (
     Sticker,
     StickerPack,
     StickerPackSubscription,
+    Team,
     TeamMember,
 )
 from core.utils.audio_transcode import SKIP_TRANSCODE_MIMES, transcode_voice_note
@@ -1074,36 +1075,50 @@ def get_chat_reachable_ids(requester):
     if level >= AccessLevel.IR:
         return set()
 
-    # ── CTC / LDC / LS: reached DOWNWARD, and their downlines come too ──
+    # ── CTC / LDC / LS: reached DOWNWARD ──
     # Expanding by subtree only makes sense going down. Doing it for upline
     # contacts would pull in everything beneath them — an LDC's upline CTC
     # has the whole org below them, so that turned "my people" into
     # "everyone".
     downward = set(requester.get_subtree_irs().values_list("ir_id", flat=True))
 
-    # Teams they lead or belong to — the half the search was missing, and the
-    # reason people under a team member were unreachable.
-    my_team_ids = TeamMember.objects.filter(ir=requester).values_list("team_id", flat=True)
-    downward |= set(
-        TeamMember.objects.filter(team_id__in=my_team_ids).values_list("ir_id", flat=True)
-    )
+    if level == AccessLevel.LS:
+        # An LS works alongside the people in the teams they belong to, but
+        # does not run them: peers are reachable as individuals, their
+        # downlines are not pulled in.
+        my_team_ids = TeamMember.objects.filter(ir=requester).values_list("team_id", flat=True)
+        downward |= set(
+            TeamMember.objects.filter(team_id__in=my_team_ids).values_list("ir_id", flat=True)
+        )
+    else:
+        # CTC / LDC: the teams they CREATED — the teams they actually run —
+        # and everyone under those members. This used to be every team they
+        # merely BELONGED to, so being a member of another leader's big team
+        # pulled that team's whole roster, plus every downline hanging off it,
+        # into the picker: "a lot more people than my visible tree".
+        created_team_ids = Team.objects.filter(created_by=requester).values_list("id", flat=True)
+        team_members = set(
+            TeamMember.objects.filter(team_id__in=created_team_ids).values_list("ir_id", flat=True)
+        )
+        downward |= team_members
 
-    # ── plus everyone beneath those people ──
+    # ── plus everyone beneath those people (CTC / LDC only) ──
     # Paths that are prefixes of other paths are dropped first, so the OR
     # below stays small rather than carrying one clause per person.
-    paths = sorted(
-        Ir.objects.filter(ir_id__in=downward).exclude(hierarchy_path="")
-        .values_list("hierarchy_path", flat=True)
-    )
-    roots = []
-    for path in paths:
-        if not any(path.startswith(r) for r in roots):
-            roots.append(path)
-    if roots:
-        q = Q()
-        for r in roots:
-            q |= Q(hierarchy_path__startswith=r)
-        downward |= set(Ir.objects.filter(q).values_list("ir_id", flat=True))
+    if level != AccessLevel.LS:
+        paths = sorted(
+            Ir.objects.filter(ir_id__in=downward).exclude(hierarchy_path="")
+            .values_list("hierarchy_path", flat=True)
+        )
+        roots = []
+        for path in paths:
+            if not any(path.startswith(r) for r in roots):
+                roots.append(path)
+        if roots:
+            q = Q()
+            for r in roots:
+                q |= Q(hierarchy_path__startswith=r)
+            downward |= set(Ir.objects.filter(q).values_list("ir_id", flat=True))
 
     # ── contacts reached UPWARD, on their own only ──
     base = downward

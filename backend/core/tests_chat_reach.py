@@ -191,3 +191,97 @@ class ReachByRoleTests(TestCase):
     def test_nobody_reaches_themselves(self):
         for p in (self.ctc, self.ldc, self.ls, self.gc):
             self.assertNotIn(p.ir_id, self.reach(p))
+
+
+@override_settings(CACHES=LOCMEM)
+class ReachIsNotWiderThanTheTreeTests(TestCase):
+    """
+    Reported: the chat picker showed far more people than the requester's
+    visible tree. Cause: team reach counted every team the requester merely
+    BELONGED to, so being a member of another leader's big team pulled that
+    team's whole roster — and every downline under each member — in.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        def mk(i, n, lvl, parent=None):
+            return Ir.objects.create(ir_id=i, ir_name=n, ir_email=f"{i}@t.t", ir_password="x",
+                                     ir_access_level=lvl, status=True, parent_ir=parent)
+        cls.ctc = mk("WCTC", "CTC", AccessLevel.CTC)
+        cls.me = mk("WME", "Me (LDC)", AccessLevel.LDC, cls.ctc)
+        cls.my_member = mk("WMINE", "In a team I created", AccessLevel.IR, cls.ctc)
+        cls.my_member_kid = mk("WMINEKID", "Under my team member", AccessLevel.IR, cls.my_member)
+
+        # Another LDC runs a big team that I am merely a member of.
+        cls.other_ldc = mk("WOTHER", "Other LDC", AccessLevel.LDC, cls.ctc)
+        cls.their_member = mk("WTHEIRS", "In their team", AccessLevel.IR, cls.other_ldc)
+        cls.their_kid = mk("WTHEIRKID", "Under their team member", AccessLevel.IR, cls.their_member)
+
+        mine = Team.objects.create(name="Mine", created_by=cls.me)
+        TeamMember.objects.create(team=mine, ir=cls.me, role=TeamRole.LDC)
+        TeamMember.objects.create(team=mine, ir=cls.my_member, role=TeamRole.IR)
+
+        theirs = Team.objects.create(name="Theirs", created_by=cls.other_ldc)
+        TeamMember.objects.create(team=theirs, ir=cls.other_ldc, role=TeamRole.LDC)
+        TeamMember.objects.create(team=theirs, ir=cls.me, role=TeamRole.IR)     # I just belong
+        TeamMember.objects.create(team=theirs, ir=cls.their_member, role=TeamRole.IR)
+
+    def reach(self, who):
+        from core.views.chat import get_chat_reachable_ids
+        return get_chat_reachable_ids(who)
+
+    def test_another_leaders_team_roster_is_not_pulled_in(self):
+        got = self.reach(self.me)
+        for p in (self.their_member, self.their_kid, self.other_ldc):
+            self.assertNotIn(p.ir_id, got, f"{p.ir_name} is not in my tree or my teams")
+
+    def test_a_team_i_created_and_everyone_under_its_members_still_is(self):
+        got = self.reach(self.me)
+        self.assertIn(self.my_member.ir_id, got)
+        self.assertIn(self.my_member_kid.ir_id, got)
+
+    def test_the_picker_endpoint_agrees(self):
+        r = self.client.get("/api/chat_candidates/", {"requester_ir_id": self.me.ir_id, "limit": 100})
+        found = {c["ir_id"] for c in r.json()["candidates"]}
+        self.assertNotIn(self.their_member.ir_id, found)
+        self.assertIn(self.my_member_kid.ir_id, found)
+
+
+@override_settings(CACHES=LOCMEM)
+class WebsocketAddUsesTheSameGateTests(TestCase):
+    """
+    Reported: someone was added to a group and never appeared. The HTTP add
+    endpoint had been moved onto the shared reach rule, but the WebSocket add
+    (the one the app actually uses) still ran the old can_view_ir rule, so
+    the picker could offer somebody the socket then refused — and the refusal
+    only comes back as an error frame the app did not display.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        def mk(i, n, lvl, parent=None):
+            return Ir.objects.create(ir_id=i, ir_name=n, ir_email=f"{i}@t.t", ir_password="x",
+                                     ir_access_level=lvl, status=True, parent_ir=parent)
+        cls.ctc = mk("SCTC", "CTC", AccessLevel.CTC)
+        cls.ldc = mk("SLDC", "LDC", AccessLevel.LDC, cls.ctc)
+        # Sponsored under another branch, but in a team the LDC created: the
+        # reach rule allows them; can_view_ir's subtree check does not.
+        cls.branch = mk("SBRANCH", "Other branch", AccessLevel.LS, cls.ctc)
+        team = Team.objects.create(name="T", created_by=cls.ldc)
+        TeamMember.objects.create(team=team, ir=cls.ldc, role=TeamRole.LDC)
+        TeamMember.objects.create(team=team, ir=cls.branch, role=TeamRole.IR)
+
+        from core.models import ChatRoom, ChatRoomMember, ChatRoomType
+        cls.room = ChatRoom.objects.create(room_type=ChatRoomType.GROUP, room_name="G",
+                                           created_by=cls.ldc)
+        ChatRoomMember.objects.create(room=cls.room, ir=cls.ldc)
+
+    def test_the_socket_gate_accepts_whoever_the_picker_offers(self):
+        from core.views.chat import get_chat_reachable_ids
+        import inspect
+        from core.chat import consumers
+        src = inspect.getsource(consumers.ChatConsumer._add_members)
+        code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+        self.assertIn("get_chat_reachable_ids(requester)", code)
+        self.assertNotIn(".can_view_ir(", code, "the old rule must be gone from the socket path")
+        self.assertIn(self.branch.ir_id, get_chat_reachable_ids(self.ldc))

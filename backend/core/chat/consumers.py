@@ -10,7 +10,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from core.models import AccessLevel, ChatMessage, ChatMessageReaction, ChatMessageReceipt, ChatRoom, ChatRoomMember, Ir
-from core.views.chat import invalidate_chat_rooms_cache, _room_member_ir_ids, _can_moderate_room
+from core.views.chat import invalidate_chat_rooms_cache, _room_member_ir_ids, _can_moderate_room, get_chat_reachable_ids
 
 # Dedicated executor for outbound FCM network calls, kept separate from
 # Django's shared thread-sensitive executor (the one `database_sync_to_async`
@@ -619,8 +619,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if missing:
             return [], 0, f"Invalid member IDs: {', '.join(missing)}"
 
+        # Same set the picker offers and the HTTP add endpoint enforces
+        # (get_chat_reachable_ids). This path still ran the OLD can_view_ir
+        # rule, so the picker could offer somebody this then refused — and
+        # because the refusal only travels back as an {"type": "error"}
+        # frame, the person just silently failed to appear in the group.
+        reachable = get_chat_reachable_ids(requester)
         for candidate in candidates:
-            if not requester.can_view_ir(candidate):
+            if candidate.ir_id not in reachable:
                 return [], 0, f"Not authorized to add {candidate.ir_id}"
 
         existing = set(ChatRoomMember.objects.filter(room=room, ir_id__in=member_ir_ids).values_list("ir_id", flat=True))
