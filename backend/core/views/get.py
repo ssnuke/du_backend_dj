@@ -3138,6 +3138,15 @@ class GetReferrerCandidates(APIView):
         except (TypeError, ValueError):
             return Response({"detail": "Invalid limit/offset"}, status=status.HTTP_400_BAD_REQUEST)
 
+        # The requester themselves is always a valid referrer — they can
+        # personally have referred the person they're registering — but
+        # neither branch below produces that row on its own: the LDC branch
+        # excluded the requester from their own team roster, and a downline
+        # query can never include the person at its root by definition. Both
+        # branches OR the requester's own row back in explicitly, so a search
+        # for their own name/ID actually finds them.
+        self_qs = Ir.objects.filter(ir_id=requester.ir_id)
+
         if requester.ir_access_level == AccessLevel.LDC:
             team_ids = TeamMember.objects.filter(ir=requester).values_list('team_id', flat=True)
             member_ids = (
@@ -3147,9 +3156,9 @@ class GetReferrerCandidates(APIView):
                 .values_list('ir_id', flat=True)
                 .distinct()
             )
-            queryset = Ir.objects.filter(ir_id__in=member_ids)
+            queryset = Ir.objects.filter(ir_id__in=member_ids) | self_qs
         else:
-            queryset = requester.get_all_downlines()
+            queryset = requester.get_all_downlines() | self_qs
 
         if search:
             queryset = queryset.filter(Q(ir_name__icontains=search) | Q(ir_id__icontains=search))
