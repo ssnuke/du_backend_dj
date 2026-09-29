@@ -609,6 +609,180 @@ class ChatRoomMembersAdd(APIView):
         )
 
 
+def _leave_room_db(room, requester, new_owner_ir_id=None):
+    """
+    A member removing themselves from a group. If they're the group's
+    owner, they cannot simply vanish and leave the group ownerless — the
+    caller must supply new_owner_ir_id, and this hands the group to that
+    member in the same transaction before removing the leaver. A one-member
+    group (the owner, alone) has nobody to hand it to; that's a delete, not
+    a leave.
+
+    Direct chats have no "leave" of their own — ChatRoomDelete already lets
+    either participant remove their own copy of a direct chat.
+
+    Returns (removed_ir_id, new_owner_data_or_None, new_member_count, error).
+    """
+    if room.room_type != ChatRoomType.GROUP:
+        return None, None, None, "Direct chats don't have a leave option — delete the chat instead"
+
+    current_ids = set(ChatRoomMember.objects.filter(room=room).values_list("ir_id", flat=True))
+    is_owner = room.created_by_id == requester.ir_id
+
+    new_owner = None
+    if is_owner:
+        if len(current_ids) == 1:
+            return None, None, None, "You're the only member — delete the group instead of leaving it"
+        if not new_owner_ir_id:
+            return None, None, None, "Assign the group to another member before leaving"
+        if new_owner_ir_id == requester.ir_id:
+            return None, None, None, "Choose someone else to hand the group to"
+        if new_owner_ir_id not in current_ids:
+            return None, None, None, "That person isn't in the group"
+        try:
+            new_owner = Ir.objects.get(ir_id=new_owner_ir_id, status=True)
+        except Ir.DoesNotExist:
+            return None, None, None, "That person isn't in the group"
+
+    with transaction.atomic():
+        if new_owner:
+            room.created_by = new_owner
+            room.save(update_fields=["created_by", "updated_at"])
+        ChatRoomMember.objects.filter(room=room, ir=requester).delete()
+        if not new_owner:
+            room.save(update_fields=["updated_at"])
+
+    invalidate_chat_rooms_cache(current_ids)
+
+    new_owner_data = None
+    if new_owner:
+        new_owner_data = {"ir_id": new_owner.ir_id, "ir_name": new_owner.chat_name}
+    return requester.ir_id, new_owner_data, len(current_ids) - 1, None
+
+
+def _transfer_ownership_db(room, requester, new_owner_ir_id):
+    """
+    Hand a group to another member without the current owner leaving.
+    Same moderator rule as removing members (_can_moderate_room): the
+    owner, or an Admin who is themselves in the group.
+
+    Returns (new_owner_data_or_None, error).
+    """
+    if room.room_type != ChatRoomType.GROUP:
+        return None, "Direct chats don't have an owner to transfer"
+
+    if not _can_moderate_room(room, requester):
+        return None, "Only the group owner or an Admin can transfer ownership"
+
+    if not new_owner_ir_id:
+        return None, "new_owner_ir_id is required"
+
+    if new_owner_ir_id == room.created_by_id:
+        return None, "Already the owner"
+
+    if not ChatRoomMember.objects.filter(room=room, ir_id=new_owner_ir_id).exists():
+        return None, "That person isn't in the group"
+
+    try:
+        new_owner = Ir.objects.get(ir_id=new_owner_ir_id, status=True)
+    except Ir.DoesNotExist:
+        return None, "That person isn't in the group"
+
+    room.created_by = new_owner
+    room.save(update_fields=["created_by", "updated_at"])
+    invalidate_chat_rooms_cache(_room_member_ir_ids(room.id))
+
+    return {"ir_id": new_owner.ir_id, "ir_name": new_owner.chat_name}, None
+
+
+def _broadcast_room_owner_changed(room, new_owner_data):
+    try:
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"chat_room_{room.id}",
+            {
+                "type": "room_updated",
+                "room": {
+                    "id": room.id,
+                    "room_name": room.room_name,
+                    "created_by_ir_id": new_owner_data["ir_id"],
+                    "updated_at": room.updated_at.isoformat(),
+                },
+            },
+        )
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "Failed to broadcast ownership change for room %s", room.id
+        )
+
+
+class ChatRoomLeave(APIView):
+    """
+    A member leaving a group of their own accord. Unlike
+    ChatRoomMembersRemove (someone else removing them), any member — owner
+    included, given a successor — may call this on themselves; there is no
+    moderator check here because nobody's permission is needed to leave a
+    room you're already in.
+    """
+    def post(self, request, room_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        new_owner_ir_id = request.data.get("new_owner_ir_id")
+
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        room = get_object_or_404(ChatRoom, id=room_id)
+        if not _is_room_member(room, requester):
+            return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        removed_ir_id, new_owner_data, new_member_count, error = _leave_room_db(
+            room, requester, new_owner_ir_id
+        )
+        if error:
+            return Response({"detail": error}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                f"chat_room_{room.id}",
+                {
+                    "type": "members_removed",
+                    "removed": [removed_ir_id],
+                    "new_member_count": new_member_count,
+                    "by_ir_id": requester.ir_id,
+                },
+            )
+        except Exception:
+            logging.getLogger(__name__).exception("Failed to broadcast leave for room %s", room.id)
+        if new_owner_data:
+            _broadcast_room_owner_changed(room, new_owner_data)
+
+        return Response({"message": "Left group", "new_owner": new_owner_data})
+
+
+class ChatRoomTransferOwnership(APIView):
+    def post(self, request, room_id):
+        requester_ir_id = request.data.get("requester_ir_id")
+        new_owner_ir_id = request.data.get("new_owner_ir_id")
+
+        requester = _get_ir(requester_ir_id)
+        if not requester:
+            return Response({"detail": "requester_ir_id is invalid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        room = get_object_or_404(ChatRoom, id=room_id)
+        if not _is_room_member(room, requester):
+            return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        new_owner_data, error = _transfer_ownership_db(room, requester, new_owner_ir_id)
+        if error:
+            return Response({"detail": error}, status=status.HTTP_400_BAD_REQUEST)
+
+        _broadcast_room_owner_changed(room, new_owner_data)
+
+        return Response({"message": "Ownership transferred", "new_owner": new_owner_data})
+
+
 class ChatRoomMembersRemove(APIView):
     def post(self, request, room_id):
         requester_ir_id = request.data.get("requester_ir_id")
