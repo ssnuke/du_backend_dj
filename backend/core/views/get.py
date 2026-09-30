@@ -238,6 +238,65 @@ class GetNewRegistrationsReport(APIView):
 
 
 # ---------------------------------------------------
+# VISIBILITY REPORT (internal use — Admin only)
+# ---------------------------------------------------
+class GetVisibilityReport(APIView):
+    """
+    Everyone a given IR can see, i.e. `ir_id.get_viewable_irs()` — the exact
+    same rule the rest of the app already enforces (it's what /api/irs/ uses
+    for its own requester_ir_id), just exposed as its own table-shaped
+    report instead of folded into a general-purpose list endpoint.
+
+    The distinction from /api/irs/ that made a separate endpoint worth
+    having: there, requester_ir_id IS whose view you get, with no
+    restriction on who can ask for it — anyone who knows an ID can pass it
+    and see what that person sees. Here, ir_id (whose visibility to
+    inspect) and requester_ir_id (who's asking) are separate, and only an
+    Admin may ask — this is an audit tool for looking at someone else's
+    line of visibility, not a way for anyone to check their own.
+    """
+    def get(self, request):
+        requester_ir_id = request.GET.get("requester_ir_id")
+        requester = Ir.objects.filter(ir_id=requester_ir_id).first() if requester_ir_id else None
+        if not requester or requester.ir_access_level != AccessLevel.ADMIN:
+            return Response(
+                {"detail": "Not authorized. Admin only."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        target_ir_id = request.GET.get("ir_id")
+        if not target_ir_id:
+            return Response({"detail": "ir_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        target = Ir.objects.filter(ir_id=target_ir_id).first()
+        if not target:
+            return Response({"detail": "ir_id not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        visible = target.get_viewable_irs().order_by("ir_name")
+
+        columns = ["ir_id", "ir_name", "role", "email", "status"]
+        rows = [
+            {
+                "ir_id": ir.ir_id,
+                "ir_name": ir.ir_name,
+                "role": AccessLevel.get_role_name(ir.ir_access_level),
+                "email": ir.ir_email,
+                "status": "active" if ir.status else "inactive",
+            }
+            for ir in visible
+        ]
+
+        return Response({
+            "ir_id": target.ir_id,
+            "ir_name": target.ir_name,
+            "role": AccessLevel.get_role_name(target.ir_access_level),
+            "columns": columns,
+            "rows": rows,
+            "total": len(rows),
+        })
+
+
+# ---------------------------------------------------
 # GET ALL TEAMS (WITH AGGREGATES & ROLE-BASED FILTER)
 # ---------------------------------------------------
 class GetAllTeams(APIView):
