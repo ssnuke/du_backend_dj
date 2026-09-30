@@ -173,6 +173,71 @@ class GetAllRegisteredIR(APIView):
 
 
 # ---------------------------------------------------
+# NEW REGISTRATIONS REPORT (internal use — Admin only)
+# ---------------------------------------------------
+class GetNewRegistrationsReport(APIView):
+    """
+    Every registered IR with who referred them (their parent_ir — the
+    "Referrer (Parent)" field on the registration form), shaped for a table:
+    a fixed column order plus one row per IR. Not exposed anywhere in the
+    app's own UI — this is for pulling the data directly, e.g. into a
+    spreadsheet.
+
+    Admin only. This is a full roster with everyone's referrer chain, not
+    scoped to any one person's downline the way the rest of the app's
+    endpoints are — there's no narrower role for which handing out that
+    whole picture is appropriate.
+
+    Optional ?start_date=YYYY-MM-DD / ?end_date=YYYY-MM-DD filter on
+    started_date (inclusive). Omit both for every registration on file.
+    Newest first.
+    """
+    def get(self, request):
+        requester_ir_id = request.GET.get("requester_ir_id")
+        requester = Ir.objects.filter(ir_id=requester_ir_id).first() if requester_ir_id else None
+        if not requester or requester.ir_access_level != AccessLevel.ADMIN:
+            return Response(
+                {"detail": "Not authorized. Admin only."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        irs = Ir.objects.select_related("parent_ir").all()
+
+        start_date = parse_date(request.GET.get("start_date") or "")
+        if request.GET.get("start_date") and not start_date:
+            return Response({"detail": "start_date must be YYYY-MM-DD"}, status=status.HTTP_400_BAD_REQUEST)
+        end_date = parse_date(request.GET.get("end_date") or "")
+        if request.GET.get("end_date") and not end_date:
+            return Response({"detail": "end_date must be YYYY-MM-DD"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if start_date:
+            irs = irs.filter(started_date__gte=start_date)
+        if end_date:
+            irs = irs.filter(started_date__lte=end_date)
+
+        irs = irs.order_by("-started_date", "-ir_id")
+
+        columns = [
+            "ir_id", "ir_name", "role", "email", "registered_on",
+            "referrer_ir_id", "referrer_name",
+        ]
+        rows = [
+            {
+                "ir_id": ir.ir_id,
+                "ir_name": ir.ir_name,
+                "role": AccessLevel.get_role_name(ir.ir_access_level),
+                "email": ir.ir_email,
+                "registered_on": ir.started_date.isoformat() if ir.started_date else None,
+                "referrer_ir_id": ir.parent_ir.ir_id if ir.parent_ir else None,
+                "referrer_name": ir.parent_ir.ir_name if ir.parent_ir else None,
+            }
+            for ir in irs
+        ]
+
+        return Response({"columns": columns, "rows": rows, "total": len(rows)})
+
+
+# ---------------------------------------------------
 # GET ALL TEAMS (WITH AGGREGATES & ROLE-BASED FILTER)
 # ---------------------------------------------------
 class GetAllTeams(APIView):
