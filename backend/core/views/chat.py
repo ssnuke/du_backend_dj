@@ -118,6 +118,8 @@ def _can_moderate_room(room, ir):
     return room.created_by_id == ir.ir_id or ir.ir_access_level == AccessLevel.ADMIN
 
 
+INACTIVE_ROOM_DETAIL = "This group is inactive — its owner was removed, so it is read-only."
+
 ROOM_LIST_CACHE_TTL = 30  # seconds — a safety net; correctness comes from explicit invalidation below
 ROOM_LIST_CACHE_KEY_FMT = "chat_rooms:{ir_id}"
 
@@ -235,6 +237,7 @@ def _serialize_room(room, requester=None, *, precomputed=None):
         "room_name": room.room_name,
         "image_url": getattr(room, "image_url", None),
         "category": room.category,
+        "is_active": room.is_active,
         "created_by_ir_id": room.created_by.ir_id if room.created_by else None,
         "created_at": room.created_at,
         "updated_at": room.updated_at,
@@ -689,7 +692,9 @@ def _transfer_ownership_db(room, requester, new_owner_ir_id):
         return None, "That person isn't in the group"
 
     room.created_by = new_owner
-    room.save(update_fields=["created_by", "updated_at"])
+    # Handing an archived group to a member is how it comes back to life.
+    room.is_active = True
+    room.save(update_fields=["created_by", "is_active", "updated_at"])
     invalidate_chat_rooms_cache(_room_member_ir_ids(room.id))
 
     return {"ir_id": new_owner.ir_id, "ir_name": new_owner.chat_name}, None
@@ -941,6 +946,9 @@ class ChatRoomMessages(APIView):
         room = get_object_or_404(ChatRoom, id=room_id)
         if not _is_room_member(room, requester):
             return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        if not room.is_active:
+            return Response({"detail": INACTIVE_ROOM_DETAIL}, status=status.HTTP_403_FORBIDDEN)
 
         if message_type not in ChatMessageType.values or message_type == ChatMessageType.SYSTEM:
             return Response({"detail": "Invalid message_type"}, status=status.HTTP_400_BAD_REQUEST)
@@ -1608,6 +1616,9 @@ class ChatMessageUpload(APIView):
         room = get_object_or_404(ChatRoom, id=room_id)
         if not _is_room_member(room, requester):
             return Response({"detail": "Not authorized for this room"}, status=status.HTTP_403_FORBIDDEN)
+
+        if not room.is_active:
+            return Response({"detail": INACTIVE_ROOM_DETAIL}, status=status.HTTP_403_FORBIDDEN)
 
         uploaded = request.FILES.get("file")
         file_url, mime, error = _save_chat_attachment(

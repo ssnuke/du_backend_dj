@@ -10,7 +10,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from core.models import AccessLevel, ChatMessage, ChatMessageReaction, ChatMessageReceipt, ChatRoom, ChatRoomMember, Ir
-from core.views.chat import invalidate_chat_rooms_cache, _room_member_ir_ids, _can_moderate_room, get_chat_reachable_ids
+from core.views.chat import invalidate_chat_rooms_cache, _room_member_ir_ids, _can_moderate_room, get_chat_reachable_ids, INACTIVE_ROOM_DETAIL
 
 # Dedicated executor for outbound FCM network calls, kept separate from
 # Django's shared thread-sensitive executor (the one `database_sync_to_async`
@@ -63,6 +63,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self._update_last_seen(self.user_ir.ir_id)
             await self._clear_present()
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    @database_sync_to_async
+    def _room_is_active(self, room_id):
+        return ChatRoom.objects.filter(id=room_id, is_active=True).exists()
 
     @database_sync_to_async
     def _mark_present(self):
@@ -120,6 +124,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
         content = (payload.get("content") or "").strip()
         if not content:
             await self._send_error("content is required")
+            return
+
+        if not await self._room_is_active(self.room_id):
+            await self._send_error(INACTIVE_ROOM_DETAIL)
             return
 
         reply_to_id = payload.get("reply_to_id")

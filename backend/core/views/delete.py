@@ -85,6 +85,95 @@ class DeleteIr(APIView):
         )
 
 # ---------------------------------------------------
+# BULK DELETE IRs (Admin only — rehearsed, tree-verified)
+# ---------------------------------------------------
+class AdminBulkDeleteIrs(APIView):
+    """
+    Delete several IRs in one call, with the hierarchy verified. See
+    core/utils/ir_deletion.py for exactly what is checked and why.
+
+    POST /api/admin/delete_irs/
+    {
+      "requester_ir_id": "<an Admin>",
+      "irs": [{"ir_id": "IM123456", "ir_name": "Name As In The Database"}, ...],
+        // or "text": the pasted table, one "IM123456 Name" per line
+      "apply": false,          // false (default) = rehearsal only, nothing deleted
+      "confirm_count": 21,     // required with apply=true; must equal the number of IRs
+      "allow_leaders": false,  // required to delete an Admin/CTC/LDC
+      "quiet": false           // true = no "IR Deleted" notification to uplines
+    }
+
+    Every call REHEARSES first: the real delete runs inside a transaction, the
+    tree and everything else is checked, and it is rolled back. With
+    apply=true the real delete only happens if that rehearsal is clean, and is
+    checked again and rolled back automatically if anything is off.
+    """
+    def post(self, request):
+        from core.utils import ir_deletion as d
+
+        data = request.data if isinstance(request.data, dict) else {}
+        requester = Ir.objects.filter(ir_id=data.get("requester_ir_id")).first() if data.get("requester_ir_id") else None
+        if not requester or requester.ir_access_level != AccessLevel.ADMIN:
+            return Response({"detail": "Not authorized. Admin only."}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            if data.get("text"):
+                targets = d.parse_targets(str(data["text"]))
+            else:
+                targets, seen = [], set()
+                for row in data.get("irs") or []:
+                    ir_id = str((row or {}).get("ir_id", "")).strip().upper()
+                    name = str((row or {}).get("ir_name", "")).strip()
+                    if not ir_id or not name:
+                        return Response({"detail": "Every entry needs ir_id and ir_name"}, status=status.HTTP_400_BAD_REQUEST)
+                    if ir_id in seen:
+                        return Response({"detail": f"{ir_id} appears more than once"}, status=status.HTTP_400_BAD_REQUEST)
+                    seen.add(ir_id)
+                    targets.append((ir_id, name))
+        except Exception as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        if not targets:
+            return Response({"detail": "No IRs given"}, status=status.HTTP_400_BAD_REQUEST)
+
+        resolved, problems = d.resolve_targets(
+            targets, allow_leaders=bool(data.get("allow_leaders")), requester=requester,
+        )
+        if problems:
+            return Response(
+                {"detail": "Nothing deleted — fix these first.", "problems": problems},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        apply = bool(data.get("apply"))
+        if apply and data.get("confirm_count") != len(resolved):
+            return Response(
+                {"detail": f"confirm_count must equal {len(resolved)} to apply. Nothing deleted."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        delete_ids = {ir.ir_id for ir in resolved}
+        impact_rows = []
+        for ir in sorted(resolved, key=lambda i: i.ir_id):
+            row = {"ir_id": ir.ir_id, "ir_name": ir.ir_name,
+                   "role": AccessLevel.get_role_name(ir.ir_access_level),
+                   "status": "active" if ir.status else "inactive",
+                   "referrer_ir_id": ir.parent_ir_id}
+            row.update(d.impact(ir, delete_ids))
+            impact_rows.append(row)
+
+        result = d.run(resolved, apply=apply, quiet=bool(data.get("quiet")))
+        body = {"mode": result["mode"], "ok": result["ok"], "committed": result["committed"],
+                "total": len(resolved), "impact": impact_rows,
+                "reparented": result["reparented"],
+                "groups_marked_inactive": result["groups_marked_inactive"],
+                "checks": result["checks"], "deleted": result["deleted"] if result["committed"] else []}
+        if not result["ok"]:
+            body["detail"] = "Verification failed — nothing was deleted."
+            return Response(body, status=status.HTTP_409_CONFLICT)
+        return Response(body)
+
+
+# ---------------------------------------------------
 # RESET DATABASE
 # ---------------------------------------------------
 class ResetDatabase(APIView):

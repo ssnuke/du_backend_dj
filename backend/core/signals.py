@@ -1,7 +1,31 @@
+from contextlib import contextmanager
+from contextvars import ContextVar
+
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 from .models import UVDetail, Ir, Notification, PlanDetail, InfoDetail, TeamMember
 from core.utils.notifications import get_notification_recipients, create_notifications
+
+# Per-request switch for the delete-side notifications. Used by IR deletion,
+# where UVs/plans/team memberships vanish because their owner did — not news.
+# A ContextVar (not receiver.disconnect) so it only affects the request that
+# set it: disconnecting is process-global, and would silently drop other
+# people's notifications for as long as a delete was running.
+_SUPPRESSED = ContextVar("suppressed_notifications", default=frozenset())
+
+
+@contextmanager
+def suppress_notifications(*kinds):
+    """kinds: any of "uv", "plan", "member", "ir" (the *_deleted notifications)."""
+    token = _SUPPRESSED.set(_SUPPRESSED.get() | frozenset(kinds))
+    try:
+        yield
+    finally:
+        _SUPPRESSED.reset(token)
+
+
+def _is_suppressed(kind):
+    return kind in _SUPPRESSED.get()
 
 
 @receiver(post_save, sender=UVDetail)
@@ -31,6 +55,8 @@ def notify_uv_saved(sender, instance, created, **kwargs):
 
 @receiver(post_delete, sender=UVDetail)
 def notify_uv_deleted(sender, instance, **kwargs):
+    if _is_suppressed("uv"):
+        return
     uv_record = instance
     added_by_ir = uv_record.ir
     recipients = get_notification_recipients(added_by_ir)
@@ -74,6 +100,8 @@ def notify_plan_saved(sender, instance, created, **kwargs):
 
 @receiver(post_delete, sender=PlanDetail)
 def notify_plan_deleted(sender, instance, **kwargs):
+    if _is_suppressed("plan"):
+        return
     plan = instance
     ir = plan.ir
     recipients = get_notification_recipients(ir)
@@ -155,6 +183,8 @@ def notify_ir_saved(sender, instance, created, **kwargs):
 
 @receiver(post_delete, sender=Ir)
 def notify_ir_deleted(sender, instance, **kwargs):
+    if _is_suppressed("ir"):
+        return
     ir = instance
     title = "IR Deleted"
     message = f"IR deleted: {ir.ir_name} ({ir.ir_id})."
@@ -202,6 +232,8 @@ def notify_member_saved(sender, instance, created, **kwargs):
 
 @receiver(post_delete, sender=TeamMember)
 def notify_member_deleted(sender, instance, **kwargs):
+    if _is_suppressed("member"):
+        return
     team_member = instance
     ir = team_member.ir
     team = team_member.team

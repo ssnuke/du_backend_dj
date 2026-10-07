@@ -78,6 +78,7 @@ from core.views.delete import (
     DeleteInfoDetail,
     DeletePlanDetail,
     DeleteIr,
+    AdminBulkDeleteIrs,
     DeleteUVDetail,
 )
 from core.views.notifications import (
@@ -253,6 +254,7 @@ urlpatterns = [
     path("delete_plan_detail/<int:plan_id>/", DeletePlanDetail.as_view()),
     path("delete_uv_detail/<int:uv_id>/", DeleteUVDetail.as_view()),
     path("delete_ir/<str:ir_id>/", DeleteIr.as_view()),
+    path("admin/delete_irs/", AdminBulkDeleteIrs.as_view()),
     # ============ PIPELINE STATS ENDPOINTS ============
     path("pipeline_stats/<str:ir_id>/", GetPipelineStats.as_view()),
     path("pipeline_stats/<str:ir_id>/update/", UpdatePipelineStats.as_view()),

@@ -737,6 +737,11 @@ class ChatRoom(models.Model):
     image_url = models.URLField(max_length=1000, blank=True, null=True)
     category = models.CharField(max_length=50, choices=ChatCategory.choices, default=ChatCategory.GROUP)
     created_by = models.ForeignKey(Ir, on_delete=models.SET_NULL, null=True, related_name="chat_rooms_created")
+    # False = archived: members can still open it and read the history, but
+    # nobody can post. Set when a group's owner is deleted (delete_irs
+    # command); an Admin reactivates it by handing the group to a member
+    # (transfer ownership). Direct chats are never marked inactive.
+    is_active = models.BooleanField(default=True)
     is_pinned = models.BooleanField(default=False)
     pinned_at = models.DateTimeField(null=True, blank=True)
     pinned_message = models.ForeignKey(
