@@ -29,6 +29,8 @@ class Command(BaseCommand):
                             help="With --apply: must equal the number of IRs in the file.")
         parser.add_argument("--allow-leaders", action="store_true",
                             help="Permit deleting Admin/CTC/LDC accounts (refused by default).")
+        parser.add_argument("--team-creator-to", default=None,
+                            help="Hand teams created by a deleted IR to this surviving IR.")
         parser.add_argument("--quiet", action="store_true",
                             help="Also suppress the per-IR 'IR Deleted' notification to uplines.")
 
@@ -75,7 +77,7 @@ class Command(BaseCommand):
         if opts["apply"] and opts["confirm_count"] != len(resolved):
             raise CommandError(f"--confirm-count must equal {len(resolved)} to apply (nothing deleted).")
 
-        result = d.run(resolved, apply=opts["apply"], quiet=opts["quiet"])
+        result = d.run(resolved, apply=opts["apply"], quiet=opts["quiet"], team_creator_to=opts["team_creator_to"])
 
         self.stdout.write("\nTREE — these IRs change parent:")
         for r in result["reparented"]:

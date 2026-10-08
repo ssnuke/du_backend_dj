@@ -184,3 +184,41 @@ class AdminBulkDeleteIrsTests(TestCase):
         self.assertEqual(r.status_code, 409)
         self.assertIn("IM000011", self.ids())
         self.assertEqual(InfoDetail.objects.filter(ir_id="IM000061").count(), 1)
+
+
+@override_settings(CACHES=LOCMEM)
+class TeamCreatorHandoverTests(AdminBulkDeleteIrsTests):
+    """Teams created by a deleted IR: reported, and optionally handed over."""
+
+    def setUp(self):
+        from core.models import Team, TeamMember, TeamRole
+        self.team = Team.objects.create(name="Her Team", created_by=self.a1)
+        TeamMember.objects.create(team=self.team, ir=self.a1, role=TeamRole.LDC)
+        TeamMember.objects.create(team=self.team, ir=self.b2, role=TeamRole.IR)  # survives
+
+    def test_rehearsal_lists_teams_that_would_lose_their_creator(self):
+        body = self.call([self.a1]).json()
+        t = body["teams_losing_creator"][0]
+        self.assertEqual(t["team_name"], "Her Team")
+        self.assertEqual([m["ir_id"] for m in t["remaining_members"]], ["IM000022"])
+        self.assertIsNone(t["creator_after"])
+
+    def test_without_the_option_the_team_is_left_with_no_creator(self):
+        self.call([self.a1], apply=True, confirm_count=1)
+        self.team.refresh_from_db()
+        self.assertIsNone(self.team.created_by_id)
+
+    def test_team_creator_to_hands_the_team_over(self):
+        r = self.call([self.a1], apply=True, confirm_count=1, team_creator_to="IM000002")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.created_by_id, "IM000002")
+
+    def test_rehearsal_does_not_change_the_team(self):
+        self.call([self.a1], team_creator_to="IM000002")
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.created_by_id, "IM000011")
+
+    def test_team_creator_to_must_survive_and_exist(self):
+        self.assertEqual(self.call([self.a1], team_creator_to="IM000011").status_code, 400)
+        self.assertEqual(self.call([self.a1], team_creator_to="IM999999").status_code, 400)

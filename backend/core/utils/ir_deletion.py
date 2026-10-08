@@ -185,7 +185,7 @@ def _delete_all(resolved, delete_ids):
     return deleted, orphaned_rooms, member_ids
 
 
-def execute(resolved, *, commit, quiet=False):
+def execute(resolved, *, commit, quiet=False, team_creator_to=None):
     """
     Run the delete inside a transaction and verify it. commit=False is a
     rehearsal: the same delete, the same checks, then rolled back. A commit run
@@ -204,9 +204,29 @@ def execute(resolved, *, commit, quiet=False):
     violations_before = hierarchy_violations()
     snapshot_before = collateral_snapshot(delete_ids)
 
+    # Teams created by a deleted IR survive the delete but lose their creator
+    # (SET_NULL), and a CTC sees a team through its creator — so a team can
+    # silently drop out of the CTC's view. Report each one and who is left in
+    # it; optionally hand them to a named IR instead (team_creator_to).
+    teams_affected = []
+    for team in Team.objects.filter(created_by__in=resolved).order_by("id"):
+        remaining = (
+            TeamMember.objects.filter(team=team).exclude(ir_id__in=delete_ids)
+            .select_related("ir").order_by("ir__ir_name")
+        )
+        teams_affected.append({
+            "team_id": team.id,
+            "team_name": team.name,
+            "created_by": team.created_by_id,
+            "remaining_members": [{"ir_id": m.ir_id, "ir_name": m.ir.ir_name} for m in remaining],
+            "creator_after": team_creator_to,  # None = left with no creator
+        })
+
     # A rehearsal must never push to a real phone.
     muted = ["uv", "plan", "member"] + (["ir"] if (quiet or not commit) else [])
     with suppress_notifications(*muted), transaction.atomic():
+        if team_creator_to:
+            Team.objects.filter(created_by__in=resolved).update(created_by_id=team_creator_to)
         deleted, orphaned_rooms, member_ids = _delete_all(resolved, delete_ids)
 
         parents_after = dict(Ir.objects.values_list("ir_id", "parent_ir_id"))
@@ -247,6 +267,7 @@ def execute(resolved, *, commit, quiet=False):
             for i, p in sorted(changed_parents.items())
         ],
         "groups_marked_inactive": orphaned_rooms,
+        "teams_losing_creator": teams_affected,
         "checks": {
             "parent_mismatches": parent_mismatches,
             "new_hierarchy_violations": new_violations,
@@ -257,15 +278,15 @@ def execute(resolved, *, commit, quiet=False):
     }
 
 
-def run(resolved, *, apply, quiet=False):
+def run(resolved, *, apply, quiet=False, team_creator_to=None):
     """
     Rehearse; if (and only if) the rehearsal is clean and apply is set, do it for
     real — verified again, and rolled back automatically if anything is off.
     """
-    rehearsal = execute(resolved, commit=False, quiet=True)
+    rehearsal = execute(resolved, commit=False, quiet=True, team_creator_to=team_creator_to)
     if not apply or not rehearsal["ok"]:
         rehearsal["mode"] = "dry_run" if not apply else "refused_rehearsal_failed"
         return rehearsal
-    real = execute(resolved, commit=True, quiet=quiet)
+    real = execute(resolved, commit=True, quiet=quiet, team_creator_to=team_creator_to)
     real["mode"] = "applied" if real["committed"] else "refused_verification_failed"
     return real

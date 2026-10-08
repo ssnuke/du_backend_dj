@@ -100,7 +100,9 @@ class AdminBulkDeleteIrs(APIView):
       "apply": false,          // false (default) = rehearsal only, nothing deleted
       "confirm_count": 21,     // required with apply=true; must equal the number of IRs
       "allow_leaders": false,  // required to delete an Admin/CTC/LDC
-      "quiet": false           // true = no "IR Deleted" notification to uplines
+      "quiet": false,          // true = no "IR Deleted" notification to uplines
+      "team_creator_to": "IM..."  // optional: hand any team created by a deleted IR
+                                  // to this (surviving) IR instead of leaving it creator-less
     }
 
     Every call REHEARSES first: the real delete runs inside a transaction, the
@@ -144,6 +146,13 @@ class AdminBulkDeleteIrs(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        team_creator_to = (str(data.get("team_creator_to") or "").strip().upper()) or None
+        if team_creator_to:
+            if team_creator_to in {ir.ir_id for ir in resolved}:
+                return Response({"detail": "team_creator_to is one of the IRs being deleted"}, status=status.HTTP_400_BAD_REQUEST)
+            if not Ir.objects.filter(ir_id=team_creator_to).exists():
+                return Response({"detail": f"team_creator_to {team_creator_to} not found"}, status=status.HTTP_400_BAD_REQUEST)
+
         apply = bool(data.get("apply"))
         if apply and data.get("confirm_count") != len(resolved):
             return Response(
@@ -161,11 +170,12 @@ class AdminBulkDeleteIrs(APIView):
             row.update(d.impact(ir, delete_ids))
             impact_rows.append(row)
 
-        result = d.run(resolved, apply=apply, quiet=bool(data.get("quiet")))
+        result = d.run(resolved, apply=apply, quiet=bool(data.get("quiet")), team_creator_to=team_creator_to)
         body = {"mode": result["mode"], "ok": result["ok"], "committed": result["committed"],
                 "total": len(resolved), "impact": impact_rows,
                 "reparented": result["reparented"],
                 "groups_marked_inactive": result["groups_marked_inactive"],
+                "teams_losing_creator": result["teams_losing_creator"],
                 "checks": result["checks"], "deleted": result["deleted"] if result["committed"] else []}
         if not result["ok"]:
             body["detail"] = "Verification failed — nothing was deleted."
