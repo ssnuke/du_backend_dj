@@ -62,6 +62,12 @@ class PlanDetailSerializer(serializers.ModelSerializer):
     # the display name too, e.g. to prefill the "Plan Taker / UL2" picker
     # when editing an existing plan instead of showing the raw id.
     presented_by_name = serializers.SerializerMethodField()
+    # The Info -> Plan -> UV chain, so a plan row can show where it came from
+    # and what it turned into without a second request.
+    info_name = serializers.SerializerMethodField()
+    info_date = serializers.SerializerMethodField()
+    uv_records = serializers.SerializerMethodField()
+    uv_actual = serializers.SerializerMethodField()
 
     class Meta:
         model = PlanDetail
@@ -70,13 +76,40 @@ class PlanDetailSerializer(serializers.ModelSerializer):
     def get_presented_by_name(self, obj):
         return obj.presented_by.ir_name if obj.presented_by else None
 
+    def get_info_name(self, obj):
+        return obj.info.info_name if obj.info_id else None
+
+    def get_info_date(self, obj):
+        return obj.info.info_date if obj.info_id else None
+
+    def get_uv_records(self, obj):
+        return [
+            {"id": uv.id, "uv_count": uv.uv_count, "uv_date": uv.uv_date}
+            for uv in obj.uv_records.all()
+        ]
+
+    def get_uv_actual(self, obj):
+        # Actual UVs that fell, as opposed to uv_value (the figure quoted when
+        # the plan was shown). Summed in Python so a prefetch_related of
+        # uv_records is honoured rather than defeated by an aggregate query.
+        return sum((uv.uv_count for uv in obj.uv_records.all()), 0)
+
+    def validate_info(self, info):
+        # A plan can only descend from an info logged for the same person.
+        ir = self.instance.ir if self.instance else self.initial_data.get("ir")
+        ir_id = getattr(ir, "ir_id", ir)
+        if info is not None and ir_id and info.ir_id != ir_id:
+            raise serializers.ValidationError("Info belongs to a different IR")
+        return info
+
 
 class UVDetailSerializer(serializers.ModelSerializer):
     ir_id = serializers.CharField(source='ir.ir_id', read_only=True)
-    
+    plan_name = serializers.CharField(source='plan.plan_name', read_only=True, default=None)
+
     class Meta:
         model = UVDetail
-        fields = ['id', 'ir', 'ir_id', 'ir_name', 'prospect_name', 'uv_date', 'uv_count', 'comments']
+        fields = ['id', 'ir', 'ir_id', 'ir_name', 'prospect_name', 'uv_date', 'uv_count', 'comments', 'plan', 'plan_name']
 
 
 class PocketMemberSerializer(serializers.ModelSerializer):

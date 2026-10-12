@@ -1,5 +1,9 @@
 from django.conf import settings
-from django.contrib import admin
+from django.contrib import admin, messages
+from django.db import transaction
+from django.shortcuts import redirect, render
+from django.urls import path, reverse
+from core.learn_curriculum import LESSONS
 from core.models import LearnVideo, DreamVideo, StickerPack, Sticker, InventoryFile, InventoryVideo
 from core.views.learn import raw_thumbnail_url
 from core.utils.bunny import purge_bunny_url, get_bunny_thumbnail_filename
@@ -54,17 +58,84 @@ refresh_thumbnail_cache.short_description = "Refresh thumbnail cache (after upda
 
 @admin.register(LearnVideo)
 class LearnVideoAdmin(admin.ModelAdmin):
-    list_display = ('title', 'category', 'order', 'duration_seconds', 'is_published', 'created_at')
+    list_display = ('title', 'category', 'lesson_key', 'order', 'duration_seconds', 'is_published', 'created_at')
+    # lesson_key is shown but not editable inline: it is unique, so swapping two
+    # videos' slots one row at a time would always collide. Use "Course outline".
     list_editable = ('category', 'order', 'duration_seconds', 'is_published')
     list_filter = ('category', 'is_published')
     search_fields = ('title', 'description', 'bunny_video_id')
     ordering = ('category', 'order', 'created_at')
     actions = [refresh_thumbnail_cache]
+    change_list_template = 'admin/core/learnvideo/change_list.html'
+
+    def get_urls(self):
+        return [
+            path('course/', self.admin_site.admin_view(self.course_outline_view), name='core_learnvideo_course'),
+        ] + super().get_urls()
+
+    def changelist_view(self, request, extra_context=None):
+        extra_context = {**(extra_context or {}), 'course_url': reverse('admin:core_learnvideo_course')}
+        return super().changelist_view(request, extra_context=extra_context)
+
+    def course_outline_view(self, request):
+        """
+        One screen to place Basic Training videos into the course: each lesson
+        in order, with a dropdown of videos. A video can fill one lesson only;
+        a lesson left on "Coming soon" shows that way in the app and does not
+        hold a Player up. Saved all at once so videos can be swapped freely.
+        """
+        if not self.has_change_permission(request):
+            from django.core.exceptions import PermissionDenied
+            raise PermissionDenied
+
+        videos = list(LearnVideo.objects.filter(category='basic_training').order_by('title'))
+        by_id = {str(v.id): v for v in videos}
+
+        if request.method == 'POST':
+            chosen = {}
+            for lesson in LESSONS:
+                value = request.POST.get(f"slot_{lesson['key']}", '')
+                if value:
+                    if value not in by_id:
+                        messages.error(request, f"Unknown video chosen for {lesson['title']}.")
+                        return redirect(request.path)
+                    chosen[lesson['key']] = value
+            repeated = [by_id[v].title for v in set(chosen.values()) if list(chosen.values()).count(v) > 1]
+            if repeated:
+                messages.error(request, "A video can only fill one lesson: " + ", ".join(sorted(repeated)) + ". Nothing was saved.")
+            else:
+                with transaction.atomic():
+                    # Clear first: lesson_key is unique, so setting new slots
+                    # while the old ones are held would collide on a swap.
+                    LearnVideo.objects.filter(lesson_key__isnull=False).update(lesson_key=None)
+                    for key, video_id in chosen.items():
+                        LearnVideo.objects.filter(pk=video_id).update(lesson_key=key)
+                messages.success(request, f"Course outline saved: {len(chosen)} of {len(LESSONS)} lessons have a video.")
+            return redirect(request.path)
+
+        current = {v.lesson_key: v.id for v in videos if v.lesson_key}
+        rows = [
+            {'number': n, 'key': l['key'], 'title': l['title'], 'selected': current.get(l['key'])}
+            for n, l in enumerate(LESSONS, start=1)
+        ]
+        context = {
+            **self.admin_site.each_context(request),
+            'title': 'Basic Training course outline',
+            'opts': self.model._meta,
+            'rows': rows,
+            'videos': videos,
+            'unassigned': [v for v in videos if not v.lesson_key],
+        }
+        return render(request, 'admin/core/learnvideo/course.html', context)
+
     fieldsets = (
         (None, {
-            'fields': ('title', 'description', 'category', 'order', 'is_published'),
+            'fields': ('title', 'description', 'category', 'lesson_key', 'order', 'is_published'),
             'description': (
-                'category picks the sub-tab in Learn. "8 Basic Building Blocks" is an ordered curriculum, so set order 1-8 on those.'
+                'category picks the sub-tab in Learn. "8 Basic Building Blocks" is an ordered curriculum, so set order 1-8 on those. '
+                'lesson_key puts a Basic Training video into its slot of the course (Welcome, Why NM, ...): the course order, and what a '
+                'Player must finish first, follow the slots, not "order". Empty slots show as Coming soon. '
+                'To place several videos at once, use "Course outline" at the top of the video list.'
             ),
         }),
         ('Bunny.net Stream', {

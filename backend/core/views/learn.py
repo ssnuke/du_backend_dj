@@ -4,11 +4,15 @@ import time
 from urllib.parse import urlencode, urlparse, urlunparse, parse_qsl
 
 from django.conf import settings
+from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
-from core.models import Ir, LearnVideo, RESTRICTED_LEARN_CATEGORIES
+from core.learn_curriculum import LESSONS
+from core.models import AccessLevel, Ir, LearnVideo, LearnVideoProgress, RESTRICTED_LEARN_CATEGORIES
+
+COURSE_CATEGORY = "basic_training"
 
 
 def _with_cache_buster(url: str, version) -> str:
@@ -93,6 +97,68 @@ def _blocked_categories_for(ir) -> list:
             if level is None or level > min_level]
 
 
+def _course_items(ir, course_videos):
+    """
+    The Basic Training tab as a course: every lesson in the outline, in order,
+    each marked with whether it is completed and whether it is locked.
+
+    Only a Player is ever locked. Their rule is Udemy's: a lesson opens once
+    every earlier lesson that HAS a video has been finished. A slot with no
+    published video is "coming soon" and does not hold anyone up. For everyone
+    else every lesson is open from the start, which is also what a Player gets
+    the moment they are promoted — there is no unlock state to carry over.
+
+    Videos not assigned to a slot are listed after the course. For a Player
+    they open once the whole course is done, so they cannot be used to skip it.
+    """
+    by_key = {v.lesson_key: v for v in course_videos if v.lesson_key}
+    extras = [v for v in course_videos if not v.lesson_key]
+    done = set(
+        LearnVideoProgress.objects.filter(ir=ir, video__in=course_videos, completed_at__isnull=False)
+        .values_list("video_id", flat=True)
+    )
+    gated = ir.ir_access_level == AccessLevel.PLAYER
+
+    items = []
+    earlier_unfinished = False
+    for number, lesson in enumerate(LESSONS, start=1):
+        video = by_key.get(lesson["key"])
+        base = {"lesson_key": lesson["key"], "lesson_number": number, "scripts": lesson["scripts"]}
+        if video is None:
+            items.append({**base, "id": None, "title": lesson["title"], "category": COURSE_CATEGORY,
+                          "coming_soon": True, "locked": False, "completed": False})
+            continue
+        completed = video.id in done
+        items.append({
+            **_video_list_item(video), **base,
+            "coming_soon": False,
+            "completed": completed,
+            "locked": gated and earlier_unfinished,
+        })
+        if not completed:
+            earlier_unfinished = True
+
+    for video in extras:
+        completed = video.id in done
+        items.append({
+            **_video_list_item(video), "lesson_key": None, "lesson_number": None, "scripts": [],
+            "coming_soon": False, "completed": completed,
+            "locked": gated and earlier_unfinished,
+        })
+    return items
+
+
+def _is_locked_for(ir, video):
+    """True when `ir` may not yet play `video` (Players only, Basic Training only)."""
+    if ir.ir_access_level != AccessLevel.PLAYER or video.category != COURSE_CATEGORY:
+        return False
+    course = LearnVideo.objects.filter(is_published=True, category=COURSE_CATEGORY)
+    for item in _course_items(ir, course):
+        if item["id"] == video.id:
+            return item["locked"]
+    return False
+
+
 class GetLearnVideos(APIView):
     """
     Published videos for an IR, minus any restricted category they are not
@@ -109,7 +175,19 @@ class GetLearnVideos(APIView):
         blocked = _blocked_categories_for(ir)
         if blocked:
             videos = videos.exclude(category__in=blocked)
-        return Response([_video_list_item(v) for v in videos])
+
+        items = [_video_list_item(v) for v in videos.exclude(category=COURSE_CATEGORY)]
+        if COURSE_CATEGORY not in blocked:
+            items.extend(_course_items(ir, videos.filter(category=COURSE_CATEGORY)))
+
+        # Where they left off, for any video that is not finished.
+        resume = dict(
+            LearnVideoProgress.objects.filter(ir=ir, completed_at__isnull=True, position_seconds__gt=0)
+            .values_list("video_id", "position_seconds")
+        )
+        for item in items:
+            item["resume_seconds"] = int(resume.get(item.get("id"), 0))
+        return Response(items)
 
 
 class GetLearnVideoStream(APIView):
@@ -132,6 +210,15 @@ class GetLearnVideoStream(APIView):
         if video.category in _blocked_categories_for(ir):
             return Response({"message": "Video not found"}, status=status.HTTP_404_NOT_FOUND)
 
+        # A Player works through Basic Training in order. The list marks later
+        # lessons locked, but that is only a display: this is what stops a
+        # locked video being played by asking for it directly.
+        if _is_locked_for(ir, video):
+            return Response(
+                {"message": "Finish the previous lesson to unlock this one."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         cdn_hostname = settings.BUNNY_STREAM_CDN_HOSTNAME
         if not cdn_hostname or not settings.BUNNY_STREAM_TOKEN_KEY:
             # Token auth not configured — return plain URL (dev fallback)
@@ -151,3 +238,78 @@ class GetLearnVideoStream(APIView):
             "stream_url": stream_url,
             "expires_at": expiry,
         })
+
+
+class CompleteLearnVideo(APIView):
+    """
+    POST /api/learn/<ir_id>/videos/<video_id>/complete/
+
+    Records that a video was watched to the end. The player only calls this
+    once playback reaches the end, and for a Player seeking ahead of what they
+    have actually watched is blocked there — so this trusts the client no more
+    than the rest of the app does. It does refuse a lesson that is still locked.
+    """
+    def post(self, request, ir_id, video_id):
+        try:
+            ir = Ir.objects.get(ir_id=ir_id)
+        except Ir.DoesNotExist:
+            return Response({"message": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            video = LearnVideo.objects.get(id=video_id, is_published=True)
+        except LearnVideo.DoesNotExist:
+            return Response({"message": "Video not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if video.category in _blocked_categories_for(ir):
+            return Response({"message": "Video not found"}, status=status.HTTP_404_NOT_FOUND)
+        if _is_locked_for(ir, video):
+            return Response({"message": "This lesson is still locked."}, status=status.HTTP_403_FORBIDDEN)
+
+        progress, _ = LearnVideoProgress.objects.get_or_create(ir=ir, video=video)
+        if progress.completed_at is None:
+            progress.completed_at = timezone.now()
+            # A finished video replays from the start, not from the end.
+            progress.position_seconds = 0
+            progress.save(update_fields=["completed_at", "position_seconds", "updated_at"])
+        return Response({"completed": True, "video_id": video.id})
+
+
+class SaveLearnVideoProgress(APIView):
+    """
+    POST /api/learn/<ir_id>/videos/<video_id>/progress/  {"position_seconds": 123.4}
+
+    Remembers where someone stopped so they can carry on from there. Called
+    every few seconds while watching and when they pause or leave, so it is
+    deliberately cheap: one row per person and video. Once a video is finished
+    the position is no longer kept, since it would only send them to the last
+    seconds next time. Saving 0 clears it (used for videos outside the course
+    when they reach the end).
+    """
+    def post(self, request, ir_id, video_id):
+        try:
+            ir = Ir.objects.get(ir_id=ir_id)
+        except Ir.DoesNotExist:
+            return Response({"message": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            video = LearnVideo.objects.get(id=video_id, is_published=True)
+        except LearnVideo.DoesNotExist:
+            return Response({"message": "Video not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if video.category in _blocked_categories_for(ir):
+            return Response({"message": "Video not found"}, status=status.HTTP_404_NOT_FOUND)
+        if _is_locked_for(ir, video):
+            return Response({"message": "This lesson is still locked."}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            position = float(request.data.get("position_seconds"))
+        except (TypeError, ValueError):
+            return Response({"message": "position_seconds must be a number"}, status=status.HTTP_400_BAD_REQUEST)
+        if position != position or position < 0:  # NaN or negative
+            return Response({"message": "position_seconds must be zero or more"}, status=status.HTTP_400_BAD_REQUEST)
+        if video.duration_seconds:
+            position = min(position, float(video.duration_seconds))
+
+        progress, _ = LearnVideoProgress.objects.get_or_create(ir=ir, video=video)
+        if progress.completed_at is None:
+            progress.position_seconds = position
+            progress.save(update_fields=["position_seconds", "updated_at"])
+        return Response({"position_seconds": progress.position_seconds})

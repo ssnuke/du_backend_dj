@@ -3,7 +3,7 @@ from contextvars import ContextVar
 
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
-from .models import UVDetail, Ir, Notification, PlanDetail, InfoDetail, TeamMember
+from .models import UVDetail, Ir, Notification, PlanDetail, InfoDetail, TeamMember, PromotionDocument
 from core.utils.notifications import get_notification_recipients, create_notifications
 
 # Per-request switch for the delete-side notifications. Used by IR deletion,
@@ -249,3 +249,12 @@ def notify_member_deleted(sender, instance, **kwargs):
         related_object_id=str(team_member.id),
         metadata={"team_id": team.id, "team_name": team.name, "ir_id": ir.ir_id, "ir_name": ir.ir_name},
     )
+
+
+@receiver(post_delete, sender=PromotionDocument)
+def remove_promotion_file(sender, instance, **kwargs):
+    # The row is only the record; the file is in the private bucket. Deleting a
+    # person (or a document) should not leave their papers behind in storage.
+    from core.utils import private_storage
+    if private_storage.is_configured():
+        private_storage.delete(instance.file_key)

@@ -1,4 +1,6 @@
 from django.db import models
+from core.learn_curriculum import LESSON_CHOICES
+from core.promotion_docs import DOCUMENTS as PROMOTION_DOCUMENTS, KIND_CHOICES as PROMOTION_KIND_CHOICES
 from django.contrib.auth.hashers import make_password, check_password
 from django.utils import timezone
 import pytz
@@ -23,13 +25,18 @@ class AccessLevel:
     LS = 4
     GC = 5
     IR = 6
-    
+    # A newly registered member, before promotion to IR. Lower than IR, so
+    # every "this level or more junior" check already treats a Player as the
+    # most restricted tier. They have no team and no data entry; the app gives
+    # them Chat, Dreams and Learn only.
+    PLAYER = 7
+
     @classmethod
     def get_role_name(cls, level):
         # Display names. Level 5 reads as "PRO"; the stored TeamRole value
         # is still "GC" (see TeamRole above and role_map in views/get.py),
         # so this is a label change and not a schema one.
-        mapping = {1: "ADMIN", 2: "CTC", 3: "LDC", 4: "LS", 5: "PRO", 6: "IR"}
+        mapping = {1: "ADMIN", 2: "CTC", 3: "LDC", 4: "LS", 5: "PRO", 6: "IR", 7: "PLAYER"}
         return mapping.get(level, "IR")
     
     @classmethod
@@ -248,6 +255,38 @@ class Ir(models.Model):
         """Check if this IR can create teams"""
         return self.ir_access_level in [AccessLevel.ADMIN, AccessLevel.CTC, AccessLevel.LDC]
 
+    def missing_promotion_documents(self):
+        """
+        Which of the three promotion documents this Player has not yet sent
+        (kinds, in display order). Empty means they are cleared for promotion.
+        """
+        sent = set(self.promotion_documents.values_list("kind", flat=True))
+        return [d["kind"] for d in PROMOTION_DOCUMENTS if d["kind"] not in sent]
+
+    def can_promote_player(self, target_ir):
+        """
+        Whether this IR may promote target_ir from Player to IR.
+
+        An LDC may do this, but only for a Player they actually answer for: one
+        under them in the hierarchy, or one they registered themselves (the
+        referrer chosen at registration can sit in another branch, which would
+        otherwise strand the LDC's own registrant). Admin and CTC are covered
+        by the general promote/demote rule instead.
+        """
+        if self.ir_access_level != AccessLevel.LDC:
+            return False
+        if target_ir.ir_access_level != AccessLevel.PLAYER:
+            return False
+        if self.is_in_subtree(target_ir):
+            return True
+        from core.models import IrPendingRequest
+        return IrPendingRequest.objects.filter(
+            requested_by=self,
+            target_ir_code=target_ir.ir_id,
+            action_type=IrPendingRequest.ActionType.REGISTER,
+            request_status=IrPendingRequest.Status.APPROVED,
+        ).exists()
+
     def _is_upline_at_levels(self, target_ir, allowed_levels):
         """Check if target_ir is a direct upline ancestor at one of the given access levels."""
         current = self.parent_ir
@@ -412,6 +451,10 @@ class Ir(models.Model):
           case they can also add for their downlines (hierarchy subtree)
         - IR: Can add only for self
         """
+        # A Player has no data entry at all — not even for themselves.
+        if self.ir_access_level == AccessLevel.PLAYER:
+            return False
+
         # Can always add for self
         if self.ir_id == target_ir.ir_id:
             return True
@@ -974,6 +1017,10 @@ class InfoDetail(models.Model):
     comments = models.TextField(null=True, blank=True)
     info_name = models.CharField(max_length=100)
     monitored_by = models.CharField(max_length=100, default='Self', null=True, blank=True)
+    # Where the prospect was met / the info was given. Free text, optional:
+    # older infos have none. It travels with the prospect down the
+    # Info -> Plan -> UV chain through PlanDetail.info.
+    location = models.CharField(max_length=150, blank=True, default='')
 
     class Meta:
         # Nearly every dashboard/team view filters InfoDetail by
@@ -1020,6 +1067,16 @@ class PlanDetail(models.Model):
     follow_up_date = models.DateField(null=True, blank=True)
     uv_value = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     plan_mode = models.CharField(max_length=10, choices=PLAN_MODE_CHOICES, null=True, blank=True)
+    # The info this plan grew out of. Nullable: plans recorded before the link
+    # existed, and prospects who were never logged as an info, have none.
+    # SET_NULL so deleting an info never takes the plan (and its UVs) with it.
+    info = models.ForeignKey(
+        'InfoDetail', on_delete=models.SET_NULL, null=True, blank=True, related_name='plans',
+    )
+    # Where the prospect is from. Copied from the info when the plan is created
+    # from one, but kept on the plan so a prospect who was never logged as an
+    # info can still carry a location.
+    location = models.CharField(max_length=150, blank=True, default='')
 
     class Meta:
         # Same rationale as InfoDetail.Meta.indexes above — filtered by
@@ -1036,6 +1093,12 @@ class UVDetail(models.Model):
     uv_date = models.DateTimeField(default=timezone.now)
     uv_count = models.DecimalField(max_digits=10, decimal_places=2, default=1)
     comments = models.TextField(null=True, blank=True)
+    # The plan this UV is the outcome of. Nullable for walk-in UVs (no plan
+    # was ever shown) and for rows from before the link existed. A plan can
+    # have several UVDetail rows when the UVs land in instalments.
+    plan = models.ForeignKey(
+        'PlanDetail', on_delete=models.SET_NULL, null=True, blank=True, related_name='uv_records',
+    )
 
     class Meta:
         # Same rationale as InfoDetail.Meta.indexes above — filtered by
@@ -1203,6 +1266,53 @@ class Notification(models.Model):
         return f"{self.title} -> {self.recipient.ir_name}"
 
 
+class PromotionDocument(models.Model):
+    """
+    One of the three things a Player submits before promotion to IR.
+
+    Holds metadata only: the file itself is in the private bucket under
+    `file_key` (see core/utils/private_storage.py), never in this database and
+    never at a public URL. One row per person and kind; sending again replaces
+    the earlier file.
+    """
+    ir = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name='promotion_documents')
+    kind = models.CharField(max_length=30, choices=PROMOTION_KIND_CHOICES)
+    file_key = models.CharField(max_length=300)
+    original_name = models.CharField(max_length=200)
+    content_type = models.CharField(max_length=100)
+    size_bytes = models.BigIntegerField()
+    # Who put the file there: the LDC (or Admin/CTC) who checked it and is
+    # answerable for it, not the Player. Kept for the record; SET_NULL so a
+    # departed leader does not take the document with them.
+    uploaded_by = models.ForeignKey(
+        Ir, on_delete=models.SET_NULL, null=True, blank=True, related_name='promotion_documents_uploaded',
+    )
+    uploaded_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [('ir', 'kind')]
+
+
+class IrStatusChange(models.Model):
+    """
+    One row each time an IR is switched active/inactive.
+
+    Ir.status is only the current flag — it says nothing about WHEN it last
+    changed — so "how many people were deactivated in August" is unanswerable
+    from it. This log is what the Admin network dashboard counts. History
+    starts when this table does; earlier changes were never recorded.
+
+    The IR's id and name are copied rather than only linked, so a month's
+    figures still read correctly after the IR is deleted.
+    """
+    ir = models.ForeignKey(Ir, on_delete=models.SET_NULL, null=True, blank=True, related_name='status_changes')
+    ir_id_text = models.CharField(max_length=18)
+    ir_name = models.CharField(max_length=45)
+    changed_by = models.ForeignKey(Ir, on_delete=models.SET_NULL, null=True, blank=True, related_name='status_changes_made')
+    is_active = models.BooleanField()  # the state the IR was switched TO
+    changed_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+
 class IrPendingRequest(models.Model):
     """
     An IR registration or deletion request awaiting ADMIN approval. Nothing
@@ -1333,6 +1443,13 @@ class LearnVideo(models.Model):
     thumbnail_url = models.URLField(blank=True)
     duration_seconds = models.IntegerField(default=0)
     order = models.IntegerField(default=0, help_text='Sort order in the list')
+    # Which slot of the Basic Training course outline (core/learn_curriculum.py)
+    # this video fills. Null for videos outside the course. Unique, so a slot
+    # can never hold two videos and the unlock order stays unambiguous.
+    lesson_key = models.CharField(
+        max_length=20, choices=LESSON_CHOICES, null=True, blank=True, unique=True,
+        help_text='Basic Training course slot. Leave empty for videos outside the course.',
+    )
     is_published = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1350,6 +1467,25 @@ DREAM_VIDEO_CATEGORY_CHOICES = [
     ("dream_tick", "Dream Tick"),
     ("success_story", "Success Story"),
 ]
+
+
+class LearnVideoProgress(models.Model):
+    """
+    Where someone is with a video: how far they got, and when they finished.
+
+    A row exists once they have started. `completed_at` is what matters for
+    access — a Player's next Basic Training lesson stays locked until the one
+    before it has a completed_at. `position_seconds` is only for resuming; it
+    is reset to 0 on completion so a finished video replays from the start.
+    """
+    ir = models.ForeignKey(Ir, on_delete=models.CASCADE, related_name='learn_progress')
+    video = models.ForeignKey(LearnVideo, on_delete=models.CASCADE, related_name='completions')
+    position_seconds = models.FloatField(default=0)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [('ir', 'video')]
 
 
 class DreamVideo(models.Model):

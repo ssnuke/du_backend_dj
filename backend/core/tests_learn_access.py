@@ -38,7 +38,8 @@ class GrowthBitesAccessTests(TestCase):
     def titles_for(self, ir):
         r = self.client.get(f"/api/learn/{ir.ir_id}/videos/")
         self.assertEqual(r.status_code, 200, r.content)
-        return {v["title"] for v in r.json()}
+        # "Coming soon" slots of the Basic Training course are placeholders, not videos.
+        return {v["title"] for v in r.json() if not v.get("coming_soon")}
 
     def test_ls_and_above_see_growth_bites(self):
         for ir in (self.admin, self.ctc, self.ldc, self.ls):
@@ -97,7 +98,8 @@ class MasterNetworkerAccessTests(TestCase):
     def titles_for(self, ir):
         r = self.client.get(f"/api/learn/{ir.ir_id}/videos/")
         self.assertEqual(r.status_code, 200, r.content)
-        return {v["title"] for v in r.json()}
+        # "Coming soon" slots of the Basic Training course are placeholders, not videos.
+        return {v["title"] for v in r.json() if not v.get("coming_soon")}
 
     def test_ls_ldc_ctc_admin_see_it(self):
         for ir in (self.admin, self.ctc, self.ldc, self.ls):

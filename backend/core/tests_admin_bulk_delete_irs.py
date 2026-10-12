@@ -222,3 +222,24 @@ class TeamCreatorHandoverTests(AdminBulkDeleteIrsTests):
     def test_team_creator_to_must_survive_and_exist(self):
         self.assertEqual(self.call([self.a1], team_creator_to="IM000011").status_code, 400)
         self.assertEqual(self.call([self.a1], team_creator_to="IM999999").status_code, 400)
+
+
+@override_settings(CACHES=LOCMEM)
+class TeamDataImpactTests(AdminBulkDeleteIrsTests):
+    """The rehearsal says what each team loses, before anything is deleted."""
+
+    def test_rehearsal_reports_each_teams_before_removed_after(self):
+        from core.models import Team, TeamMember, TeamRole, UVDetail
+        team = Team.objects.create(name="T", created_by=self.L1)
+        for ir in (self.a1, self.b2, self.e1):
+            TeamMember.objects.create(team=team, ir=ir, role=TeamRole.IR)
+        UVDetail.objects.create(ir=self.a1, uv_count=2.5)
+        UVDetail.objects.create(ir=self.b2, uv_count=1)
+        body = self.call([self.a1]).json()
+        t = [x for x in body["teams_data_impact"] if x["team_name"] == "T"][0]
+        self.assertEqual((t["members_before"], t["members_removed"], t["members_remaining"]), (3, 1, 2))
+        self.assertEqual(t["team_totals_before"]["uv_total"], 3.5)
+        self.assertEqual(t["removed"]["uv_total"], 2.5)
+        self.assertEqual(t["team_totals_after"]["uv_total"], 1.0)
+        # ...and it was only a report.
+        self.assertEqual(UVDetail.objects.filter(ir=self.a1).count(), 1)

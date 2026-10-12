@@ -57,6 +57,22 @@ def _can_create_group(ir):
     return ir.ir_access_level <= AccessLevel.LS
 
 
+def _upline_ir_ids(ir):
+    """ir_ids of every ancestor via parent_ir (referrer first), cycle-safe."""
+    ids = []
+    seen = set()
+    current = ir.parent_ir
+    while current and current.ir_id not in seen:
+        seen.add(current.ir_id)
+        ids.append(current.ir_id)
+        current = current.parent_ir
+    return ids
+
+
+def _is_in_upline(requester, target):
+    return target.ir_id in _upline_ir_ids(requester)
+
+
 def _can_chat_with(requester, target):
     """
     Return True if requester is allowed to open a DM with target.
@@ -92,6 +108,12 @@ def _can_chat_with(requester, target):
         if requester.is_in_subtree(target):
             return True
         return requester._is_upline_at_levels(target, [AccessLevel.LDC])
+
+    # A Player can reach the people above them — their referrer and the rest
+    # of their upline — and nobody else. Groups they are added to by a leader
+    # work as for anyone; this only governs who they may start a chat with.
+    if level == AccessLevel.PLAYER:
+        return _is_in_upline(requester, target)
 
     # IR — only with people who can already view them (handled by can_view_ir on the other side)
     return requester.can_view_ir(target)
@@ -1253,6 +1275,11 @@ def get_chat_reachable_ids(requester):
         base |= set(_get_upline_irs(requester, [AccessLevel.LDC]).values_list("ir_id", flat=True))
         base.discard(requester.ir_id)
         return base
+
+    # Player: their referrer and upline, so they can reach whoever brought
+    # them in. Unlike IR, who sees nobody until someone adds them.
+    if level == AccessLevel.PLAYER:
+        return set(_upline_ir_ids(requester))
 
     if level >= AccessLevel.IR:
         return set()

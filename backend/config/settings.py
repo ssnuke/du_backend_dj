@@ -268,7 +268,12 @@ R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID") or None
 R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY") or None
 R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME") or None
 R2_ENDPOINT_URL = os.getenv("R2_ENDPOINT_URL") or None  # https://<account_id>.r2.cloudflarestorage.com
-R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL") or None      # custom domain or <bucket>.<account_id>.r2.dev
+R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL") or None
+# A SECOND bucket, with public access OFF, for the financial / legal / mandate
+# documents a Player submits before promotion (core/utils/private_storage.py).
+# Uses the same credentials and endpoint, so the API token must be allowed on
+# this bucket too. Never reuse R2_BUCKET_NAME for this: that one is public.
+R2_PRIVATE_BUCKET_NAME = os.getenv("R2_PRIVATE_BUCKET_NAME") or None      # custom domain or <bucket>.<account_id>.r2.dev
 # botocore hard-crashes (ValueError: Invalid endpoint) on an empty-string
 # endpoint/bucket rather than treating it like "unset" — `or None` above
 # keeps local/test environments without R2 credentials configured from

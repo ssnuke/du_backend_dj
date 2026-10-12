@@ -208,6 +208,33 @@ def execute(resolved, *, commit, quiet=False, team_creator_to=None):
     # (SET_NULL), and a CTC sees a team through its creator — so a team can
     # silently drop out of the CTC's view. Report each one and who is left in
     # it; optionally hand them to a named IR instead (team_creator_to).
+    # What each team stands to lose. A team's numbers are the sum of its
+    # members' records, so deleting members lowers them — including any
+    # history that was entered as records on those members (e.g. a UV
+    # backfill). Shown per team so that is a decision, not a surprise.
+    def _totals(ir_ids):
+        return {
+            "infos": InfoDetail.objects.filter(ir_id__in=ir_ids).count(),
+            "plans": PlanDetail.objects.filter(ir_id__in=ir_ids).count(),
+            "uv_records": UVDetail.objects.filter(ir_id__in=ir_ids).count(),
+            "uv_total": float(UVDetail.objects.filter(ir_id__in=ir_ids).aggregate(s=Sum("uv_count"))["s"] or 0),
+        }
+
+    teams_data_impact = []
+    for team in Team.objects.filter(teammember__ir_id__in=delete_ids).distinct().order_by("id"):
+        member_ids = set(TeamMember.objects.filter(team=team).values_list("ir_id", flat=True))
+        gone = member_ids & delete_ids
+        teams_data_impact.append({
+            "team_id": team.id,
+            "team_name": team.name,
+            "members_before": len(member_ids),
+            "members_removed": len(gone),
+            "members_remaining": len(member_ids - gone),
+            "team_totals_before": _totals(member_ids),
+            "removed": _totals(gone),
+            "team_totals_after": _totals(member_ids - gone),
+        })
+
     teams_affected = []
     for team in Team.objects.filter(created_by__in=resolved).order_by("id"):
         remaining = (
@@ -268,6 +295,7 @@ def execute(resolved, *, commit, quiet=False, team_creator_to=None):
         ],
         "groups_marked_inactive": orphaned_rooms,
         "teams_losing_creator": teams_affected,
+        "teams_data_impact": teams_data_impact,
         "checks": {
             "parent_mismatches": parent_mismatches,
             "new_hierarchy_violations": new_violations,

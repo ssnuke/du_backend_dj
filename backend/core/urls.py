@@ -138,9 +138,15 @@ from core.views.pipeline import (
 )
 from core.views.prospect import GetProspectTrail
 from core.views.plan_takers import PlanTakerCandidates
+from core.views.chain_candidates import UVCandidatePlans, PlanCandidateInfos
+from core.views.players import PromotablePlayers
+from core.views.promotion_docs import PromotionDocsStatus, PromotionDocUploadUrl, PromotionDocConfirm
+from core.views.network_overview import NetworkOverview, NetworkOverviewNames
 from core.views.learn import (
     GetLearnVideos,
     GetLearnVideoStream,
+    CompleteLearnVideo,
+    SaveLearnVideoProgress,
 )
 from core.views.dreams import (
     GetDreamVideos,
@@ -316,6 +322,14 @@ urlpatterns = [
     path("chat_rooms/<int:room_id>/messages/<int:message_id>/receipts/", ChatMessageReceiptDetail.as_view()),
     path("chat_rooms/<int:room_id>/messages/<int:message_id>/reactions/", ChatMessageReactionView.as_view()),
     path("plan_taker_candidates/", PlanTakerCandidates.as_view()),
+    path("uv_candidate_plans/<str:ir_id>/", UVCandidatePlans.as_view()),
+    path("plan_candidate_infos/<str:ir_id>/", PlanCandidateInfos.as_view()),
+    path("promotable_players/", PromotablePlayers.as_view()),
+    path("promotion_docs/<str:ir_id>/", PromotionDocsStatus.as_view()),
+    path("promotion_docs/<str:ir_id>/<str:kind>/upload_url/", PromotionDocUploadUrl.as_view()),
+    path("promotion_docs/<str:ir_id>/<str:kind>/confirm/", PromotionDocConfirm.as_view()),
+    path("admin/network_overview/", NetworkOverview.as_view()),
+    path("admin/network_overview/names/", NetworkOverviewNames.as_view()),
     path("chat_candidates/", ChatCandidates.as_view()),
     path("chat_tabs_config/", ChatTabsConfigView.as_view()),
     path("chat_messages/search/", ChatMessageSearch.as_view()),
@@ -338,6 +352,8 @@ urlpatterns = [
     path("prospect_trail/<str:ir_id>/", GetProspectTrail.as_view()),
     path("learn/<str:ir_id>/videos/", GetLearnVideos.as_view()),
     path("learn/<str:ir_id>/videos/<int:video_id>/stream/", GetLearnVideoStream.as_view()),
+    path("learn/<str:ir_id>/videos/<int:video_id>/complete/", CompleteLearnVideo.as_view()),
+    path("learn/<str:ir_id>/videos/<int:video_id>/progress/", SaveLearnVideoProgress.as_view()),
 
     # ============ DREAMS ENDPOINTS ============
     path("dreams/<str:ir_id>/videos/", GetDreamVideos.as_view()),

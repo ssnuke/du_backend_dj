@@ -47,6 +47,20 @@ from core.utils.dates import get_current_week_start, get_week_info_friday_to_fri
 # Every "total UVs" figure counts this status and no other.
 UV_COUNTED_AT = "uvs_on_counter"
 
+
+def _landed_uvs(uv_value, linked_actual):
+    """
+    The UVs a plan in UV_COUNTED_AT actually delivered. When UVDetail rows are
+    linked to the plan, their sum is the truth — uv_value is only what was
+    quoted when the plan was shown, and the two differ whenever fewer (or more)
+    UVs fell than promised. Plans with no linked row (recorded before the
+    plan<->UV link existed and not backfilled) fall back to uv_value so their
+    history does not silently drop to zero.
+    """
+    if linked_actual is not None:
+        return float(linked_actual)
+    return float(uv_value or 0)
+
 IST = pytz.timezone("Asia/Kolkata")
 timezone = pytz.timezone
 
@@ -793,6 +807,11 @@ class GetInfoDetails(APIView):
 # ---------------------------------------------------
 # GET PLAN DETAILS (OPTIONAL DATE FILTER + hierarchy check)
 # ---------------------------------------------------
+def _with_plan_chain(qs):
+    """Eager-load what PlanDetailSerializer reads for the Info -> Plan -> UV chain."""
+    return qs.select_related('info', 'presented_by').prefetch_related('uv_records')
+
+
 class GetPlanDetails(APIView):
     def get(self, request, ir_id):
         requester_ir_id = request.GET.get("requester_ir_id")
@@ -826,7 +845,7 @@ class GetPlanDetails(APIView):
                     follow_up_date__lte=today,
                     status__in=['closing_pending', 'kiv', 'fg'],
                 ).order_by('follow_up_date')
-                qs = apply_optional_pagination(qs, request)
+                qs = apply_optional_pagination(_with_plan_chain(qs), request)
                 return Response(PlanDetailSerializer(qs, many=True).data)
 
             # Check for week/year parameters first
@@ -859,7 +878,7 @@ class GetPlanDetails(APIView):
             if status_filter:
                 qs = qs.filter(status=status_filter)
 
-            qs = apply_optional_pagination(qs, request)
+            qs = apply_optional_pagination(_with_plan_chain(qs), request)
             return Response(PlanDetailSerializer(qs, many=True).data)
         except Ir.DoesNotExist:
             return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
@@ -974,7 +993,8 @@ class GetTeamAggregatedPlans(APIView):
                 plan_date__gte=plan_week_start,
                 plan_date__lte=plan_week_end,
             )
-            .select_related('ir', 'presented_by')
+            .select_related('ir', 'presented_by', 'info')
+            .prefetch_related('uv_records')
             .order_by('-plan_date')
         )
 
@@ -1001,8 +1021,14 @@ class GetTeamAggregatedPlans(APIView):
         # Same definition as the monthly summary's uv_value_sum — two
         # contradicting notions of "total UVs" in one codebase is how the
         # dashboards end up disagreeing.
-        total_positive_uvs = float(
-            plans_qs.filter(uv_value__gt=0, status=UV_COUNTED_AT).aggregate(total=Sum('uv_value'))['total'] or 0
+        # Counted from the UVs that actually fell (see _landed_uvs), not the
+        # figure quoted when the plan was shown.
+        total_positive_uvs = sum(
+            _landed_uvs(uv_value, actual)
+            for uv_value, actual in plans_qs.filter(status=UV_COUNTED_AT)
+            .order_by()
+            .annotate(actual=Sum('uv_records__uv_count'))
+            .values_list('uv_value', 'actual')
         )
         presenters_set = dict(
             plans_qs.exclude(presented_by__isnull=True)
@@ -1029,6 +1055,15 @@ class GetTeamAggregatedPlans(APIView):
                 "presented_by_id": presenter_id,
                 "presented_by_name": presenter_name,
                 "plan_mode": p.plan_mode,
+                "info_id": p.info_id,
+                "info_name": p.info.info_name if p.info_id else None,
+                "info_date": p.info.info_date.isoformat() if p.info_id else None,
+                "location": p.location or "",
+                "uv_actual": float(sum((uv.uv_count for uv in p.uv_records.all()), 0)),
+                "uv_records": [
+                    {"id": uv.id, "uv_count": float(uv.uv_count), "uv_date": uv.uv_date.isoformat()}
+                    for uv in p.uv_records.all()
+                ],
             })
 
         presenters = [{"ir_id": k, "ir_name": v} for k, v in presenters_set.items()]
@@ -1150,7 +1185,9 @@ class GetMonthlyPlanSummary(APIView):
         # One bulk query for the whole month's worth of weeks (not one per
         # week) — same rationale as GetLDCs' bulk-fetch-then-bucket pattern.
         plan_rows = list(
-            filtered_qs.values_list('plan_date', 'status', 'uv_value', 'plan_mode')
+            filtered_qs.order_by()
+            .annotate(uv_actual=Sum('uv_records__uv_count'))
+            .values_list('plan_date', 'status', 'uv_value', 'plan_mode', 'uv_actual')
         )
 
         def _week_for(dt):
@@ -1167,7 +1204,7 @@ class GetMonthlyPlanSummary(APIView):
         mode_buckets = {"virtual": _empty_plan_bucket(),
                         "physical": _empty_plan_bucket(),
                         "unset": _empty_plan_bucket()}
-        for dt, plan_status, uv_value, plan_mode in plan_rows:
+        for dt, plan_status, uv_value, plan_mode, uv_actual in plan_rows:
             week_num = _week_for(dt)
             if week_num is None:
                 continue
@@ -1182,8 +1219,11 @@ class GetMonthlyPlanSummary(APIView):
                 # what MIGHT land, not what has — so the figure read as banked
                 # business when the plan was still being worked. UV_COUNTED_AT
                 # names the one status that means the UVs are really there.
-                if uv_value and float(uv_value) > 0 and status_key == UV_COUNTED_AT:
-                    bucket["uv_value_sum"] += float(uv_value)
+                # The figure is the UVs that actually fell against the plan
+                # (UVDetail rows linked to it), not the quoted uv_value —
+                # see _landed_uvs.
+                if status_key == UV_COUNTED_AT:
+                    bucket["uv_value_sum"] += _landed_uvs(uv_value, uv_actual)
 
         month_total = _empty_plan_bucket()
         for bucket in weekly_buckets.values():
@@ -3088,11 +3128,18 @@ class GetDownlineData(APIView):
         # CTC   → everyone in their downline (subtree below them)
         # LDC   → everyone in the teams they are a member of (excl. themselves)
         # Others → generic viewable count
+        # Players (newly registered, level 7) are left out of every one of
+        # these counts: they are not part of the working system until they have
+        # been promoted to IR and placed in a team. LDC's scope below is
+        # team-based, so a Player is excluded there too (they have no team) —
+        # the explicit exclude just keeps it true if one is ever added to one.
+        not_player = ~Q(ir_access_level=AccessLevel.PLAYER)
         if ir.ir_access_level == AccessLevel.ADMIN:
-            system_count = Ir.objects.filter(status=True).count()
-            inactive_count = Ir.objects.filter(status=False).count()
+            counted = Ir.objects.filter(not_player)
+            system_count = counted.filter(status=True).count()
+            inactive_count = counted.filter(status=False).count()
         elif ir.ir_access_level == AccessLevel.CTC:
-            scope = ir.get_all_downlines()
+            scope = ir.get_all_downlines().filter(not_player)
             system_count = scope.filter(status=True).count()
             inactive_count = scope.filter(status=False).count()
         elif ir.ir_access_level == AccessLevel.LDC:
@@ -3101,12 +3148,17 @@ class GetDownlineData(APIView):
                 .filter(ir=ir)
                 .values_list('team_id', flat=True)
             )
-            ldc_scope = TeamMember.objects.filter(team_id__in=ldc_team_ids).exclude(ir=ir)
+            ldc_scope = (
+                TeamMember.objects.filter(team_id__in=ldc_team_ids)
+                .exclude(ir=ir)
+                .exclude(ir__ir_access_level=AccessLevel.PLAYER)
+            )
             system_count = ldc_scope.filter(ir__status=True).values('ir_id').distinct().count()
             inactive_count = ldc_scope.filter(ir__status=False).values('ir_id').distinct().count()
         else:
-            system_count = viewable_irs.filter(status=True).count()
-            inactive_count = viewable_irs.filter(status=False).count()
+            counted = viewable_irs.filter(not_player)
+            system_count = counted.filter(status=True).count()
+            inactive_count = counted.filter(status=False).count()
 
         total_member_count = system_count + inactive_count
         retention_ratio = round((system_count / total_member_count) * 100, 2) if total_member_count else 0.0

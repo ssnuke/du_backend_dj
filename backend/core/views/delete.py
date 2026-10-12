@@ -176,6 +176,7 @@ class AdminBulkDeleteIrs(APIView):
                 "reparented": result["reparented"],
                 "groups_marked_inactive": result["groups_marked_inactive"],
                 "teams_losing_creator": result["teams_losing_creator"],
+                "teams_data_impact": result["teams_data_impact"],
                 "checks": result["checks"], "deleted": result["deleted"] if result["committed"] else []}
         if not result["ok"]:
             body["detail"] = "Verification failed — nothing was deleted."
@@ -429,8 +430,21 @@ class DeleteUVDetail(APIView):
             ir_name = uv_detail.ir_name
             prospect_name = uv_detail.prospect_name
             
-            # Delete the record
-            uv_detail.delete()
+            # Delete the record. If it was the last UV against a plan, the plan
+            # goes back to In-process: it only read "UVs on Counter" because of
+            # this row, and leaving it there would count UVs that no longer
+            # exist in the monthly figures.
+            linked_plan = uv_detail.plan
+            with transaction.atomic():
+                uv_detail.delete()
+                if (
+                    linked_plan is not None
+                    and linked_plan.status == "uvs_on_counter"
+                    and not linked_plan.uv_records.exists()
+                ):
+                    linked_plan.status = "closed"
+                    linked_plan.save(update_fields=["status"])
+                    invalidate_ldc_pocket_dashboard_cache(ir, linked_plan.plan_date)
             
             return Response(
                 {

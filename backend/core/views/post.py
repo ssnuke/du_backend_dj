@@ -765,6 +765,7 @@ class AddInfoDetail(APIView):
                     comments=item.get("comments"),
                     info_name=item["info_name"],
                     monitored_by=item.get("monitored_by", "Self"),
+                    location=(item.get("location") or "").strip(),
                 )
                 created_ids.append(info.id)
 
@@ -868,6 +869,20 @@ class AddPlanDetail(APIView):
                 if not isinstance(item, dict):
                     continue
                     
+                # Optional link to the info this plan came from. It has to be
+                # this IR's own info — a plan cannot descend from someone
+                # else's lead.
+                linked_info = None
+                info_id = item.get("info_id")
+                if info_id:
+                    linked_info = InfoDetail.objects.filter(id=info_id, ir=ir).first()
+                    if linked_info is None:
+                        transaction.set_rollback(True)
+                        return Response(
+                            {"detail": "Info not found for this IR"},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+
                 presented_by_ir = None
                 presented_by_id = item.get("presented_by")
                 if presented_by_id:
@@ -887,6 +902,9 @@ class AddPlanDetail(APIView):
                     follow_up_date=item.get("follow_up_date") or None,
                     uv_value=item.get("uv_value") or None,
                     plan_mode=_clean_plan_mode(item.get("plan_mode")),
+                    info=linked_info,
+                    # Typed value wins; otherwise inherit from the info.
+                    location=(item.get("location") or (linked_info.location if linked_info else "") or "").strip(),
                 )
                 created_ids.append(plan.id)
                 created_plans.append(plan)
@@ -1011,16 +1029,54 @@ class AddUV(APIView):
                         if isinstance(final_date, datetime) and timezone.is_naive(final_date):
                             final_date = timezone.make_aware(final_date)
                     
+                    # Converting a plan that was already shown: the UV hangs off
+                    # that PlanDetail instead of floating free, so the prospect
+                    # has one trail (info -> plan -> UV). The plan row is locked
+                    # so two simultaneous saves cannot both flip it.
+                    linked_plan = None
+                    plan_id = item.get("plan_id")
+                    if plan_id:
+                        linked_plan = PlanDetail.objects.select_for_update().filter(id=plan_id, ir=ir).first()
+                        if linked_plan is None:
+                            # Earlier items in this request are already written;
+                            # undo them so a bad row cannot half-apply the batch.
+                            transaction.set_rollback(True)
+                            return Response(
+                                {"detail": "Plan not found for this IR"},
+                                status=status.HTTP_400_BAD_REQUEST
+                            )
+                        if linked_plan.status == "rejected":
+                            # Earlier items in this request are already written;
+                            # undo them so a bad row cannot half-apply the batch.
+                            transaction.set_rollback(True)
+                            return Response(
+                                {"detail": "A rejected plan cannot have UVs. Change its status first."},
+                                status=status.HTTP_400_BAD_REQUEST
+                            )
+
+                    # The prospect's name comes from the plan when there is one,
+                    # so it can never drift from the plan's spelling.
+                    prospect_name = (
+                        (linked_plan.plan_name or "") if linked_plan
+                        else item.get("prospect_name", "")
+                    )
+
                     # Create UVDetail record for week-specific tracking with IR name and prospect name
                     uv_detail = UVDetail.objects.create(
                         ir=ir,
                         ir_name=ir.ir_name,  # Store IR name for display
-                        prospect_name=item.get("prospect_name", ""),  # Store prospect name
+                        prospect_name=prospect_name,
                         uv_count=uv_count,
                         uv_date=final_date,
-                        comments=item.get("comments")
+                        comments=item.get("comments"),
+                        plan=linked_plan,
                     )
                     uv_record_ids.append(uv_detail.id)
+
+                    if linked_plan is not None:
+                        linked_plan.status = "uvs_on_counter"
+                        linked_plan.save(update_fields=["status"])
+                        invalidate_ldc_pocket_dashboard_cache(ir, linked_plan.plan_date)
 
                     invalidate_ldc_pocket_dashboard_cache(ir, uv_detail.uv_date)
                     total_uvs_added += uv_count
@@ -1366,10 +1422,10 @@ class ChangeIRAccessLevel(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Validate access level range (1-6)
-        if new_access_level not in [1, 2, 3, 4, 5, 6]:
+        # Validate access level range (1-7; 7 is Player)
+        if new_access_level not in [1, 2, 3, 4, 5, 6, 7]:
             return Response(
-                {"detail": "new_access_level must be between 1 and 6"},
+                {"detail": "new_access_level must be between 1 and 7"},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -1382,13 +1438,6 @@ class ChangeIRAccessLevel(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # Only ADMIN (1) and CTC (2) can promote/demote
-        if not acting_ir.can_promote_demote():
-            return Response(
-                {"detail": "Unauthorized. Only ADMIN and CTC can change access levels"},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
         try:
             # Get target IR
             target_ir = Ir.objects.get(ir_id=target_ir_id)
@@ -1397,7 +1446,29 @@ class ChangeIRAccessLevel(APIView):
                 {"detail": "Target IR not found"},
                 status=status.HTTP_404_NOT_FOUND
             )
+
+        # ADMIN (1) and CTC (2) can promote/demote freely. An LDC (3) has one
+        # job here: turn a Player they answer for into an IR.
+        if not acting_ir.can_promote_demote():
+            if not (
+                acting_ir.can_promote_player(target_ir)
+                and new_access_level == AccessLevel.IR
+            ):
+                return Response(
+                    {"detail": "Unauthorized. ADMIN and CTC can change access levels; an LDC can only promote a Player to IR"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
         
+        # A Player becomes an IR only once all three promotion documents have
+        # been sent. No override: the check applies to Admin and CTC as well.
+        if target_ir.ir_access_level == AccessLevel.PLAYER and new_access_level < AccessLevel.PLAYER:
+            missing = target_ir.missing_promotion_documents()
+            if missing:
+                return Response(
+                    {"detail": "This Player has not sent all their documents yet.", "missing_documents": missing},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         # Prevent self-modification
         if acting_ir_id == target_ir_id:
             return Response(

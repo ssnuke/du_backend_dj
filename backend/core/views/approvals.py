@@ -51,7 +51,10 @@ class RequestRegisterIr(APIView):
         ir_name = data.get("ir_name")
         ir_email = data.get("ir_email")
         parent_ir_id = data.get("parent_ir_id") or None
-        ir_access_level = data.get("ir_access_level", 6)
+        # Everyone registered through this flow starts as a Player and is
+        # promoted later, so a level sent by the client is ignored rather than
+        # trusted — otherwise an older client that still sends 6 would skip it.
+        ir_access_level = AccessLevel.PLAYER
         ir_password = data.get("ir_password") or "secret"
 
         if not requester_ir_id:
@@ -217,7 +220,7 @@ class ApproveIrRequest(APIView):
                     ir_id=ir_id,
                     ir_name=payload.get("ir_name"),
                     ir_email=payload.get("ir_email"),
-                    ir_access_level=payload.get("ir_access_level", 6),
+                    ir_access_level=payload.get("ir_access_level", AccessLevel.PLAYER),
                     parent_ir=parent_ir,
                 )
                 # Already hashed at request time — assign directly, don't re-hash.

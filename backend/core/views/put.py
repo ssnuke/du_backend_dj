@@ -24,6 +24,7 @@ from core.models import (
     WeeklyTarget,
     Notification,
     AccessLevel,
+    IrStatusChange,
 )
 from core.utils.notifications import get_notification_recipients, create_notifications
 from core.serializers import (
@@ -93,11 +94,18 @@ class UpdateIrDetails(APIView):
                     status=status.HTTP_403_FORBIDDEN
                 )
             new_level = request.data["ir_access_level"]
-            if new_level not in [1, 2, 3, 4, 5, 6]:
+            if new_level not in [1, 2, 3, 4, 5, 6, 7]:
                 return Response(
-                    {"detail": "Invalid access level. Must be 1-6"},
+                    {"detail": "Invalid access level. Must be 1-7"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
+            if ir.ir_access_level == AccessLevel.PLAYER and new_level < AccessLevel.PLAYER:
+                missing = ir.missing_promotion_documents()
+                if missing:
+                    return Response(
+                        {"detail": "This Player has not sent all their documents yet.", "missing_documents": missing},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
             ir.ir_access_level = new_level
             updated_fields["ir_access_level"] = ir.ir_access_level
         
@@ -1227,8 +1235,16 @@ class ToggleIrStatus(APIView):
         if not get_status_manageable_irs(requester).filter(ir_id=target.ir_id).exists():
             return Response({"detail": "Not authorized to change status for this IR"}, status=status.HTTP_403_FORBIDDEN)
 
-        target.status = new_status
-        target.save(update_fields=["status"])
+        # Log only a real change, so repeating a toggle can't inflate the
+        # dashboard's deactivated/reactivated counts.
+        if target.status != new_status:
+            with transaction.atomic():
+                target.status = new_status
+                target.save(update_fields=["status"])
+                IrStatusChange.objects.create(
+                    ir=target, ir_id_text=target.ir_id, ir_name=target.ir_name,
+                    changed_by=requester, is_active=new_status,
+                )
 
         return Response({
             "ir_id": target.ir_id,
