@@ -68,6 +68,13 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+# Registration level. While the previous app version is still in use it sends
+# an explicit access level when an LDC registers someone, and that is honoured
+# so nothing changes for it. The new app sends none, and the person starts as a
+# Player. Set PLAYER_REGISTRATION_ENFORCED=true at go-live to make every
+# registration a Player whatever the client sends.
+PLAYER_REGISTRATION_ENFORCED = os.getenv("PLAYER_REGISTRATION_ENFORCED", "false").lower() in ("true", "1", "yes")
+
 CORS_ALLOW_ALL_ORIGINS = True  # For development/testing
 
 # OR for production (recommended):

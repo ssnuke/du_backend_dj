@@ -133,7 +133,9 @@ def _course_items(ir, course_videos):
             **_video_list_item(video), **base,
             "coming_soon": False,
             "completed": completed,
-            "locked": gated and earlier_unfinished,
+            # A lesson already finished stays open even if the outline has
+            # since changed and an unfinished lesson now sits before it.
+            "locked": gated and earlier_unfinished and not completed,
         })
         if not completed:
             earlier_unfinished = True
@@ -143,7 +145,7 @@ def _course_items(ir, course_videos):
         items.append({
             **_video_list_item(video), "lesson_key": None, "lesson_number": None, "scripts": [],
             "coming_soon": False, "completed": completed,
-            "locked": gated and earlier_unfinished,
+            "locked": gated and earlier_unfinished and not completed,
         })
     return items
 
@@ -176,9 +178,17 @@ class GetLearnVideos(APIView):
         if blocked:
             videos = videos.exclude(category__in=blocked)
 
-        items = [_video_list_item(v) for v in videos.exclude(category=COURSE_CATEGORY)]
-        if COURSE_CATEGORY not in blocked:
-            items.extend(_course_items(ir, videos.filter(category=COURSE_CATEGORY)))
+        # The course layout (numbered lessons, locks, "Coming soon" slots) is only
+        # sent to an app that asks for it with ?course=1. An older app does not
+        # know what a placeholder is and would show it as a video that errors
+        # when tapped, so it keeps getting the plain list of real videos.
+        wants_course = request.GET.get("course") == "1"
+        if wants_course:
+            items = [_video_list_item(v) for v in videos.exclude(category=COURSE_CATEGORY)]
+            if COURSE_CATEGORY not in blocked:
+                items.extend(_course_items(ir, videos.filter(category=COURSE_CATEGORY)))
+        else:
+            items = [_video_list_item(v) for v in videos]
 
         # Where they left off, for any video that is not finished.
         resume = dict(

@@ -6,6 +6,7 @@ from django.db import transaction, IntegrityError
 from django.contrib.auth.hashers import make_password
 from django.utils import timezone
 
+from django.conf import settings
 from core.models import Ir, IrId, AccessLevel, IrPendingRequest
 from core.utils.notifications import create_notifications
 from core.serializers import IrPendingRequestSerializer
@@ -52,9 +53,19 @@ class RequestRegisterIr(APIView):
         ir_email = data.get("ir_email")
         parent_ir_id = data.get("parent_ir_id") or None
         # Everyone registered through this flow starts as a Player and is
-        # promoted later, so a level sent by the client is ignored rather than
-        # trusted — otherwise an older client that still sends 6 would skip it.
+        # promoted later. The previous app version still sends an explicit level
+        # (3-6), and until PLAYER_REGISTRATION_ENFORCED is switched on at
+        # go-live that is honoured, so it keeps working exactly as before. The
+        # new app sends none. Once enforced, any level a client sends is ignored.
         ir_access_level = AccessLevel.PLAYER
+        legacy_level = data.get("ir_access_level")
+        if legacy_level is not None and not settings.PLAYER_REGISTRATION_ENFORCED:
+            try:
+                legacy_level = int(legacy_level)
+            except (TypeError, ValueError):
+                legacy_level = None
+            if legacy_level in (AccessLevel.LDC, AccessLevel.LS, AccessLevel.GC, AccessLevel.IR):
+                ir_access_level = legacy_level
         ir_password = data.get("ir_password") or "secret"
 
         if not requester_ir_id:

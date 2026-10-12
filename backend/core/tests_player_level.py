@@ -50,6 +50,7 @@ class PlayerLevelTests(TestCase):
 
     # --- registration -----------------------------------------------------
 
+    @override_settings(PLAYER_REGISTRATION_ENFORCED=True)
     def test_registration_always_starts_as_player(self):
         IrId.objects.get_or_create(ir_id="NEWBIE")
         r = self.post("/api/ir_requests/register/", {
@@ -64,6 +65,27 @@ class PlayerLevelTests(TestCase):
         r = self.post(f"/api/ir_requests/{pending.id}/approve/", {"requester_ir_id": self.admin.ir_id})
         self.assertEqual(r.status_code, 200, r.content)
         self.assertEqual(Ir.objects.get(ir_id="NEWBIE").ir_access_level, AccessLevel.PLAYER)
+
+    def register(self, ir_id, **extra):
+        IrId.objects.get_or_create(ir_id=ir_id)
+        r = self.post("/api/ir_requests/register/", {
+            "requester_ir_id": self.ldc.ir_id, "ir_id": ir_id, "ir_name": ir_id, "ir_email": "n@t.t",
+            "parent_ir_id": self.ls.ir_id, **extra,
+        })
+        self.assertEqual(r.status_code, 201, r.content)
+        return IrPendingRequest.objects.get(target_ir_code=ir_id).payload["ir_access_level"]
+
+    @override_settings(PLAYER_REGISTRATION_ENFORCED=False)
+    def test_before_go_live_the_previous_apps_explicit_level_still_works(self):
+        self.assertEqual(self.register("OLD1", ir_access_level=6), AccessLevel.IR)
+        self.assertEqual(self.register("OLD2", ir_access_level=3), AccessLevel.LDC)
+        # Nonsense, or Admin/CTC, is not honoured.
+        self.assertEqual(self.register("OLD3", ir_access_level=1), AccessLevel.PLAYER)
+        self.assertEqual(self.register("OLD4", ir_access_level="abc"), AccessLevel.PLAYER)
+
+    @override_settings(PLAYER_REGISTRATION_ENFORCED=False)
+    def test_the_new_app_sends_no_level_and_gets_a_player(self):
+        self.assertEqual(self.register("NEW1"), AccessLevel.PLAYER)
 
     # --- promotion --------------------------------------------------------
 

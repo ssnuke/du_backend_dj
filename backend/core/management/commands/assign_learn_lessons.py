@@ -21,9 +21,11 @@ ALIASES = {
     "welcome": ["welcome"],
     "why_nm": ["whynm", "whynetworkmarketing"],
     "switch_on": ["switchon"],
-    "info_part": ["infopart", "infos", "info"],
+    # Only the numbered forms: a bare "Info part" could be either, so it is
+    # left for you to place by hand rather than guessed.
+    "info_part_1": ["infopart1", "info1"],
+    "info_part_2": ["infopart2", "info2"],
     "oh1": ["oh1"],
-    "oh2": ["oh2"],
     "scripts": ["scripts", "script"],
     "closings": ["closings", "closing"],
     "prospecting": ["prospecting"],

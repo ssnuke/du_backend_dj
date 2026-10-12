@@ -30,12 +30,21 @@ class LearnCourseTests(TestCase):
         cls.welcome = vid("welcome", "Welcome")
         cls.why = vid("why_nm", "Why NM")
         # switch_on has no video: coming soon.
-        cls.info = vid("info_part", "Info part")
+        cls.info = vid("info_part_1", "Info part")
 
     def course(self, who):
-        r = self.client.get(f"/api/learn/{who.ir_id}/videos/")
+        r = self.client.get(f"/api/learn/{who.ir_id}/videos/?course=1")
         self.assertEqual(r.status_code, 200, r.content)
         return [i for i in r.json() if i["category"] == "basic_training"]
+
+    def test_an_app_that_does_not_ask_for_the_course_gets_the_plain_list(self):
+        """The previous app version must see no placeholders and no course ordering."""
+        r = self.client.get("/api/learn/LIR/videos/")
+        self.assertEqual(r.status_code, 200)
+        items = r.json()
+        self.assertEqual({i["title"] for i in items}, {"Welcome", "Why NM", "Info part"})
+        self.assertTrue(all(i["id"] is not None for i in items), "no Coming-soon placeholders")
+        self.assertFalse(any("coming_soon" in i for i in items))
 
     def test_outline_is_numbered_with_coming_soon_slots(self):
         items = self.course(self.player)
@@ -44,6 +53,24 @@ class LearnCourseTests(TestCase):
         self.assertTrue(items[2]["coming_soon"])
         self.assertIsNone(items[2]["id"])
         self.assertEqual(len(items), 10)
+
+    def test_the_outline_is_the_agreed_ten_lessons_in_order(self):
+        from core.learn_curriculum import LESSONS
+        self.assertEqual(
+            [l["title"] for l in LESSONS],
+            ["Welcome", "Why NM", "Switch ON", "Info Part 1", "Info Part 2", "OH1",
+             "Scripts", "Closings", "Prospecting", "Success Formula"],
+        )
+        # There is no OH2 any more.
+        self.assertNotIn("oh2", [l["key"] for l in LESSONS])
+        items = self.course(self.player)
+        self.assertEqual([i["lesson_number"] for i in items], list(range(1, 11)))
+
+    def test_both_info_parts_offer_the_info_script(self):
+        from core.learn_curriculum import LESSONS
+        by_key = {l["key"]: l for l in LESSONS}
+        self.assertEqual(by_key["info_part_1"]["scripts"], ["info"])
+        self.assertEqual(by_key["info_part_2"]["scripts"], ["info"])
 
     def test_player_only_has_first_lesson_open(self):
         items = {i["title"]: i for i in self.course(self.player)}
@@ -59,6 +86,20 @@ class LearnCourseTests(TestCase):
         self.assertTrue(items["Welcome"]["completed"])
         # Switch ON has no video, so Info part opens straight after Why NM.
         self.assertFalse(items["Info part"]["locked"])
+
+    def test_a_finished_lesson_never_locks_when_the_outline_changes(self):
+        """A video added to an earlier slot later must not lock lessons already finished."""
+        for v in (self.welcome, self.why, self.info):
+            self.client.post(f"/api/learn/LPLAYER/videos/{v.id}/complete/")
+        # A new, unfinished video appears in Info Part 2, before OH1.
+        LearnVideo.objects.create(title="Info 2", lesson_key="info_part_2", bunny_video_id="n2",
+                                  bunny_library_id="l", category="basic_training")
+        oh1 = LearnVideo.objects.create(title="OH1 video", lesson_key="oh1", bunny_video_id="n3",
+                                        bunny_library_id="l", category="basic_training")
+        LearnVideoProgress.objects.create(ir_id="LPLAYER", video=oh1, completed_at="2026-01-01T00:00:00Z")
+        items = {i["title"]: i for i in self.course(self.player)}
+        self.assertFalse(items["OH1 video"]["locked"], "already finished, so it stays open")
+        self.assertFalse(items["Info 2"]["locked"], "the next lesson to do is open")
 
     def test_locked_lesson_cannot_be_streamed_or_completed(self):
         self.assertEqual(self.client.get(f"/api/learn/LPLAYER/videos/{self.why.id}/stream/").status_code, 403)
@@ -92,7 +133,7 @@ class LearnCourseTests(TestCase):
 
     def test_assign_command_matches_titles_and_never_guesses(self):
         LearnVideo.objects.all().delete()
-        for t in ["1. Welcome", "Why N.M", "Prospecting tips", "Random bonus"]:
+        for t in ["1. Welcome", "Why N.M", "Prospecting tips", "Info part 2", "Info part", "Random bonus"]:
             LearnVideo.objects.create(title=t, bunny_video_id=f"x-{t}", bunny_library_id="l", category="basic_training")
         call_command("assign_learn_lessons", stdout=StringIO())
         self.assertEqual(LearnVideo.objects.exclude(lesson_key__isnull=True).count(), 0, "dry run")
@@ -102,6 +143,8 @@ class LearnCourseTests(TestCase):
         self.assertEqual(got["Why N.M"], "why_nm")
         self.assertEqual(got["Prospecting tips"], "prospecting")
         self.assertIsNone(got["Random bonus"])
+        self.assertEqual(got["Info part 2"], "info_part_2")
+        self.assertIsNone(got["Info part"], "a bare Info part could be 1 or 2, so it is not guessed")
 
 
 @override_settings(CACHES=LOCMEM, BUNNY_STREAM_CDN_HOSTNAME="cdn.test", BUNNY_STREAM_TOKEN_KEY="")
@@ -124,7 +167,7 @@ class LearnResumeTests(TestCase):
                                 data={"position_seconds": seconds}, content_type="application/json")
 
     def resume(self, title):
-        items = self.client.get("/api/learn/RPLAYER/videos/").json()
+        items = self.client.get("/api/learn/RPLAYER/videos/?course=1").json()
         return next(i for i in items if i["title"] == title)["resume_seconds"]
 
     def test_position_is_saved_and_returned(self):
@@ -162,7 +205,7 @@ class LearnResumeTests(TestCase):
         Ir.objects.create(ir_id="ROTHER", ir_name="O", ir_email="o@t.t", ir_password="x",
                           ir_access_level=AccessLevel.IR, status=True)
         self.save(self.one, 200)
-        items = self.client.get("/api/learn/ROTHER/videos/").json()
+        items = self.client.get("/api/learn/ROTHER/videos/?course=1").json()
         self.assertEqual(next(i for i in items if i["title"] == "Welcome")["resume_seconds"], 0)
 
 
@@ -212,3 +255,24 @@ class CourseOutlineAdminTests(TestCase):
         r = self.client.get("/admin/core/learnvideo/course/")
         self.assertEqual(r.status_code, 302)
         self.assertIn("login", r["Location"])
+
+
+@override_settings(CACHES=LOCMEM)
+class OutlineMigrationTests(TestCase):
+    """Videos already placed when the outline changed keep their place where they can."""
+
+    def test_old_assignments_carry_over(self):
+        import importlib
+        from django.apps import apps
+        migration = importlib.import_module("core.migrations.0066_course_outline_info_parts")
+
+        def make(title, key):
+            return LearnVideo.objects.create(title=title, lesson_key=key, bunny_video_id=f"m-{title}",
+                                             bunny_library_id="l", category="basic_training")
+        info = make("Info", "info_part")
+        oh2 = make("Second OH", "oh2")
+        oh1 = make("First OH", "oh1")
+        migration.carry_over_assignments(apps, None)
+        self.assertEqual(LearnVideo.objects.get(pk=info.pk).lesson_key, "info_part_1")
+        self.assertIsNone(LearnVideo.objects.get(pk=oh2.pk).lesson_key)
+        self.assertEqual(LearnVideo.objects.get(pk=oh1.pk).lesson_key, "oh1")
