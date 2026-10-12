@@ -66,6 +66,31 @@ class LearnCourseTests(TestCase):
         items = self.course(self.player)
         self.assertEqual([i["lesson_number"] for i in items], list(range(1, 11)))
 
+    def test_scripts_lesson_is_a_reference_not_a_coming_soon_video(self):
+        items = {i["lesson_key"]: i for i in self.course(self.player)}
+        scripts = items["scripts"]
+        self.assertTrue(scripts["reference"])
+        self.assertFalse(scripts["coming_soon"], "it has no video and is not 'coming soon'")
+        self.assertIsNone(scripts["id"])
+        self.assertEqual(set(scripts["scripts"]), {"info", "dkd", "drilling", "purpose-call"})
+        self.assertTrue(scripts["description"])
+
+    def test_reference_lesson_is_locked_until_earlier_lessons_but_never_holds_anyone_up(self):
+        # Before anything is finished the scripts are locked like any later lesson.
+        self.assertTrue({i["lesson_key"]: i for i in self.course(self.player)}["scripts"]["locked"])
+        closings = LearnVideo.objects.create(title="Closings", lesson_key="closings", bunny_video_id="c1",
+                                             bunny_library_id="l", category="basic_training")
+        for v in (self.welcome, self.why, self.info):
+            self.client.post(f"/api/learn/LPLAYER/videos/{v.id}/complete/")
+        items = {i["lesson_key"]: i for i in self.course(self.player)}
+        self.assertFalse(items["scripts"]["locked"], "open once the videos before it are done")
+        # Nothing waits on it: Closings (after Scripts) is open without any "completion" of Scripts.
+        self.assertFalse(items["closings"]["locked"])
+        self.assertEqual(self.client.get(f"/api/learn/LPLAYER/videos/{closings.id}/stream/").status_code, 200)
+
+    def test_an_ir_sees_the_reference_lesson_open(self):
+        self.assertFalse({i["lesson_key"]: i for i in self.course(self.ir)}["scripts"]["locked"])
+
     def test_both_info_parts_offer_the_info_script(self):
         from core.learn_curriculum import LESSONS
         by_key = {l["key"]: l for l in LESSONS}
@@ -133,7 +158,7 @@ class LearnCourseTests(TestCase):
 
     def test_assign_command_matches_titles_and_never_guesses(self):
         LearnVideo.objects.all().delete()
-        for t in ["1. Welcome", "Why N.M", "Prospecting tips", "Info part 2", "Info part", "Random bonus"]:
+        for t in ["1. Welcome", "Why N.M", "Prospecting tips", "Info part 2", "Info part", "Scripts", "Random bonus"]:
             LearnVideo.objects.create(title=t, bunny_video_id=f"x-{t}", bunny_library_id="l", category="basic_training")
         call_command("assign_learn_lessons", stdout=StringIO())
         self.assertEqual(LearnVideo.objects.exclude(lesson_key__isnull=True).count(), 0, "dry run")
@@ -145,6 +170,7 @@ class LearnCourseTests(TestCase):
         self.assertIsNone(got["Random bonus"])
         self.assertEqual(got["Info part 2"], "info_part_2")
         self.assertIsNone(got["Info part"], "a bare Info part could be 1 or 2, so it is not guessed")
+        self.assertIsNone(got["Scripts"], "Scripts is a reference lesson and takes no video")
 
 
 @override_settings(CACHES=LOCMEM, BUNNY_STREAM_CDN_HOSTNAME="cdn.test", BUNNY_STREAM_TOKEN_KEY="")
@@ -230,6 +256,13 @@ class CourseOutlineAdminTests(TestCase):
         for title in ("Welcome", "Why NM", "Switch ON", "Success Formula"):
             self.assertContains(r, title)
 
+    def test_scripts_lesson_has_no_video_dropdown_and_ignores_posts(self):
+        r = self.client.get("/admin/core/learnvideo/course/")
+        self.assertNotContains(r, 'name="slot_scripts"')
+        self.assertContains(r, "Scripts only")
+        self.client.post("/admin/core/learnvideo/course/", {"slot_scripts": self.a.id, "slot_welcome": self.a.id})
+        self.assertEqual(LearnVideo.objects.get(pk=self.a.pk).lesson_key, "welcome")
+
     def test_changelist_links_to_the_outline(self):
         self.assertContains(self.client.get("/admin/core/learnvideo/"), "Course outline")
 
@@ -255,6 +288,18 @@ class CourseOutlineAdminTests(TestCase):
         r = self.client.get("/admin/core/learnvideo/course/")
         self.assertEqual(r.status_code, 302)
         self.assertIn("login", r["Location"])
+
+
+@override_settings(CACHES=LOCMEM)
+class ScriptsMigrationTests(TestCase):
+    def test_a_video_placed_in_scripts_is_unassigned(self):
+        import importlib
+        from django.apps import apps
+        migration = importlib.import_module("core.migrations.0067_scripts_lesson_is_reference")
+        v = LearnVideo.objects.create(title="S", lesson_key="scripts", bunny_video_id="s1",
+                                      bunny_library_id="l", category="basic_training")
+        migration.unassign_scripts(apps, None)
+        self.assertIsNone(LearnVideo.objects.get(pk=v.pk).lesson_key)
 
 
 @override_settings(CACHES=LOCMEM)

@@ -3,7 +3,7 @@ from django.contrib import admin, messages
 from django.db import transaction
 from django.shortcuts import redirect, render
 from django.urls import path, reverse
-from core.learn_curriculum import LESSONS
+from core.learn_curriculum import LESSONS, is_reference
 from core.models import LearnVideo, DreamVideo, StickerPack, Sticker, InventoryFile, InventoryVideo
 from core.views.learn import raw_thumbnail_url
 from core.utils.bunny import purge_bunny_url, get_bunny_thumbnail_filename
@@ -94,6 +94,8 @@ class LearnVideoAdmin(admin.ModelAdmin):
         if request.method == 'POST':
             chosen = {}
             for lesson in LESSONS:
+                if is_reference(lesson):
+                    continue  # a scripts-only lesson has no video to choose
                 value = request.POST.get(f"slot_{lesson['key']}", '')
                 if value:
                     if value not in by_id:
@@ -110,12 +112,13 @@ class LearnVideoAdmin(admin.ModelAdmin):
                     LearnVideo.objects.filter(lesson_key__isnull=False).update(lesson_key=None)
                     for key, video_id in chosen.items():
                         LearnVideo.objects.filter(pk=video_id).update(lesson_key=key)
-                messages.success(request, f"Course outline saved: {len(chosen)} of {len(LESSONS)} lessons have a video.")
+                messages.success(request, f"Course outline saved: {len(chosen)} of {sum(1 for l in LESSONS if not is_reference(l))} video lessons have a video.")
             return redirect(request.path)
 
         current = {v.lesson_key: v.id for v in videos if v.lesson_key}
         rows = [
-            {'number': n, 'key': l['key'], 'title': l['title'], 'selected': current.get(l['key'])}
+            {'number': n, 'key': l['key'], 'title': l['title'], 'selected': current.get(l['key']),
+             'reference': is_reference(l)}
             for n, l in enumerate(LESSONS, start=1)
         ]
         context = {

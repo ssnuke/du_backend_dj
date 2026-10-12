@@ -9,7 +9,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
-from core.learn_curriculum import LESSONS
+from core.learn_curriculum import LESSONS, is_reference
 from core.models import AccessLevel, Ir, LearnVideo, LearnVideoProgress, RESTRICTED_LEARN_CATEGORIES
 
 COURSE_CATEGORY = "basic_training"
@@ -124,6 +124,17 @@ def _course_items(ir, course_videos):
     for number, lesson in enumerate(LESSONS, start=1):
         video = by_key.get(lesson["key"])
         base = {"lesson_key": lesson["key"], "lesson_number": number, "scripts": lesson["scripts"]}
+        if is_reference(lesson):
+            # Scripts only, no video: open once the lessons before it are done
+            # (so it cannot be read ahead), but nothing waits on it, because
+            # there is nothing to finish.
+            items.append({
+                **base, "id": None, "title": lesson["title"], "category": COURSE_CATEGORY,
+                "description": lesson.get("description", ""),
+                "reference": True, "coming_soon": False, "completed": False,
+                "locked": gated and earlier_unfinished,
+            })
+            continue
         if video is None:
             items.append({**base, "id": None, "title": lesson["title"], "category": COURSE_CATEGORY,
                           "coming_soon": True, "locked": False, "completed": False})

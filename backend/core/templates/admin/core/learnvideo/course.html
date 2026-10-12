@@ -25,12 +25,16 @@
           <td>{{ row.number }}</td>
           <td><label for="slot_{{ row.key }}"><strong>{{ row.title }}</strong></label></td>
           <td>
+            {% if row.reference %}
+              <em>Scripts only &mdash; no video. The app lists the scripts for this lesson.</em>
+            {% else %}
             <select name="slot_{{ row.key }}" id="slot_{{ row.key }}" style="min-width:320px">
               <option value="">Coming soon (no video yet)</option>
               {% for v in videos %}
                 <option value="{{ v.id }}" {% if v.id == row.selected %}selected{% endif %}>{{ v.title }}{% if not v.is_published %} (unpublished){% endif %}</option>
               {% endfor %}
             </select>
+            {% endif %}
           </td>
         </tr>
       {% endfor %}

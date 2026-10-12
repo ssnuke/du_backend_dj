@@ -26,7 +26,6 @@ ALIASES = {
     "info_part_1": ["infopart1", "info1"],
     "info_part_2": ["infopart2", "info2"],
     "oh1": ["oh1"],
-    "scripts": ["scripts", "script"],
     "closings": ["closings", "closing"],
     "prospecting": ["prospecting"],
     "success_formula": ["successformula", "sucessformula", "successforumla", "sucessforumla"],
