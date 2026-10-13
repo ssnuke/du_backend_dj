@@ -488,8 +488,15 @@ class ChatRoomListCreate(APIView):
         if missing:
             return Response({"detail": f"Invalid member IDs: {', '.join(missing)}"}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Allowed if either rule says yes: the direct-message rule (which also
+        # covers an upline) or the picker's reach (which covers a downline and
+        # team peers). Checking only the first meant the picker offered an LS
+        # their own downline and creation then refused it.
+        reachable = get_chat_reachable_ids(requester)
         for member in members:
-            if member.ir_id != requester.ir_id and not _can_chat_with(requester, member):
+            if member.ir_id == requester.ir_id:
+                continue
+            if not (_can_chat_with(requester, member) or member.ir_id in reachable):
                 return Response({"detail": f"Not authorized to add {member.ir_id} to room"}, status=status.HTTP_403_FORBIDDEN)
 
         with transaction.atomic():
