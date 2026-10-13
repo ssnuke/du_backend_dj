@@ -445,7 +445,8 @@ class Ir(models.Model):
         Check if this IR can add info/plan/UV for target_ir
         - ADMIN: Can add for everyone
         - CTC: Can add for subtree
-        - LDC: Can add for members of teams they created
+        - LDC: Can add for their whole downline (hierarchy subtree) and for
+          members of teams they created
         - LS: Can add for team members (in teams they belong to)
         - GC: Can add only for self, unless they're a pocket head, in which
           case they can also add for their downlines (hierarchy subtree)
@@ -467,9 +468,10 @@ class Ir(models.Model):
         if self.ir_access_level == AccessLevel.CTC:
             return self.is_in_subtree(target_ir)
         
-        # LDC can add for members of teams they created
+        # LDC can add for anyone in their downline, and for members of teams
+        # they created (a team can include people outside their hierarchy)
         if self.ir_access_level == AccessLevel.LDC:
-            return self._is_member_of_own_team(target_ir)
+            return self.is_in_subtree(target_ir) or self._is_member_of_own_team(target_ir)
         
         # LS can add for team members
         if self.ir_access_level == AccessLevel.LS:
@@ -540,12 +542,12 @@ class Ir(models.Model):
         somebody, let you type numbers in, and then 403 on Save with no
         warning up front.
 
-        This was already live for an LDC: their VIEW reaches their whole
-        hierarchy subtree, but their EDIT permission is members of teams
-        THEY created — a real gap whenever an LDC's subtree includes people
-        outside those teams. It would have hit a non-pocket-head GC the
-        moment Settings started offering them this screen, since GC's VIEW
-        is the same "whole subtree" while GC's EDIT is pocket-head-gated.
+        This used to bite an LDC: their VIEW reached their whole hierarchy
+        subtree while their EDIT was only members of teams THEY created. An
+        LDC's EDIT now covers the whole subtree as well (plus their teams'
+        members), so the two agree. The same gap would hit a non-pocket-head
+        GC the moment Settings started offering them this screen, since GC's
+        VIEW is the whole subtree while GC's EDIT is pocket-head-gated.
         """
         from core.models import Team, TeamMember
 
@@ -560,7 +562,9 @@ class Ir(models.Model):
             member_ids = TeamMember.objects.filter(
                 team_id__in=my_created_team_ids
             ).values_list('ir_id', flat=True)
-            return Ir.objects.filter(ir_id__in=member_ids)
+            return Ir.objects.filter(
+                models.Q(ir_id__in=member_ids) | models.Q(hierarchy_path__startswith=self.hierarchy_path)
+            )
 
         if self.ir_access_level == AccessLevel.LS:
             my_teams = TeamMember.objects.filter(ir=self).values_list('team_id', flat=True)

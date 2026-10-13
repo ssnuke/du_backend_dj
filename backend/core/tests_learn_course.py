@@ -73,7 +73,6 @@ class LearnCourseTests(TestCase):
         self.assertFalse(scripts["coming_soon"], "it has no video and is not 'coming soon'")
         self.assertIsNone(scripts["id"])
         self.assertEqual(set(scripts["scripts"]), {"info", "dkd", "drilling", "purpose-call"})
-        self.assertTrue(scripts["description"])
 
     def test_reference_lesson_is_locked_until_earlier_lessons_but_never_holds_anyone_up(self):
         # Before anything is finished the scripts are locked like any later lesson.

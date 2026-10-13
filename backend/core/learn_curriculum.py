@@ -24,7 +24,6 @@ LESSONS = [
     {"key": "oh1", "title": "OH1", "scripts": []},
     {
         "key": "scripts", "title": "Scripts", "type": "reference",
-        "description": "Read and practise these scripts. There is no video for this lesson.",
         "scripts": ["info", "dkd", "drilling", "purpose-call"],
     },
     {"key": "closings", "title": "Closings", "scripts": []},

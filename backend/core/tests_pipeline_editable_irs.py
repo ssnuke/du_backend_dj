@@ -40,16 +40,18 @@ class EditableIrsForPipelineTests(TestCase):
         TeamMember.objects.create(team=team, ir=member, role=TeamRole.IR)
         self.assertIn(member.ir_id, self.editable(ldc))
 
-    def test_an_ldc_cannot_edit_a_downline_outside_their_own_teams(self):
-        """
-        The exact gap: this person is in the LDC's hierarchy subtree (so
-        VIEW allows them) but not in a team the LDC created (so EDIT does
-        not) — the picker must not offer them.
-        """
+    def test_an_ldc_can_edit_a_downline_even_outside_their_own_teams(self):
+        """VIEW and EDIT agree for an LDC: the whole downline, team or not."""
         ldc = self.mk("PELDC2", "LDC", AccessLevel.LDC)
         deep = self.mk("PEDEEP", "In subtree only", AccessLevel.IR, parent=ldc)
-        self.assertIn(deep.ir_id, self.viewable(ldc), "sanity: VIEW does reach them")
-        self.assertNotIn(deep.ir_id, self.editable(ldc), "EDIT must not offer them")
+        self.assertIn(deep.ir_id, self.viewable(ldc))
+        self.assertIn(deep.ir_id, self.editable(ldc))
+
+    def test_an_ldc_cannot_edit_someone_outside_their_downline_and_teams(self):
+        ldc = self.mk("PELDC3", "LDC", AccessLevel.LDC)
+        stranger = self.mk("PESTRANGER", "Elsewhere", AccessLevel.IR)
+        self.assertNotIn(stranger.ir_id, self.editable(ldc))
+        self.assertFalse(ldc.can_add_data_for_ir(stranger))
 
     # ── the GC gap, newly relevant now that GC reaches this screen ─────────
     def test_a_pocket_head_gc_can_edit_their_downline(self):
@@ -122,13 +124,15 @@ class GetViewableIrsForPipelineEndpointTests(TestCase):
                                  ir_password="x", ir_access_level=lvl, status=True,
                                  parent_ir=parent)
 
-    def test_the_endpoint_excludes_someone_the_ldc_cannot_save_for(self):
+    def test_the_endpoint_lists_an_ldcs_downline_but_not_strangers(self):
         ldc = self.mk("EPLDC", "LDC", AccessLevel.LDC)
         deep = self.mk("EPDEEP", "Subtree only", AccessLevel.IR, parent=ldc)
+        stranger = self.mk("EPSTRANGER", "Elsewhere", AccessLevel.IR)
         r = self.client.get(f"/api/pipeline_viewable_irs/{ldc.ir_id}/")
         self.assertEqual(r.status_code, 200)
         ids = {row["ir_id"] for row in r.json()}
-        self.assertNotIn(deep.ir_id, ids)
+        self.assertIn(deep.ir_id, ids)
+        self.assertNotIn(stranger.ir_id, ids)
 
     def test_editing_a_listed_person_actually_succeeds(self):
         """

@@ -130,7 +130,6 @@ def _course_items(ir, course_videos):
             # there is nothing to finish.
             items.append({
                 **base, "id": None, "title": lesson["title"], "category": COURSE_CATEGORY,
-                "description": lesson.get("description", ""),
                 "reference": True, "coming_soon": False, "completed": False,
                 "locked": gated and earlier_unfinished,
             })
