@@ -117,6 +117,13 @@ REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": (
         "rest_framework.renderers.JSONRenderer",
     ),
+    # Same parsers as DRF's defaults, but each trims leading/trailing
+    # whitespace from text values (passwords and chat message text excepted).
+    "DEFAULT_PARSER_CLASSES": (
+        "core.parsers.TrimmingJSONParser",
+        "core.parsers.TrimmingFormParser",
+        "core.parsers.TrimmingMultiPartParser",
+    ),
 }
 
 ROOT_URLCONF = 'config.urls'
