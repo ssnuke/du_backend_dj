@@ -49,16 +49,16 @@ class LearnCourseTests(TestCase):
     def test_outline_is_numbered_with_coming_soon_slots(self):
         items = self.course(self.player)
         self.assertEqual([i["lesson_number"] for i in items][:4], [1, 2, 3, 4])
-        self.assertEqual([i["title"] for i in items][:4], ["Welcome", "Why NM", "Switch ON", "Info part"])
+        self.assertEqual([i["title"] for i in items][:4], ["Welcome", "Why NM", "Switch ON", "OH1"])
         self.assertTrue(items[2]["coming_soon"])
         self.assertIsNone(items[2]["id"])
         self.assertEqual(len(items), 10)
 
-    def test_the_outline_is_the_agreed_ten_lessons_in_order(self):
+    def test_the_outline_is_the_agreed_ten_lessons_in_order_with_oh1_before_info(self):
         from core.learn_curriculum import LESSONS
         self.assertEqual(
             [l["title"] for l in LESSONS],
-            ["Welcome", "Why NM", "Switch ON", "Info Part 1", "Info Part 2", "OH1",
+            ["Welcome", "Why NM", "Switch ON", "OH1", "Info Part 1", "Info Part 2",
              "Scripts", "Closings", "Prospecting", "Success Formula"],
         )
         # There is no OH2 any more.

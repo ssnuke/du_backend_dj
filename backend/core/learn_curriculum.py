@@ -19,9 +19,9 @@ LESSONS = [
     {"key": "welcome", "title": "Welcome", "scripts": []},
     {"key": "why_nm", "title": "Why NM", "scripts": []},
     {"key": "switch_on", "title": "Switch ON", "scripts": []},
+    {"key": "oh1", "title": "OH1", "scripts": []},
     {"key": "info_part_1", "title": "Info Part 1", "scripts": ["info"]},
     {"key": "info_part_2", "title": "Info Part 2", "scripts": ["info"]},
-    {"key": "oh1", "title": "OH1", "scripts": []},
     {
         "key": "scripts", "title": "Scripts", "type": "reference",
         "scripts": ["info", "dkd", "drilling", "purpose-call"],
