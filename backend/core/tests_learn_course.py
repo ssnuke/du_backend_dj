@@ -221,10 +221,16 @@ class LearnResumeTests(TestCase):
         self.assertEqual(self.resume("Welcome"), 600)
 
     def test_resume_works_outside_the_course_and_zero_clears_it(self):
-        self.save(self.bonus, 100)
-        self.assertEqual(self.resume("Growth"), 100)
-        self.save(self.bonus, 0)
-        self.assertEqual(self.resume("Growth"), 0)
+        # Outside the course means Building Blocks etc., which a Player cannot open — so an IR.
+        Ir.objects.create(ir_id="RIR", ir_name="I", ir_email="i@t.t", ir_password="x",
+                          ir_access_level=AccessLevel.IR, status=True)
+        def resume_ir():
+            items = self.client.get("/api/learn/RIR/videos/?course=1").json()
+            return next(i for i in items if i["title"] == "Growth")["resume_seconds"]
+        self.save(self.bonus, 100, who="RIR")
+        self.assertEqual(resume_ir(), 100)
+        self.save(self.bonus, 0, who="RIR")
+        self.assertEqual(resume_ir(), 0)
 
     def test_resume_is_per_person(self):
         Ir.objects.create(ir_id="ROTHER", ir_name="O", ir_email="o@t.t", ir_password="x",

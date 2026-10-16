@@ -127,3 +127,42 @@ class MasterNetworkerAccessTests(TestCase):
         categories = {v["category"] for v in r.json()}
         self.assertIn("master_networker", categories)
         self.assertNotIn("growth_bites", categories, "no growth_bites video exists in this fixture")
+
+
+@override_settings(CACHES=LOCMEM)
+class BuildingBlocksPlayerAccessTests(TestCase):
+    """Basic Building Blocks is for everyone except a Player — enforced on the server."""
+
+    @classmethod
+    def setUpTestData(cls):
+        def mk(ir_id, lvl):
+            return Ir.objects.create(ir_id=ir_id, ir_name=ir_id, ir_email=f"{ir_id}@t.t",
+                                     ir_password="x", ir_access_level=lvl, status=True)
+        cls.player = mk("BBPLAYER", AccessLevel.PLAYER)
+        cls.ir = mk("BBIR", AccessLevel.IR)
+        cls.gc = mk("BBGC", AccessLevel.GC)
+        cls.basic = LearnVideo.objects.create(title="Basic one", category="basic_training", bunny_video_id="p1",
+                                              bunny_library_id="lib", is_published=True)
+        cls.blocks = LearnVideo.objects.create(title="Blocks one", category="building_blocks", bunny_video_id="p2",
+                                               bunny_library_id="lib", is_published=True)
+
+    def titles(self, ir):
+        r = self.client.get(f"/api/learn/{ir.ir_id}/videos/?course=1")
+        self.assertEqual(r.status_code, 200, r.content)
+        return {v["title"] for v in r.json() if not v.get("coming_soon")}
+
+    def test_a_player_does_not_get_building_blocks_in_the_list(self):
+        self.assertNotIn("Blocks one", self.titles(self.player))
+        self.assertIn("Basic one", self.titles(self.player), "their course is untouched")
+
+    def test_everyone_else_still_does(self):
+        for ir in (self.ir, self.gc):
+            self.assertIn("Blocks one", self.titles(ir), f"{ir.ir_id} must keep it")
+
+    def test_a_players_stream_link_for_it_is_refused(self):
+        r = self.client.get(f"/api/learn/{self.player.ir_id}/videos/{self.blocks.id}/stream/")
+        self.assertEqual(r.status_code, 404)
+
+    def test_an_ir_can_still_stream_it(self):
+        r = self.client.get(f"/api/learn/{self.ir.ir_id}/videos/{self.blocks.id}/stream/")
+        self.assertEqual(r.status_code, 200, r.content)

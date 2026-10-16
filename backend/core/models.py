@@ -1429,6 +1429,9 @@ RESTRICTED_LEARN_CATEGORIES = {
     "growth_bites": AccessLevel.LS,
     # LS, LDC, CTC, Admin — same floor as Growth Bites (LS and above).
     "master_networker": AccessLevel.LS,
+    # Everyone except a Player: a Player follows the Basic Training course
+    # only, until they are promoted to IR.
+    "building_blocks": AccessLevel.IR,
 }
 
 
