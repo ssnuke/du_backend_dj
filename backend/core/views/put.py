@@ -27,6 +27,7 @@ from core.models import (
     IrStatusChange,
 )
 from core.utils.notifications import get_notification_recipients, create_notifications
+from core.permissions import forget_inactive
 from core.serializers import (
     InfoDetailSerializer,
     PlanDetailSerializer,
@@ -1196,6 +1197,18 @@ class AdjustIrCounters(APIView):
 # ---------------------------------------------------
 # TOGGLE IR STATUS (LDC-only: activate/deactivate a downline IR)
 # ---------------------------------------------------
+def _push_account_deactivated(ir_id):
+    """Best effort: a failed push must never fail the status change itself."""
+    try:
+        from asgiref.sync import async_to_sync
+        from channels.layers import get_channel_layer
+        layer = get_channel_layer()
+        if layer is not None:
+            async_to_sync(layer.group_send)(f"user_inbox_{ir_id}", {"type": "account_deactivated"})
+    except Exception:
+        logging.warning("could not push account_deactivated to %s", ir_id, exc_info=True)
+
+
 class ToggleIrStatus(APIView):
     """
     Set an IR's active/inactive status. Open to ADMIN, CTC and LDC.
@@ -1245,6 +1258,11 @@ class ToggleIrStatus(APIView):
                     ir=target, ir_id_text=target.ir_id, ir_name=target.ir_name,
                     changed_by=requester, is_active=new_status,
                 )
+            # Take effect on the very next request rather than when the
+            # cached flag expires, and tell an open app to sign them out now.
+            forget_inactive(target.ir_id)
+            if not new_status:
+                _push_account_deactivated(target.ir_id)
 
         return Response({
             "ir_id": target.ir_id,

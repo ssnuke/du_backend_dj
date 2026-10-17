@@ -88,6 +88,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self._send_error("Invalid JSON payload")
             return
 
+        # Deactivated while connected: this socket was opened when they were active.
+        if await self._account_inactive():
+            await self.send(text_data=json.dumps({"type": "account_deactivated"}))
+            await self.close(code=4004)
+            return
+
         event_type = payload.get("type")
 
         if event_type == "send_message":
@@ -473,6 +479,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
     # ── DB helpers ──────────────────────────────────────────────────────
 
     @database_sync_to_async
+    def _account_inactive(self):
+        from core.permissions import is_inactive
+        return is_inactive(self.user_ir.ir_id)
+
+    @database_sync_to_async
     def _get_ir(self, ir_id):
         try:
             return Ir.objects.get(ir_id=ir_id, status=True)
@@ -846,6 +857,12 @@ class UserInboxConsumer(AsyncWebsocketConsumer):
             return
         if payload.get("type") == "ping":
             await self.send(text_data=json.dumps({"type": "pong"}))
+
+    async def account_deactivated(self, event):
+        # Sent when an LDC/CTC/Admin deactivates this account while the app is
+        # open: the app signs the person out on receiving it.
+        await self.send(text_data=json.dumps({"type": "account_deactivated"}))
+        await self.close(code=4004)
 
     async def room_preview_updated(self, event):
         await self.send(text_data=json.dumps({

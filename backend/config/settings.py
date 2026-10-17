@@ -119,6 +119,10 @@ REST_FRAMEWORK = {
     ),
     # Same parsers as DRF's defaults, but each trims leading/trailing
     # whitespace from text values (passwords and chat message text excepted).
+    # Refuses requests made on behalf of an inactive IR (see core/permissions.py).
+    "DEFAULT_PERMISSION_CLASSES": (
+        "core.permissions.ActiveRequesterPermission",
+    ),
     "DEFAULT_PARSER_CLASSES": (
         "core.parsers.TrimmingJSONParser",
         "core.parsers.TrimmingFormParser",

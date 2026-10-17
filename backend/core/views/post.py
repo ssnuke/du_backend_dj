@@ -515,14 +515,13 @@ class IRLogin(APIView):
         except Ir.DoesNotExist:
             return Response({"detail": "IR ID Not Found"}, status=404)
 
-        print("password:", password)
-
         if not ir.check_password(password):
             return Response({"detail": "Invalid credentials"}, status=401)
 
         if not ir.status:
             return Response(
-                {"detail": "Your account is inactive. Please contact your LDC to reactivate your account."},
+                {"detail": "Your account is inactive. Please contact your LDC to reactivate your account.",
+                 "code": "account_inactive"},
                 status=403,
             )
 
