@@ -12,15 +12,15 @@ link, then records the file once it has really arrived.
 
 Who may send a person's documents depends on who they are:
 
-  * IR, PRO, LS and LDC — only an LDC: for the people in their downline, and for
+  * IR, PRO, LS and LDC — only an LDC: for the members of their teams, and for
     themselves. Sending these is the LDC's validation step, so the person
     cannot send their own, and neither can an Admin or CTC (who can still open
     every file). An LDC's papers are sent by that LDC alone. This is also how
     existing members, who joined before documents were asked for, get theirs on
     record: their LDC finds them under "Missing" and sends them.
   * Player — the person themselves, or the people who look after them: an Admin
-    or CTC (anyone), or an LDC (their downline, and the Players they
-    registered).
+    or CTC (anyone), or an LDC (the Players they may promote, and the
+    members of their teams).
 
 Those people, and the person, can open the files. A Player still needs all
 three before they can be promoted to IR; for everyone else they are simply kept
@@ -32,9 +32,10 @@ from rest_framework.views import APIView
 
 from django.db.models import Count, F, Max, Q
 
-from core.models import AccessLevel, Ir, IrPendingRequest, PromotionDocument
+from core.models import AccessLevel, Ir, PromotionDocument
 from core.promotion_docs import DOCUMENTS, DOCUMENT_BY_KIND, MB
 from core.utils import private_storage
+from core.views.get import get_status_manageable_irs
 
 NOT_CONFIGURED = Response(
     {"detail": "Document storage is not set up yet. Please try again later."},
@@ -67,22 +68,34 @@ def can_send_documents(requester, person):
             return False
         if requester.ir_id == person.ir_id:
             return True
-        # Another LDC's papers are not theirs to send; everyone beneath them is.
-        return person.ir_access_level != AccessLevel.LDC and requester.is_in_subtree(person)
+        # Another LDC's papers are not theirs to send; their team members' are.
+        return person.ir_access_level != AccessLevel.LDC and _ldc_looks_after(requester, person)
     return requester.ir_id == person.ir_id or _is_promoter_of(requester, person)
+
+
+def _ldc_looks_after(requester, person):
+    """
+    An LDC's people for documents: the members of the teams they belong to (the
+    same set the IR Status tab lets them manage), plus a Player they may
+    promote — one under them, or one they registered — who is handled in the
+    Players tab even when they are not in a team.
+    """
+    if requester.can_promote_player(person):
+        return True
+    return get_status_manageable_irs(requester).filter(ir_id=person.ir_id).exists()
 
 
 def _is_promoter_of(requester, person):
     """
-    Whether `requester` looks after `person`'s documents: Admin/CTC (anyone),
-    or an LDC for their downline and for a Player they registered or may promote.
+    Whether `requester` looks after `person`'s documents: Admin/CTC (anyone), or
+    an LDC for their own people (see _ldc_looks_after).
     (Kept under its old name — a Player's promoter is who it was written for.)
     """
     if requester.has_full_access():
         return True
     if requester.ir_access_level != AccessLevel.LDC:
         return False
-    return requester.is_in_subtree(person) or requester.can_promote_player(person)
+    return _ldc_looks_after(requester, person)
 
 
 def _may_view(requester, person):
@@ -251,17 +264,19 @@ class PromotionDocConfirm(APIView):
 
 
 def _managed_people(requester):
-    """Who `requester` may look after documents for, never including CTC/Admin or themselves."""
-    people = Ir.objects.exclude(ir_access_level__in=(AccessLevel.ADMIN, AccessLevel.CTC)).exclude(ir_id=requester.ir_id)
+    """
+    Who `requester` sees in the Documents list, never including CTC/Admin or themselves.
+
+    Admin and CTC: everyone. An LDC: the members of their teams only — not their
+    whole downline. (A Player they may promote is not listed here; the Players tab
+    is where they are reviewed, and a Player who is also in their team shows up
+    here as a team member.)
+    """
     if requester.has_full_access():
-        return people
-    # LDC: their downline, plus Players they registered even if placed in another branch.
-    registered = IrPendingRequest.objects.filter(
-        requested_by=requester,
-        action_type=IrPendingRequest.ActionType.REGISTER,
-        request_status=IrPendingRequest.Status.APPROVED,
-    ).values_list("target_ir_code", flat=True)
-    return people.filter(Q(hierarchy_path__startswith=requester.hierarchy_path) | Q(ir_id__in=list(registered)))
+        return Ir.objects.exclude(ir_access_level__in=(AccessLevel.ADMIN, AccessLevel.CTC)).exclude(ir_id=requester.ir_id)
+    return get_status_manageable_irs(requester).exclude(
+        ir_access_level__in=(AccessLevel.ADMIN, AccessLevel.CTC)
+    ).exclude(ir_id=requester.ir_id)
 
 
 class PromotionDocsOverview(APIView):

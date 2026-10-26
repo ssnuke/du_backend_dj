@@ -3,7 +3,7 @@ from unittest import mock
 
 from django.test import TestCase, override_settings
 
-from core.models import AccessLevel, Ir, IrPendingRequest, PromotionDocument
+from core.models import AccessLevel, Ir, IrPendingRequest, PromotionDocument, Team, TeamMember, TeamRole
 from core.utils import private_storage
 
 LOCMEM = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
@@ -15,7 +15,7 @@ PDF, MP4 = "application/pdf", "video/mp4"
 class DocumentsForEveryoneTests(TestCase):
     """
     The three documents are kept for everyone except CTC and Admin. For an IR,
-    PRO, LS or LDC only an LDC sends them (their downline, and their own). For a
+    PRO, LS or LDC only an LDC sends them (their team members, and their own). For a
     Player: the person, their LDC, or Admin/CTC. Admin/CTC/LDC can list what
     everyone sent.
     """
@@ -36,6 +36,16 @@ class DocumentsForEveryoneTests(TestCase):
         cls.ir = mk("EIR", AccessLevel.IR, cls.ls, name="Ravi Kumar")
         cls.player = mk("EPLAYER", AccessLevel.PLAYER, cls.pro)
         cls.stranger = mk("ESTR", AccessLevel.IR, cls.other_ldc)
+        # In the LDC's referral line but in none of their teams.
+        cls.no_team = mk("ENOTEAM", AccessLevel.IR, cls.ls, name="Not In A Team")
+
+        # Teams: an LDC's people for documents are the members of their teams.
+        team = Team.objects.create(name="Team One", created_by=cls.ldc)
+        for ir, role in ((cls.ldc, TeamRole.LDC), (cls.ls, TeamRole.LS), (cls.pro, TeamRole.GC), (cls.ir, TeamRole.IR)):
+            TeamMember.objects.create(team=team, ir=ir, role=role)
+        other_team = Team.objects.create(name="Team Two", created_by=cls.other_ldc)
+        for ir, role in ((cls.other_ldc, TeamRole.LDC), (cls.stranger, TeamRole.IR)):
+            TeamMember.objects.create(team=other_team, ir=ir, role=role)
 
     def setUp(self):
         self.stored = {}
@@ -81,9 +91,14 @@ class DocumentsForEveryoneTests(TestCase):
             self.assertEqual(self.send(FIN, who, "EADMIN").status_code, 400, who)
 
     # ── PRO, LS and LDC: only an LDC sends ──────────────────────────────
-    def test_an_ldc_sends_for_the_ir_pro_and_ls_in_their_downline(self):
+    def test_an_ldc_sends_for_the_ir_pro_and_ls_in_their_teams(self):
         for person in ("ELS", "EPRO", "EIR"):
             self.assertEqual(self.send(FIN, person, "ELDC").status_code, 201, person)
+
+    def test_a_downline_member_who_is_in_none_of_their_teams_is_not_theirs_to_send_for(self):
+        r = self.send(FIN, "ENOTEAM", "ELDC")
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(self.status("ENOTEAM", "ELDC").status_code, 403, "and cannot look at their files either")
 
     def test_an_ldc_cannot_send_for_another_ldc_or_another_branch(self):
         self.assertEqual(self.send(FIN, "EOLDC", "ELDC").status_code, 403, "another LDC")
@@ -110,8 +125,8 @@ class DocumentsForEveryoneTests(TestCase):
             self.assertEqual(self.send(FIN, "EPLAYER", by).status_code, 201, by)
         self.assertEqual(self.send(FIN, "EPLAYER", "ELDC").status_code, 201, "their downline")
 
-    def test_an_ldc_cannot_send_for_an_ir_in_another_branch(self):
-        self.assertEqual(self.send(FIN, "ESTR", "ELDC").status_code, 403, "another LDC's branch")
+    def test_an_ldc_cannot_send_for_an_ir_in_another_ldcs_team(self):
+        self.assertEqual(self.send(FIN, "ESTR", "ELDC").status_code, 403, "another LDC's team")
         self.assertEqual(self.send(FIN, "ESTR", "EOLDC").status_code, 201, "their own LDC can")
 
     def test_an_existing_ir_with_nothing_on_record_is_found_under_missing_and_can_be_sent_for(self):
@@ -171,21 +186,32 @@ class DocumentsForEveryoneTests(TestCase):
         ids = {r["ir_id"] for r in self.overview("ELDC", show="all").json()["results"]}
         self.assertNotIn("ELDC", ids)
 
-    def test_an_ldc_sees_only_their_own_downline(self):
+    def test_an_ldc_sees_only_the_members_of_their_teams(self):
         self.send(FIN, "EIR", "ELDC")
         self.send(FIN, "ESTR", "EOLDC")
-        mine = {r["ir_id"] for r in self.overview("ELDC").json()["results"]}
-        self.assertEqual(mine, {"EIR"})
-        theirs = {r["ir_id"] for r in self.overview("EOLDC").json()["results"]}
-        self.assertEqual(theirs, {"ESTR"})
-        self.assertEqual({r["ir_id"] for r in self.overview("ECTC").json()["results"]}, {"EIR", "ESTR"})
+        self.send(FIN, "ENOTEAM", "EADMIN")          # an IR the LDC's team does not include
+        self.assertEqual({r["ir_id"] for r in self.overview("ELDC").json()["results"]}, {"EIR"})
+        self.assertEqual({r["ir_id"] for r in self.overview("EOLDC").json()["results"]}, {"ESTR"})
+        everyone = {r["ir_id"] for r in self.overview("ECTC").json()["results"]}
+        self.assertTrue({"EIR", "ESTR"} <= everyone)
 
-    def test_an_ldc_also_sees_a_player_they_registered_in_another_branch(self):
+    def test_missing_lists_only_team_members_not_the_whole_downline(self):
+        ids = {r["ir_id"] for r in self.overview("ELDC", show="pending").json()["results"]}
+        self.assertEqual(ids, {"ELS", "EPRO", "EIR"}, "ENOTEAM and the Player are in the referral line, not the team")
+        self.assertIn("ENOTEAM", {r["ir_id"] for r in self.overview("EADMIN", show="pending").json()["results"]})
+
+    def test_a_player_the_ldc_may_promote_stays_theirs_to_handle_though_not_in_this_list(self):
+        """Reviewed in the Players tab; the promotion rule is unchanged."""
+        ids = {r["ir_id"] for r in self.overview("ELDC", show="all").json()["results"]}
+        self.assertNotIn("EPLAYER", ids)
+        self.assertTrue(self.status("EPLAYER", "ELDC").json()["can_upload"])
+        self.assertEqual(self.send(FIN, "EPLAYER", "ELDC").status_code, 201)
+
+    def test_an_ldc_also_handles_a_player_they_registered_in_another_branch(self):
         IrPendingRequest.objects.create(
             action_type=IrPendingRequest.ActionType.REGISTER, requested_by=self.other_ldc,
             target_ir_code="EPLAYER", target_ir_name="P", request_status=IrPendingRequest.Status.APPROVED, payload={})
-        self.send(FIN, "EPLAYER", "EADMIN")
-        self.assertIn("EPLAYER", {r["ir_id"] for r in self.overview("EOLDC").json()["results"]})
+        self.assertEqual(self.send(FIN, "EPLAYER", "EOLDC").status_code, 201)
 
     def test_filters_search_and_paging(self):
         self.send(FIN, "EIR", "ELDC")
