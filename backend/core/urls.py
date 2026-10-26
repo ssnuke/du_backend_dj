@@ -140,7 +140,7 @@ from core.views.prospect import GetProspectTrail
 from core.views.plan_takers import PlanTakerCandidates
 from core.views.chain_candidates import UVCandidatePlans, PlanCandidateInfos
 from core.views.players import PromotablePlayers
-from core.views.promotion_docs import PromotionDocsStatus, PromotionDocUploadUrl, PromotionDocConfirm
+from core.views.promotion_docs import PromotionDocsStatus, PromotionDocUploadUrl, PromotionDocConfirm, PromotionDocsOverview
 from core.views.network_overview import NetworkOverview, NetworkOverviewNames
 from core.views.learn import (
     GetLearnVideos,
@@ -325,6 +325,7 @@ urlpatterns = [
     path("uv_candidate_plans/<str:ir_id>/", UVCandidatePlans.as_view()),
     path("plan_candidate_infos/<str:ir_id>/", PlanCandidateInfos.as_view()),
     path("promotable_players/", PromotablePlayers.as_view()),
+    path("promotion_docs_overview/", PromotionDocsOverview.as_view()),
     path("promotion_docs/<str:ir_id>/", PromotionDocsStatus.as_view()),
     path("promotion_docs/<str:ir_id>/<str:kind>/upload_url/", PromotionDocUploadUrl.as_view()),
     path("promotion_docs/<str:ir_id>/<str:kind>/confirm/", PromotionDocConfirm.as_view()),

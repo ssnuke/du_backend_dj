@@ -1,5 +1,5 @@
 """
-Promotion documents: what a Player submits before they can be promoted to IR.
+Promotion documents: the three papers kept for everyone except CTC and Admin.
 
 Three kinds (core/promotion_docs.py). The file goes straight from the browser
 to the private bucket through a signed link; this module only hands out that
@@ -8,17 +8,31 @@ link, then records the file once it has really arrived.
   GET  /api/promotion_docs/<ir_id>/?requester_ir_id=            status of all three
   POST /api/promotion_docs/<ir_id>/<kind>/upload_url/            get a signed upload link
   POST /api/promotion_docs/<ir_id>/<kind>/confirm/               record the finished upload
+  GET  /api/promotion_docs_overview/?requester_ir_id=            who has sent what (Admin/CTC/LDC)
 
-The people who promote a Player send the documents for them, after checking
-them: an Admin or CTC, or an LDC who is allowed to promote that Player. The
-Player cannot send their own. Those same people can open the files; the Player
-only sees which of the three have been received.
+Who may send a person's documents depends on who they are:
+
+  * IR, PRO, LS and LDC — only an LDC: for the people in their downline, and for
+    themselves. Sending these is the LDC's validation step, so the person
+    cannot send their own, and neither can an Admin or CTC (who can still open
+    every file). An LDC's papers are sent by that LDC alone. This is also how
+    existing members, who joined before documents were asked for, get theirs on
+    record: their LDC finds them under "Missing" and sends them.
+  * Player — the person themselves, or the people who look after them: an Admin
+    or CTC (anyone), or an LDC (their downline, and the Players they
+    registered).
+
+Those people, and the person, can open the files. A Player still needs all
+three before they can be promoted to IR; for everyone else they are simply kept
+on record.
 """
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.models import AccessLevel, Ir, PromotionDocument
+from django.db.models import Count, F, Max, Q
+
+from core.models import AccessLevel, Ir, IrPendingRequest, PromotionDocument
 from core.promotion_docs import DOCUMENTS, DOCUMENT_BY_KIND, MB
 from core.utils import private_storage
 
@@ -35,23 +49,51 @@ def _get_ir(ir_id):
         return None
 
 
-def _is_promoter_of(requester, player):
-    """Admin/CTC, or an LDC who is allowed to promote this Player."""
+def needs_documents(ir):
+    """Everyone keeps documents except CTC and Admin."""
+    return ir.ir_access_level not in (AccessLevel.ADMIN, AccessLevel.CTC)
+
+
+# Their documents are validated, and so sent, by an LDC.
+LDC_VALIDATED_ROLES = (AccessLevel.LDC, AccessLevel.LS, AccessLevel.GC, AccessLevel.IR)
+
+
+def can_send_documents(requester, person):
+    """Whether `requester` may upload `person`'s documents. The one rule; the screen follows it."""
+    if not needs_documents(person):
+        return False
+    if person.ir_access_level in LDC_VALIDATED_ROLES:
+        if requester.ir_access_level != AccessLevel.LDC:
+            return False
+        if requester.ir_id == person.ir_id:
+            return True
+        # Another LDC's papers are not theirs to send; everyone beneath them is.
+        return person.ir_access_level != AccessLevel.LDC and requester.is_in_subtree(person)
+    return requester.ir_id == person.ir_id or _is_promoter_of(requester, person)
+
+
+def _is_promoter_of(requester, person):
+    """
+    Whether `requester` looks after `person`'s documents: Admin/CTC (anyone),
+    or an LDC for their downline and for a Player they registered or may promote.
+    (Kept under its old name — a Player's promoter is who it was written for.)
+    """
     if requester.has_full_access():
         return True
-    return requester.can_promote_player(player)
+    if requester.ir_access_level != AccessLevel.LDC:
+        return False
+    return requester.is_in_subtree(person) or requester.can_promote_player(person)
 
 
-def _may_view(requester, player):
-    """Who sees that documents exist: the Player (status only) and their promoters."""
-    return requester.ir_id == player.ir_id or _is_promoter_of(requester, player)
+def _may_view(requester, person):
+    """Who sees that documents exist: the person themselves and those who look after them."""
+    return requester.ir_id == person.ir_id or _is_promoter_of(requester, person)
 
 
 def _status_payload(requester, player):
     docs = {d.kind: d for d in player.promotion_documents.select_related("uploaded_by")}
-    # Links only for those who check the files. The Player sees what has been
-    # received, not the papers themselves.
-    may_open = _is_promoter_of(requester, player)
+    # Links for the person who sent the files and for those who check them.
+    may_open = requester.ir_id == player.ir_id or _is_promoter_of(requester, player)
     out = []
     for spec in DOCUMENTS:
         doc = docs.get(spec["kind"])
@@ -64,6 +106,7 @@ def _status_payload(requester, player):
             "uploaded": doc is not None,
             "original_name": doc.original_name if doc else None,
             "size_bytes": doc.size_bytes if doc else None,
+            "content_type": doc.content_type if doc else None,
             "uploaded_at": doc.uploaded_at.isoformat() if doc else None,
             "uploaded_by_name": doc.uploaded_by.ir_name if doc and doc.uploaded_by else None,
             "view_url": None,
@@ -75,7 +118,11 @@ def _status_payload(requester, player):
                 pass
         out.append(row)
     missing = [r["kind"] for r in out if not r["uploaded"]]
-    return {"ir_id": player.ir_id, "documents": out, "complete": not missing, "missing": missing}
+    return {
+        "ir_id": player.ir_id, "documents": out, "complete": not missing, "missing": missing,
+        # The screen shows the add / replace buttons from this, not from its own guess.
+        "can_upload": can_send_documents(requester, player),
+    }
 
 
 def _folder_for(player):
@@ -109,13 +156,15 @@ def _player_and_uploader_or_error(request, ir_id, kind):
     player = _get_ir(ir_id)
     if not uploader or not player:
         return None, None, Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
-    if player.ir_access_level != AccessLevel.PLAYER:
-        return None, None, Response({"detail": "Documents are only needed for Players"}, status=status.HTTP_400_BAD_REQUEST)
-    if not _is_promoter_of(uploader, player):
-        return None, None, Response(
-            {"detail": "Only the person who promotes this Player can send their documents"},
-            status=status.HTTP_403_FORBIDDEN,
+    if not needs_documents(player):
+        return None, None, Response({"detail": "Documents are not needed for Admin or CTC"}, status=status.HTTP_400_BAD_REQUEST)
+    if not can_send_documents(uploader, player):
+        who = (
+            "Documents for an IR, PRO, LS or LDC are sent by an LDC"
+            if player.ir_access_level in LDC_VALIDATED_ROLES
+            else "Only this person, or the leader who looks after them, can send their documents"
         )
+        return None, None, Response({"detail": who}, status=status.HTTP_403_FORBIDDEN)
     return player, uploader, None
 
 
@@ -199,3 +248,79 @@ class PromotionDocConfirm(APIView):
         if old_key and old_key != key:
             private_storage.delete(old_key)  # replaced: don't leave the old file behind
         return Response(_status_payload(uploader, player), status=status.HTTP_201_CREATED)
+
+
+def _managed_people(requester):
+    """Who `requester` may look after documents for, never including CTC/Admin or themselves."""
+    people = Ir.objects.exclude(ir_access_level__in=(AccessLevel.ADMIN, AccessLevel.CTC)).exclude(ir_id=requester.ir_id)
+    if requester.has_full_access():
+        return people
+    # LDC: their downline, plus Players they registered even if placed in another branch.
+    registered = IrPendingRequest.objects.filter(
+        requested_by=requester,
+        action_type=IrPendingRequest.ActionType.REGISTER,
+        request_status=IrPendingRequest.Status.APPROVED,
+    ).values_list("target_ir_code", flat=True)
+    return people.filter(Q(hierarchy_path__startswith=requester.hierarchy_path) | Q(ir_id__in=list(registered)))
+
+
+class PromotionDocsOverview(APIView):
+    """
+    Everyone's documents at a glance, for the people who look after them.
+
+      show=uploaded (default)  people who have sent at least one
+      show=pending             people still missing at least one
+      show=all                 everyone in scope
+
+    Links are not included here (there can be hundreds of people); open a person
+    to get the signed links from the per-person endpoint.
+    """
+
+    def get(self, request):
+        requester = _get_ir(request.GET.get("requester_ir_id"))
+        if not requester:
+            return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
+        if requester.ir_access_level > AccessLevel.LDC:
+            return Response({"detail": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
+
+        show = request.GET.get("show", "uploaded")
+        if show not in ("uploaded", "pending", "all"):
+            return Response({"detail": "show must be uploaded, pending or all"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            limit = min(max(int(request.GET.get("limit", 20)), 1), 50)
+            offset = max(int(request.GET.get("offset", 0)), 0)
+        except (TypeError, ValueError):
+            return Response({"detail": "limit and offset must be numbers"}, status=status.HTTP_400_BAD_REQUEST)
+
+        qs = _managed_people(requester).annotate(
+            doc_count=Count("promotion_documents", distinct=True),
+            last_upload=Max("promotion_documents__uploaded_at"),
+        )
+        search = (request.GET.get("search") or "").strip()
+        if search:
+            qs = qs.filter(Q(ir_name__icontains=search) | Q(ir_id__icontains=search))
+        if show == "uploaded":
+            qs = qs.filter(doc_count__gt=0)
+        elif show == "pending":
+            qs = qs.filter(doc_count__lt=len(DOCUMENTS))
+
+        total = qs.count()
+        page = list(qs.order_by(F("last_upload").desc(nulls_last=True), "ir_name")[offset:offset + limit])
+        kinds_by_ir = {}
+        for ir_id, kind in PromotionDocument.objects.filter(ir__in=[p.pk for p in page]).values_list("ir_id", "kind"):
+            kinds_by_ir.setdefault(ir_id, set()).add(kind)
+
+        results = []
+        for ir in page:
+            have = kinds_by_ir.get(ir.ir_id, set())
+            results.append({
+                "ir_id": ir.ir_id,
+                "ir_name": ir.ir_name,
+                "role": AccessLevel.get_role_name(ir.ir_access_level),
+                "status": "active" if ir.status else "inactive",
+                "documents": [{"kind": d["kind"], "label": d["label"], "uploaded": d["kind"] in have} for d in DOCUMENTS],
+                "documents_count": len(have),
+                "complete": len(have) == len(DOCUMENTS),
+                "last_uploaded_at": ir.last_upload.isoformat() if ir.last_upload else None,
+            })
+        return Response({"results": results, "total": total, "has_more": offset + limit < total})

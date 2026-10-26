@@ -106,13 +106,13 @@ class PromotionDocsTests(TestCase):
 
     # --- uploading --------------------------------------------------------
 
-    def test_only_the_promoter_can_send_documents_for_a_player(self):
+    def test_who_can_send_documents_for_a_player(self):
         self.assertEqual(self.send(FIN, by="DLDC").status_code, 201)       # their LDC
         self.assertEqual(self.send(FIN, by="DADMIN").status_code, 201)     # Admin
-        self.assertEqual(self.send(FIN, by="DPLAYER").status_code, 403, "the Player cannot send their own")
+        self.assertEqual(self.send(FIN, by="DPLAYER").status_code, 201, "the Player can send their own")
         self.assertEqual(self.send(FIN, by="DOTHER").status_code, 403, "another Player")
         self.assertEqual(self.send(FIN, by="DOLDC").status_code, 403, "an LDC who does not promote this Player")
-        self.assertEqual(self.send(FIN, player="DADMIN", by="DLDC").status_code, 400, "not a Player")
+        self.assertEqual(self.send(FIN, player="DADMIN", by="DADMIN").status_code, 400, "Admin keeps no documents")
 
     def test_who_uploaded_is_recorded(self):
         self.send(FIN, by="DLDC")
@@ -164,13 +164,14 @@ class PromotionDocsTests(TestCase):
             fin = next(d for d in body["documents"] if d["kind"] == FIN)
             self.assertTrue(fin["view_url"].startswith("https://r2.test/get/promotion/DPLAYER__DPLAYER/"), viewer)
 
-        # The Player sees what has been received, but not the papers themselves.
+        # The Player sees their own papers too (they can send them now).
         body = self.status("DPLAYER").json()
         self.assertFalse(body["complete"])
         self.assertEqual(set(body["missing"]), {LEGAL, VIDEO})
         fin = next(d for d in body["documents"] if d["kind"] == FIN)
         self.assertTrue(fin["uploaded"])
-        self.assertIsNone(fin["view_url"])
+        self.assertTrue(fin["view_url"].startswith("https://r2.test/get/"))
+        self.assertEqual(fin["content_type"], PDF, "the app needs this to pick a PDF/image/video preview")
 
         self.assertEqual(self.status("DOLDC").status_code, 403)      # an LDC who does not promote them
         self.assertEqual(self.status("DOTHER").status_code, 403)     # another Player
