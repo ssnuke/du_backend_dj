@@ -5,6 +5,8 @@ from rest_framework import status
 
 from django.shortcuts import get_object_or_404
 from django.db import transaction
+from django.db.models import F
+from django.utils import timezone
 
 # get.py does not import put.py, so this direction is cycle-free.
 from core.views.get import get_status_manageable_irs, invalidate_ldc_pocket_dashboard_cache
@@ -48,6 +50,39 @@ def parse_decimal_value(value, field_name):
         return Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError):
         raise ValueError(f"Invalid {field_name} format")
+
+
+def _record_uvs_landing_now(plan, old_status):
+    """
+    A plan moving to "UV's on Counter" means the UVs landed today, not on the
+    day the plan was shown. A September plan that reaches the counter in
+    October must count in October's week and month, so the UVs are written to
+    the UVDetail ledger (which every weekly and monthly UV figure is measured
+    from) dated now, instead of being left to follow the plan's own date.
+
+    Only the transition counts, and only when the plan has no UVs recorded
+    against it already (the Add UV flow records its own and flips the status
+    itself), so saving an already-landed plan again never doubles them up.
+    """
+    if plan.status != "uvs_on_counter" or old_status == "uvs_on_counter":
+        return None
+    if plan.uv_records.exists():
+        return None
+    uv_count = plan.uv_value
+    if uv_count is None or uv_count <= 0:
+        return None
+
+    uv_detail = UVDetail.objects.create(
+        ir=plan.ir,
+        ir_name=plan.ir.ir_name,
+        prospect_name=plan.plan_name or "",
+        uv_count=uv_count,
+        uv_date=timezone.now(),
+        plan=plan,
+    )
+    Ir.objects.filter(ir_id=plan.ir_id).update(uv_count=F("uv_count") + uv_count)
+    invalidate_ldc_pocket_dashboard_cache(plan.ir, uv_detail.uv_date)
+    return uv_detail
 
 
 # ---------------------------------------------------
@@ -448,6 +483,7 @@ class UpdatePlanDetail(APIView):
                     )
 
             old_ir, old_date = plan.ir, plan.plan_date
+            old_status = plan.status
 
             serializer = PlanDetailSerializer(
                 plan,
@@ -455,7 +491,13 @@ class UpdatePlanDetail(APIView):
                 partial=True
             )
             serializer.is_valid(raise_exception=True)
-            serializer.save()
+
+            with transaction.atomic():
+                # Lock the plan row so two simultaneous saves cannot both
+                # see "no UVs yet" and each record them.
+                PlanDetail.objects.select_for_update().filter(pk=plan.pk).first()
+                serializer.save()
+                _record_uvs_landing_now(plan, old_status)
 
             invalidate_ldc_pocket_dashboard_cache(old_ir, old_date)
             invalidate_ldc_pocket_dashboard_cache(plan.ir, plan.plan_date)
