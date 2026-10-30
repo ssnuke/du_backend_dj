@@ -1,7 +1,7 @@
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-from django.db.models.signals import post_save, post_delete
+from django.db.models.signals import post_save, post_delete, pre_delete
 from django.dispatch import receiver
 from .models import UVDetail, Ir, Notification, PlanDetail, InfoDetail, TeamMember, PromotionDocument
 from core.utils.notifications import get_notification_recipients, create_notifications
@@ -258,3 +258,11 @@ def remove_promotion_file(sender, instance, **kwargs):
     from core.utils import private_storage
     if private_storage.is_configured():
         private_storage.delete(instance.file_key)
+
+
+@receiver(pre_delete, sender=Ir)
+def free_placement_legs(sender, instance, **kwargs):
+    # placement_parent is SET_NULL, which would leave the people placed under a
+    # deleted IR holding a leg with no parent. They drop back to "not placed"
+    # (their own team stays attached to them) instead.
+    Ir.objects.filter(placement_parent=instance).update(placement_leg=None)

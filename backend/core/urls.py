@@ -143,6 +143,7 @@ from core.views.players import PromotablePlayers
 from core.views.promotion_docs import PromotionDocsStatus, PromotionDocUploadUrl, PromotionDocConfirm, PromotionDocsOverview
 from core.views.network_overview import NetworkOverview, NetworkOverviewNames
 from core.views.new_joiners import NewJoiners
+from core.views.placement import PlacementTree, PlacePerson, RemoveFromTree
 from core.views.learn import (
     GetLearnVideos,
     GetLearnVideoStream,
@@ -331,6 +332,9 @@ urlpatterns = [
     path("promotion_docs/<str:ir_id>/<str:kind>/upload_url/", PromotionDocUploadUrl.as_view()),
     path("promotion_docs/<str:ir_id>/<str:kind>/confirm/", PromotionDocConfirm.as_view()),
     path("new_joiners/", NewJoiners.as_view()),
+    path("placement_tree/", PlacementTree.as_view()),
+    path("placement_tree/place/", PlacePerson.as_view()),
+    path("placement_tree/remove/", RemoveFromTree.as_view()),
     path("admin/network_overview/", NetworkOverview.as_view()),
     path("admin/network_overview/names/", NetworkOverviewNames.as_view()),
     path("chat_candidates/", ChatCandidates.as_view()),

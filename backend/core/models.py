@@ -103,6 +103,20 @@ class Ir(models.Model):
     hierarchy_level = models.PositiveIntegerField(default=0)
     # ======================================
 
+    # ========== BINARY PLACEMENT TREE ==========
+    # Separate from the referral tree above. parent_ir says who introduced
+    # someone and drives visibility; this says where they sit on a left/right
+    # leg, which is what the QNet-style tree shows. Each person has at most
+    # one Left and one Right child, enforced by the unique constraint below.
+    # Visibility deliberately does NOT read these fields.
+    LEG_LEFT, LEG_RIGHT = "L", "R"
+    LEG_CHOICES = [(LEG_LEFT, "Left"), (LEG_RIGHT, "Right")]
+    placement_parent = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True, related_name='placed_members',
+    )
+    placement_leg = models.CharField(max_length=1, choices=LEG_CHOICES, null=True, blank=True)
+    # ===========================================
+
     plan_count = models.IntegerField(default=0)
     dr_count = models.IntegerField(default=0)
     info_count = models.IntegerField(default=0)
@@ -125,6 +139,16 @@ class Ir(models.Model):
 
     # Online / last-seen presence
     last_seen = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            # One person per leg of a placement parent.
+            models.UniqueConstraint(
+                fields=["placement_parent", "placement_leg"],
+                condition=models.Q(placement_parent__isnull=False),
+                name="unique_placement_leg",
+            ),
+        ]
 
     @property
     def chat_name(self):
