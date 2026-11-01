@@ -1239,6 +1239,18 @@ class AdjustIrCounters(APIView):
 # ---------------------------------------------------
 # TOGGLE IR STATUS (LDC-only: activate/deactivate a downline IR)
 # ---------------------------------------------------
+def _push_account_event(ir_id, event_type):
+    """Best effort: a failed push must never fail the status change itself."""
+    try:
+        from asgiref.sync import async_to_sync
+        from channels.layers import get_channel_layer
+        layer = get_channel_layer()
+        if layer is not None:
+            async_to_sync(layer.group_send)(f"user_inbox_{ir_id}", {"type": event_type})
+    except Exception:
+        logging.warning("could not push %s to %s", event_type, ir_id, exc_info=True)
+
+
 def _push_account_deactivated(ir_id):
     """Best effort: a failed push must never fail the status change itself."""
     try:
@@ -1269,9 +1281,21 @@ class ToggleIrStatus(APIView):
         if not requester_ir_id:
             return Response({"detail": "requester_ir_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
+        # `status` is Active/Inactive. `chat_only` makes an active account Chat-only
+        # (partly inactive). Send either or both; Active without chat_only means
+        # fully active again, and chat_only=true implies the account is active.
         new_status = request.data.get("status")
-        if not isinstance(new_status, bool):
+        chat_only = request.data.get("chat_only")
+        if new_status is not None and not isinstance(new_status, bool):
             return Response({"detail": "status must be a boolean"}, status=status.HTTP_400_BAD_REQUEST)
+        if chat_only is not None and not isinstance(chat_only, bool):
+            return Response({"detail": "chat_only must be a boolean"}, status=status.HTTP_400_BAD_REQUEST)
+        if new_status is None and chat_only is None:
+            return Response({"detail": "status must be a boolean"}, status=status.HTTP_400_BAD_REQUEST)
+        if chat_only:
+            new_status = True
+        elif new_status is not None:
+            chat_only = False
 
         try:
             requester = Ir.objects.get(ir_id=requester_ir_id)
@@ -1290,25 +1314,40 @@ class ToggleIrStatus(APIView):
         if not get_status_manageable_irs(requester).filter(ir_id=target.ir_id).exists():
             return Response({"detail": "Not authorized to change status for this IR"}, status=status.HTTP_403_FORBIDDEN)
 
-        # Log only a real change, so repeating a toggle can't inflate the
-        # dashboard's deactivated/reactivated counts.
-        if target.status != new_status:
+        if chat_only and target.ir_access_level == AccessLevel.ADMIN:
+            return Response({"detail": "An Admin cannot be limited to Chat"}, status=status.HTTP_403_FORBIDDEN)
+
+        status_changed = new_status is not None and target.status != new_status
+        chat_only_changed = chat_only is not None and target.chat_only != chat_only
+        if status_changed or chat_only_changed:
+            fields = []
             with transaction.atomic():
-                target.status = new_status
-                target.save(update_fields=["status"])
-                IrStatusChange.objects.create(
-                    ir=target, ir_id_text=target.ir_id, ir_name=target.ir_name,
-                    changed_by=requester, is_active=new_status,
-                )
+                if status_changed:
+                    target.status = new_status
+                    fields.append("status")
+                if chat_only_changed:
+                    target.chat_only = chat_only
+                    fields.append("chat_only")
+                target.save(update_fields=fields)
+                # Log only a real change, so repeating a toggle can't inflate the
+                # dashboard's deactivated/reactivated counts.
+                if status_changed:
+                    IrStatusChange.objects.create(
+                        ir=target, ir_id_text=target.ir_id, ir_name=target.ir_name,
+                        changed_by=requester, is_active=new_status,
+                    )
             # Take effect on the very next request rather than when the
-            # cached flag expires, and tell an open app to sign them out now.
+            # cached flag expires, and tell an open app straight away.
             forget_inactive(target.ir_id)
-            if not new_status:
+            if not target.status:
                 _push_account_deactivated(target.ir_id)
+            else:
+                _push_account_event(target.ir_id, "access_changed")
 
         return Response({
             "ir_id": target.ir_id,
             "ir_name": target.ir_name,
             "status": target.status,
+            "chat_only": target.chat_only,
         }, status=status.HTTP_200_OK)
 

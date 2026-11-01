@@ -90,6 +90,9 @@ class Ir(models.Model):
     ir_access_level = models.PositiveSmallIntegerField(default=6)  # Default to IR (6)
     ir_password = models.CharField(max_length=256)
     status = models.BooleanField(default=True)
+    # Partly inactive: signed in and active, but allowed into Chat and nothing
+    # else (see core/permissions.py). Only meaningful while status is True.
+    chat_only = models.BooleanField(default=False)
 
     # ========== HIERARCHY FIELDS ==========
     parent_ir = models.ForeignKey(

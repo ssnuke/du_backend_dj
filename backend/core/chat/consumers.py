@@ -864,6 +864,11 @@ class UserInboxConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps({"type": "account_deactivated"}))
         await self.close(code=4004)
 
+    async def access_changed(self, event):
+        # Chat-only was switched on or off while the app is open: the app
+        # re-reads the person's access and rearranges itself.
+        await self.send(text_data=json.dumps({"type": "access_changed"}))
+
     async def room_preview_updated(self, event):
         await self.send(text_data=json.dumps({
             "type": "room_preview_updated",

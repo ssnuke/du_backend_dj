@@ -532,6 +532,7 @@ class IRLogin(APIView):
                 "ir_name": ir.ir_name,
                 "ir_email": ir.ir_email,
                 "ir_access_level": ir.ir_access_level,
+                "chat_only": ir.chat_only,
             }
         })
 

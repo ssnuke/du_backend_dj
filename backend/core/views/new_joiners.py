@@ -3,12 +3,15 @@ New joiners: how many people registered in each month, for the people who tally 
 
   * Admin : everyone who registered, with the month's joiners grouped under the
             LDC whose team they are in, so each LDC's figure can be checked.
-  * LDC   : only the people in the teams they belong to.
+  * LDC   : only their own people.
 
-"Their team" is the one definition used everywhere an LDC's people are listed
-(get_status_manageable_irs: members of the teams the LDC belongs to), so the
-number an LDC sees here is the same people the IR Status and Documents tabs show
-them, and equals their row in the Admin's breakdown.
+An LDC's people are the members of the teams they belong to
+(get_status_manageable_irs, the same list the IR Status and Documents tabs
+show) PLUS everyone the LDC registered themselves (Ir.parent_ir), even if that
+person has not been put in a team yet. The second part exists because a newly
+registered person is in no team until someone adds them, and the LDC would
+otherwise not see them here at all. An LDC's row in the Admin's breakdown uses
+the same two rules, so the two figures agree.
 
 A joiner who is in several LDCs' teams is counted under each of them, so the LDC
 rows can add up to more than the month's total. A joiner in no LDC's team is
@@ -19,6 +22,7 @@ from collections import defaultdict
 from datetime import datetime
 
 import pytz
+from django.db.models import Q
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -50,9 +54,12 @@ def _scope(requester):
     """Everyone whose registration this requester may see counted."""
     if requester.ir_access_level == AccessLevel.ADMIN:
         return Ir.objects.all()
-    return get_status_manageable_irs(requester).exclude(
+    return Ir.objects.filter(
+        Q(ir_id__in=get_status_manageable_irs(requester).values("ir_id"))
+        | Q(parent_ir=requester)
+    ).exclude(
         ir_access_level__in=(AccessLevel.ADMIN, AccessLevel.CTC)
-    )
+    ).exclude(ir_id=requester.ir_id)
 
 
 def _person(ir):
@@ -80,6 +87,13 @@ def _by_ldc(joiners):
         ldcs_of_team[team_id].add(ldc_id)
         ldc_names[ldc_id] = ldc_name
 
+    # Registrars who are LDCs; their names may not be in ldc_names yet.
+    parent_ids = {ir.parent_ir_id for ir in joiners if ir.parent_ir_id}
+    ldc_ids = set(Ir.objects.filter(ir_id__in=parent_ids, ir_access_level=AccessLevel.LDC)
+                  .values_list("ir_id", flat=True))
+    for ldc_id, ldc_name in Ir.objects.filter(ir_id__in=ldc_ids).values_list("ir_id", "ir_name"):
+        ldc_names[ldc_id] = ldc_name
+
     groups = defaultdict(list)
     for ir in joiners:
         counted_under = set()
@@ -87,6 +101,9 @@ def _by_ldc(joiners):
         if ir.ir_access_level not in (AccessLevel.ADMIN, AccessLevel.CTC):
             for team_id in team_ids_of.get(ir.ir_id, ()):
                 counted_under |= ldcs_of_team[team_id]
+            # Whoever registered them counts them too, team or no team.
+            if ir.parent_ir_id in ldc_ids:
+                counted_under.add(ir.parent_ir_id)
             counted_under.discard(ir.ir_id)  # an LDC is not on their own list
         for key in counted_under or {UNASSIGNED_KEY}:
             groups[key].append(ir)

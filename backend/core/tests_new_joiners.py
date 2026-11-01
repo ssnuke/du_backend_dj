@@ -94,3 +94,41 @@ class NewJoinersTests(TestCase):
         ids = {p["ir_id"] for p in self.get(self.ldc_a, year=2026, month=10).json()["selected"]["people"]}
         self.assertNotIn("LDCA", ids)
         self.assertNotIn("CTC", ids)
+
+    def _registered_by(self, ir_id, parent, when=OCT, level=AccessLevel.IR):
+        ir = Ir.objects.create(ir_id=ir_id, ir_name=f"Name {ir_id}", ir_email=f"{ir_id}@t.t",
+                               ir_password="x", ir_access_level=level, status=True, parent_ir=parent)
+        Ir.objects.filter(pk=ir.pk).update(started_date=when)
+        return ir
+
+    def test_someone_the_ldc_registered_counts_even_before_they_are_in_a_team(self):
+        self._registered_by("NEWA", self.ldc_a)
+        self._registered_by("NEWA_OLD", self.ldc_a, when=SEP)
+        res = self.get(self.ldc_a, year=2026, month=10)
+        ids = {p["ir_id"] for p in res.json()["selected"]["people"]}
+        self.assertEqual(ids, {"A1", "A2", "BOTH", "NEWA"})
+        self.assertEqual(self.month(res, 2026, 9)["total"], 2)
+        # Another LDC does not see them.
+        other = {p["ir_id"] for p in self.get(self.ldc_b, year=2026, month=10).json()["selected"]["people"]}
+        self.assertNotIn("NEWA", other)
+
+    def test_admin_breakdown_puts_them_under_the_ldc_who_registered_them(self):
+        self._registered_by("NEWA", self.ldc_a)
+        self._registered_by("NEWB", self.ldc_b)
+        # Already in a team AND registered by that LDC: still one person on the row.
+        self._registered_by("DUP", self.ldc_a)
+        TeamMember.objects.create(team=self.team_a, ir=Ir.objects.get(ir_id="DUP"), role=TeamRole.IR)
+        body = self.get(self.admin, year=2026, month=10).json()
+        groups = {g["ldc_ir_id"]: g for g in body["selected"]["groups"]}
+        self.assertEqual({p["ir_id"] for p in groups["LDCA"]["people"]}, {"A1", "A2", "BOTH", "NEWA", "DUP"})
+        self.assertEqual({p["ir_id"] for p in groups["LDCB"]["people"]}, {"B1", "BOTH", "NEWB"})
+        self.assertEqual({p["ir_id"] for p in groups[None]["people"]}, {"LONER"})
+        self.assertEqual(body["selected"]["total"], 8)
+        for ldc in (self.ldc_a, self.ldc_b):
+            own = self.get(ldc, year=2026, month=10).json()["selected"]["total"]
+            self.assertEqual(own, groups[ldc.ir_id]["count"])
+
+    def test_someone_registered_by_a_non_ldc_is_not_pulled_into_an_ldc(self):
+        self._registered_by("BYIR", self.a1)
+        ids = {p["ir_id"] for p in self.get(self.ldc_a, year=2026, month=10).json()["selected"]["people"]}
+        self.assertNotIn("BYIR", ids)

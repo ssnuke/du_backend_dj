@@ -3274,7 +3274,7 @@ class GetIrsForStatusManagement(APIView):
 
         queryset = queryset.order_by("ir_name")
         total = queryset.count()
-        page = queryset[offset:offset + limit].values("ir_id", "ir_name", "ir_access_level", "status")
+        page = queryset[offset:offset + limit].values("ir_id", "ir_name", "ir_access_level", "status", "chat_only")
 
         return Response({
             "results": list(page),
