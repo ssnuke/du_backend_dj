@@ -39,7 +39,7 @@ from collections import Counter
 import pytz
 import logging
 
-from core.utils.dates import get_current_week_start, get_week_info_friday_to_friday, get_week_info_monday_to_sunday, get_weeks_in_month, get_calendar_month_bounds
+from core.utils.dates import get_current_week_start, get_week_info_friday_to_friday, get_week_info_monday_to_sunday, get_weeks_in_month, get_calendar_month_bounds, get_sales_month_weeks, get_current_sales_month
 
 
 # A plan's uv_value is entered for both 'closed' (In-process) and
@@ -972,13 +972,10 @@ class GetTeamAggregatedPlans(APIView):
                     raise ValueError("month out of range")
             except (TypeError, ValueError):
                 return Response({"detail": "Invalid month or year"}, status=status.HTTP_400_BAD_REQUEST)
-            # The calendar month itself, not the span of whichever weeks
-            # touch it — a boundary week's window reaches into the
-            # neighbouring month, and this list is a straight date-range
-            # query (no per-week bucketing), so querying by the wider week
-            # span would pull in that neighbour's plans too. Same fix as
-            # GetMonthlyPlanSummary; see get_calendar_month_bounds.
-            plan_week_start, plan_week_end = get_calendar_month_bounds(month, year)
+            # A QNet sales month: the whole weeks it is made of, matching the
+            # weekly figures GetMonthlyPlanSummary shows for the same month.
+            sales_weeks = get_sales_month_weeks(month, year)
+            plan_week_start, plan_week_end = sales_weeks[0]["start"], sales_weeks[-1]["end"]
         else:
             _, _, plan_week_start, plan_week_end = get_week_info_monday_to_sunday()
 
@@ -1125,32 +1122,27 @@ class GetMonthlyPlanSummary(APIView):
         except Ir.DoesNotExist:
             return Response({"detail": "IR not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        now = datetime.now(pytz.timezone('Asia/Kolkata'))
+        # Months here are QNet sales months (see get_sales_month_weeks), so the
+        # default is the sales month today's week is in, not the calendar month.
+        current_month, current_year = get_current_sales_month()
         try:
-            month = int(request.GET.get("month") or now.month)
-            year = int(request.GET.get("year") or now.year)
+            month = int(request.GET.get("month") or current_month)
+            year = int(request.GET.get("year") or current_year)
             if not (1 <= month <= 12):
                 raise ValueError("month out of range")
         except (TypeError, ValueError):
             return Response({"detail": "Invalid month or year"}, status=status.HTTP_400_BAD_REQUEST)
 
-        weeks = get_weeks_in_month(month, year)
-        if not weeks:
-            return Response({
-                "month": month, "year": year,
-                "weeks": [], "weekly": {}, "month_total": _round_bucket(_empty_plan_bucket()),
-            })
+        weeks = get_sales_month_weeks(month, year)
 
         member_ids = get_plan_visible_member_ids(ir, request.GET.get("scope"))
 
-        # The calendar month's own bounds, NOT the union of the touched
-        # weeks' windows — a boundary week's span reaches into the
-        # neighbouring month on one side, and querying by that wider span
-        # would count those neighbouring days here too. `weeks` is still used
-        # below for `_week_for`'s per-week bucketing; it is deliberately
-        # wider than the month (see get_weeks_in_month) so a boundary week's
-        # in-month days always have a bucket to land in.
-        month_start, month_end = get_calendar_month_bounds(month, year)
+        # The whole span of the sales month's weeks: plans on their Monday-Sunday
+        # windows, infos and UVs on their Friday 21:30 windows. Nothing is clipped
+        # to calendar days, so a week that crosses a calendar month boundary is
+        # counted in full in the sales month it belongs to.
+        month_start, month_end = weeks[0]["start"], weeks[-1]["end"]
+        info_span_start, info_span_end = weeks[0]["info_start"], weeks[-1]["info_end"]
 
         base_qs = PlanDetail.objects.filter(
             ir_id__in=member_ids,
@@ -1235,12 +1227,7 @@ class GetMonthlyPlanSummary(APIView):
         # rather than the Monday->Sunday plan weeks above: an info logged on
         # Friday evening belongs to the info week that just opened, and
         # reusing the plan boundaries would file it under the week before.
-        info_windows = []
-        for w in weeks:
-            _, _, iw_start, iw_end = get_week_info_friday_to_friday(
-                week_number=w["week_number"], year=w["year"]
-            )
-            info_windows.append((w["week_number"], iw_start, iw_end))
+        info_windows = [(w["week_number"], w["info_start"], w["info_end"]) for w in weeks]
 
         # Infos carry no presenter and no mode, so they cannot answer a
         # filtered question. Rather than show numbers that silently ignore the
@@ -1249,14 +1236,10 @@ class GetMonthlyPlanSummary(APIView):
 
         info_weekly = {wn: 0 for wn, _, _ in info_windows}
         if info_windows and member_ids and not plan_filters_active:
-            # Clipped to the calendar month, not to the union of the touched
-            # weeks' info windows — a boundary week's info window reaches
-            # into the neighbouring month, and querying by that wider span
-            # would (again) count those neighbouring days here too.
             for (info_dt,) in InfoDetail.objects.filter(
                 ir_id__in=list(member_ids),
-                info_date__gte=month_start,
-                info_date__lte=month_end,
+                info_date__gte=info_span_start,
+                info_date__lte=info_span_end,
             ).values_list("info_date"):
                 for wn, lo, hi in info_windows:
                     if lo <= info_dt <= hi:
@@ -1270,11 +1253,10 @@ class GetMonthlyPlanSummary(APIView):
         # Friday->Friday window UVs are counted on everywhere else.
         uv_weekly = {wn: 0.0 for wn, _, _ in info_windows}
         if info_windows and member_ids and not plan_filters_active:
-            # Same calendar clipping as infos above, same reason.
             for uv_dt, uv_count in UVDetail.objects.filter(
                 ir_id__in=list(member_ids),
-                uv_date__gte=month_start,
-                uv_date__lte=month_end,
+                uv_date__gte=info_span_start,
+                uv_date__lte=info_span_end,
             ).values_list("uv_date", "uv_count"):
                 for wn, lo, hi in info_windows:
                     if lo <= uv_dt <= hi:
@@ -1295,10 +1277,16 @@ class GetMonthlyPlanSummary(APIView):
                     "year": w["year"],
                     "start": w["start"].isoformat(),
                     "end": w["end"].isoformat(),
+                    "info_start": w["info_start"].isoformat(),
+                    "info_end": w["info_end"].isoformat(),
+                    "sales_start": w["sales_start"].isoformat(),
+                    "sales_end": w["sales_end"].isoformat(),
                     "label": w["label"],
                 }
                 for w in weeks
             ],
+            "sales_start": weeks[0]["sales_start"].isoformat(),
+            "sales_end": weeks[-1]["sales_end"].isoformat(),
             "weekly": {wn: _round_bucket(b) for wn, b in weekly_buckets.items()},
             "month_total": _round_bucket(month_total),
             "presenters": presenters,

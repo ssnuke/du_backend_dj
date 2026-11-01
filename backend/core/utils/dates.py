@@ -247,6 +247,70 @@ def get_weeks_in_month(month: int, year: int) -> list[dict]:
     return weeks
 
 
+# QNet's "Sales Months" calendar groups the 52 sales weeks into 12 months in a
+# 4-4-5 pattern per quarter: Oct = weeks 40-43, Nov = 44-47, Dec = 48-52, and the
+# same shape every quarter. A sales month is therefore a whole number of weeks,
+# not a span of calendar days.
+SALES_MONTH_PATTERN = (4, 4, 5)
+WEEKS_PER_QUARTER = sum(SALES_MONTH_PATTERN)
+
+
+def get_sales_month_week_numbers(month: int) -> list[int]:
+    """The week numbers (1-52) that make up sales month 1-12."""
+    quarter, pos = divmod(month - 1, 3)
+    first = quarter * WEEKS_PER_QUARTER + sum(SALES_MONTH_PATTERN[:pos]) + 1
+    return list(range(first, first + SALES_MONTH_PATTERN[pos]))
+
+
+def get_sales_month_for_week(week_number: int) -> int:
+    """Which sales month (1-12) a week number belongs to."""
+    quarter, within = divmod(max(1, min(week_number, 52)) - 1, WEEKS_PER_QUARTER)
+    pos = 0
+    for length in SALES_MONTH_PATTERN:
+        if within < length:
+            break
+        within -= length
+        pos += 1
+    return min(quarter, 3) * 3 + pos + 1
+
+
+def get_current_sales_month(now: datetime | None = None) -> tuple[int, int]:
+    """(sales month, year) that today's sales week falls in."""
+    week_number, year, _, _ = get_week_info_friday_to_friday(now)
+    return get_sales_month_for_week(week_number), year
+
+
+def get_sales_month_weeks(month: int, year: int) -> list[dict]:
+    """
+    The weeks of one QNet sales month, in order, each carrying both windows the
+    app counts on: `start`/`end` is the Monday-Sunday plan window (what plans
+    are bucketed on) and `info_start`/`info_end` the Friday 21:30 window infos
+    and UVs are counted on. `sales_start`/`sales_end` are the dates QNet shows
+    for the week (Saturday to Friday).
+
+    The weeks are taken whole. A week that straddles two calendar months stays
+    in the sales month it belongs to; nothing is clipped to calendar days.
+    """
+    weeks = []
+    for week_num in get_sales_month_week_numbers(month):
+        _, wk_year, plan_start, plan_end = get_week_info_monday_to_sunday(week_number=week_num, year=year)
+        _, _, info_start, info_end = get_week_info_friday_to_friday(week_number=week_num, year=year)
+        sales_start = (info_start + timedelta(days=1)).date()
+        sales_end = info_end.date()
+        weeks.append({
+            "week_number": week_num,
+            "year": wk_year,
+            "start": plan_start,
+            "end": plan_end,
+            "info_start": info_start,
+            "info_end": info_end,
+            "sales_start": sales_start,
+            "sales_end": sales_end,
+            "label": f"Wk {week_num} ({sales_start.strftime('%b %d')}\u2013{sales_end.strftime('%b %d')})",
+        })
+    return weeks
+
+
 def get_current_week_start(now: datetime | None = None) -> datetime:
     """
     Compute the current week start datetime using
