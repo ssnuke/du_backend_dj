@@ -55,7 +55,7 @@ def needs_documents(ir):
     return ir.ir_access_level not in (AccessLevel.ADMIN, AccessLevel.CTC)
 
 
-# Their documents are validated, and so sent, by an LDC.
+# Their documents are validated, and so sent, by an LDC (or by an Admin / CTC).
 LDC_VALIDATED_ROLES = (AccessLevel.LDC, AccessLevel.LS, AccessLevel.GC, AccessLevel.IR)
 
 
@@ -63,6 +63,9 @@ def can_send_documents(requester, person):
     """Whether `requester` may upload `person`'s documents. The one rule; the screen follows it."""
     if not needs_documents(person):
         return False
+    # Admin and CTC may send anyone's documents, an LDC's included.
+    if requester.has_full_access():
+        return True
     if person.ir_access_level in LDC_VALIDATED_ROLES:
         if requester.ir_access_level != AccessLevel.LDC:
             return False
@@ -173,7 +176,7 @@ def _player_and_uploader_or_error(request, ir_id, kind):
         return None, None, Response({"detail": "Documents are not needed for Admin or CTC"}, status=status.HTTP_400_BAD_REQUEST)
     if not can_send_documents(uploader, player):
         who = (
-            "Documents for an IR, PRO, LS or LDC are sent by an LDC"
+            "Documents for an IR, PRO, LS or LDC are sent by an LDC, Admin or CTC"
             if player.ir_access_level in LDC_VALIDATED_ROLES
             else "Only this person, or the leader who looks after them, can send their documents"
         )

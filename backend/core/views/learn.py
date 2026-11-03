@@ -264,10 +264,10 @@ class CompleteLearnVideo(APIView):
     """
     POST /api/learn/<ir_id>/videos/<video_id>/complete/
 
-    Records that a video was watched to the end. The player only calls this
-    once playback reaches the end, and for a Player seeking ahead of what they
-    have actually watched is blocked there — so this trusts the client no more
-    than the rest of the app does. It does refuse a lesson that is still locked.
+    Records that a video was finished. The player only calls this once playback
+    reaches the end (a Player may also skip straight to the end, which counts), so
+    this trusts the client like the rest of the app does. It does refuse a lesson
+    that is still locked.
     """
     def post(self, request, ir_id, video_id):
         try:

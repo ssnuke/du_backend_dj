@@ -107,12 +107,11 @@ class DocumentsForEveryoneTests(TestCase):
                                      ir_access_level=AccessLevel.LS, status=True, parent_ir=self.other_ldc)
         self.assertEqual(self.send(FIN, other_ls.ir_id, "ELDC").status_code, 403, "an LS in another LDC's branch")
 
-    def test_admin_and_ctc_cannot_send_for_an_ir_pro_ls_or_ldc(self):
+    def test_admin_and_ctc_can_send_for_an_ir_pro_ls_or_ldc(self):
         for by in ("EADMIN", "ECTC"):
-            for person in ("EIR", "ELS", "EPRO", "ELDC"):
-                r = self.send(FIN, person, by)
-                self.assertEqual(r.status_code, 403, f"{by} -> {person}")
-                self.assertIn("sent by an LDC", r.json()["detail"])
+            for person in ("EIR", "ELS", "EPRO", "ELDC", "ENOTEAM"):
+                self.assertEqual(self.send(FIN, person, by).status_code, 201, f"{by} -> {person}")
+        self.assertEqual(PromotionDocument.objects.get(ir_id="ELDC", kind=FIN).uploaded_by_id, "ECTC")
 
     def test_an_ir_pro_or_ls_cannot_send_for_anyone_else_either(self):
         self.assertEqual(self.send(FIN, "EIR", "ELS").status_code, 403)
@@ -148,11 +147,12 @@ class DocumentsForEveryoneTests(TestCase):
             return self.status(person, viewer).json()["can_upload"]
         self.assertTrue(can("ELS", "ELDC"))
         self.assertFalse(can("ELS", "ELS"), "a LS sees their files but cannot send")
-        self.assertFalse(can("ELS", "EADMIN"), "Admin can preview, not send")
+        self.assertTrue(can("ELS", "EADMIN"), "Admin can preview and send")
+        self.assertTrue(can("ELDC", "ECTC"), "so can CTC, even for an LDC")
         self.assertTrue(can("ELDC", "ELDC"))
         self.assertTrue(can("EIR", "ELDC"))
         self.assertFalse(can("EIR", "EIR"), "an IR sees their files but cannot send")
-        self.assertFalse(can("EIR", "EADMIN"))
+        self.assertTrue(can("EIR", "EADMIN"))
         self.assertTrue(can("EPLAYER", "EPLAYER"))
         self.assertTrue(can("EPLAYER", "EADMIN"))
 
