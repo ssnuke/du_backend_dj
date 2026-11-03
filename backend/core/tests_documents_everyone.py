@@ -228,6 +228,24 @@ class DocumentsForEveryoneTests(TestCase):
         self.assertEqual((len(page["results"]), page["has_more"]), (2, True))
         self.assertEqual(self.overview("EADMIN", show="bogus").status_code, 400)
 
+    def test_account_filter_splits_active_and_inactive_and_combines_with_show(self):
+        Ir.objects.filter(ir_id="ENOTEAM").update(status=False)
+        Ir.objects.filter(ir_id="ELS").update(chat_only=True)  # Chat only still counts as active
+        ids = lambda **kw: {r["ir_id"] for r in self.overview("EADMIN", **kw).json()["results"]}
+
+        everyone = ids(show="all")
+        active, inactive = ids(show="all", account="active"), ids(show="all", account="inactive")
+        self.assertEqual(inactive, {"ENOTEAM"})
+        self.assertIn("ELS", active)
+        self.assertEqual(active | inactive, everyone)
+        self.assertFalse(active & inactive)
+        self.assertEqual(ids(show="all", account="all"), everyone)
+        # It narrows "Missing" too, and the default stays "everyone".
+        self.assertIn("ENOTEAM", ids(show="pending"))
+        self.assertNotIn("ENOTEAM", ids(show="pending", account="active"))
+        self.assertEqual(ids(show="pending", account="inactive"), {"ENOTEAM"})
+        self.assertEqual(self.overview("EADMIN", account="bogus").status_code, 400)
+
     def test_ls_ir_and_player_cannot_use_the_overview(self):
         for who in ("ELS", "EIR", "EPLAYER", "EPRO"):
             self.assertEqual(self.overview(who).status_code, 403, who)

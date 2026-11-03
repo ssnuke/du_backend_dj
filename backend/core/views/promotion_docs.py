@@ -287,6 +287,9 @@ class PromotionDocsOverview(APIView):
       show=pending             people still missing at least one
       show=all                 everyone in scope
 
+    account=active|inactive narrows any of those to people whose account is
+    switched on or off (a Chat-only person is active); the default, all, keeps both.
+
     Links are not included here (there can be hundreds of people); open a person
     to get the signed links from the per-person endpoint.
     """
@@ -301,6 +304,9 @@ class PromotionDocsOverview(APIView):
         show = request.GET.get("show", "uploaded")
         if show not in ("uploaded", "pending", "all"):
             return Response({"detail": "show must be uploaded, pending or all"}, status=status.HTTP_400_BAD_REQUEST)
+        account = request.GET.get("account", "all")
+        if account not in ("all", "active", "inactive"):
+            return Response({"detail": "account must be all, active or inactive"}, status=status.HTTP_400_BAD_REQUEST)
         try:
             limit = min(max(int(request.GET.get("limit", 20)), 1), 50)
             offset = max(int(request.GET.get("offset", 0)), 0)
@@ -314,6 +320,8 @@ class PromotionDocsOverview(APIView):
         search = (request.GET.get("search") or "").strip()
         if search:
             qs = qs.filter(Q(ir_name__icontains=search) | Q(ir_id__icontains=search))
+        if account != "all":
+            qs = qs.filter(status=(account == "active"))
         if show == "uploaded":
             qs = qs.filter(doc_count__gt=0)
         elif show == "pending":
