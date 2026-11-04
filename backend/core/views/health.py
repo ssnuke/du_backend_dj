@@ -1,3 +1,5 @@
+import time
+
 from django.conf import settings
 from django.db import connection, transaction
 from django.http import JsonResponse
@@ -25,7 +27,12 @@ def health_check(request):
     Daphne's graceful-shutdown window expires before it ever completes.
     """
     checks = {}
+    # Milliseconds, so a slow deployment can be told apart: is it the database,
+    # or Redis, or the connection set-up rather than each round trip? *_query /
+    # *_roundtrip repeat one trivial operation on the connection just opened.
+    timings = {}
 
+    started = time.perf_counter()
     try:
         # SET LOCAL scopes the timeout to this transaction only — it resets
         # automatically on commit, so it can't leak onto whatever the next
@@ -36,9 +43,15 @@ def health_check(request):
                 cursor.execute(f"SET LOCAL statement_timeout = '{DB_TIMEOUT_MS}ms'")
                 cursor.execute("SELECT 1")
         checks["database"] = "ok"
+        timings["database"] = round((time.perf_counter() - started) * 1000)
+        t = time.perf_counter()
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+        timings["database_query"] = round((time.perf_counter() - t) * 1000)
     except Exception as exc:
         checks["database"] = f"error: {exc}"
 
+    started = time.perf_counter()
     try:
         # A throwaway client with its own tight timeout, deliberately not
         # django-redis's shared cache client/pool — this both fails fast on
@@ -51,8 +64,15 @@ def health_check(request):
         )
         client.set("health_check_probe", "1", ex=5)
         checks["cache"] = "ok" if client.get("health_check_probe") == b"1" else "error: probe mismatch"
+        timings["cache"] = round((time.perf_counter() - started) * 1000)
+        t = time.perf_counter()
+        client.get("health_check_probe")
+        timings["cache_roundtrip"] = round((time.perf_counter() - t) * 1000)
     except Exception as exc:
         checks["cache"] = f"error: {exc}"
 
     healthy = all(v == "ok" for v in checks.values())
-    return JsonResponse({"status": "ok" if healthy else "degraded", "checks": checks}, status=200 if healthy else 503)
+    return JsonResponse(
+        {"status": "ok" if healthy else "degraded", "checks": checks, "timings_ms": timings},
+        status=200 if healthy else 503,
+    )
