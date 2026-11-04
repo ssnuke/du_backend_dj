@@ -87,6 +87,9 @@ CORS_ALLOWED_ORIGINS = [
 # Required for Django admin (and any POST) when accessed via HTTPS on Render
 CSRF_TRUSTED_ORIGINS = [
     "https://du-backend-dj.onrender.com",
+    # Any other host serving the backend (e.g. the AIC Cloud app URL or a custom
+    # domain), as a comma-separated list of full origins: https://host
+    *[o.strip() for o in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()],
 ]
 
 CORS_ALLOW_METHODS = [

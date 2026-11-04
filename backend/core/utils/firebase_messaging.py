@@ -4,6 +4,7 @@ Firebase Admin SDK initialization for sending push notifications
 import firebase_admin
 from firebase_admin import credentials, messaging
 import os
+import base64
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
@@ -52,8 +53,13 @@ def initialize_firebase():
         return True
     
     try:
-        # Try to get service account from environment variable first
+        # Try to get service account from environment variable first.
+        # FIREBASE_CREDENTIALS_B64 is the same JSON, base64-encoded: for hosts whose
+        # env-var box mangles quotes or "\n" inside a raw JSON value.
         service_account_path = os.getenv('FIREBASE_SERVICE_ACCOUNT_PATH')
+        credentials_b64 = os.getenv('FIREBASE_CREDENTIALS_B64')
+        if credentials_b64:
+            service_account_path = base64.b64decode(credentials_b64).decode('utf-8')
         
         if not service_account_path:
             # Check if serviceAccountKey.json exists in the current directory
