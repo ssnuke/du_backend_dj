@@ -1,0 +1,134 @@
+# Nightly off-server backup of the production database (AIC managed PostgreSQL).
+#
+# What it does, every night at 02:00 IST (and on demand from the Actions tab):
+#   1. pg_dump the database (plain SQL, gzipped), and check the file is complete
+#   2. upload it to a Cloudflare R2 bucket as db-backups/du-<UTC timestamp>.sql.gz
+#   3. keep only the newest 14 backups there
+#   4. prove the backup works: restore it into a throwaway PostgreSQL 16 and compare it with production
+# A failed run emails the person who last edited this file.
+#
+# One-time setup (Settings -> Secrets and variables -> Actions -> New repository secret):
+#   BACKUP_DATABASE_URL        production connection string (the app's DATABASE_URL; a read-only user is ideal)
+#   R2_BACKUP_ENDPOINT_URL     https://<account id>.r2.cloudflarestorage.com
+#   R2_BACKUP_BUCKET           name of a bucket used ONLY for backups (not the documents bucket)
+#   R2_BACKUP_ACCESS_KEY_ID    an R2 API token limited to that bucket (Object Read & Write)
+#   R2_BACKUP_SECRET_ACCESS_KEY
+#
+# To restore a backup into an EMPTY database:
+#   aws s3 cp s3://<bucket>/db-backups/<file>.sql.gz . --endpoint-url <endpoint>
+#   gunzip -c <file>.sql.gz | psql "<target url>" -v ON_ERROR_STOP=1 --single-transaction
+name: Database backup
+
+on:
+  schedule:
+    - cron: "30 20 * * *"   # 20:30 UTC = 02:00 IST
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+env:
+  KEEP_BACKUPS: "14"
+
+jobs:
+  backup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      scratch:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: scratch
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      # R2 does not support the newer AWS CLI integrity-checksum headers.
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+      R2_ENDPOINT: ${{ secrets.R2_BACKUP_ENDPOINT_URL }}
+      R2_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+      SCRATCH_URL: postgresql://postgres:scratch@localhost:5432/postgres
+    steps:
+      - name: Check the secrets are set
+        run: |
+          missing=0
+          for v in DATABASE_URL AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY R2_ENDPOINT R2_BUCKET; do
+            if [ -z "${!v}" ]; then echo "::error::secret for $v is not set"; missing=1; fi
+          done
+          exit $missing
+
+      - name: Install PostgreSQL 16 client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-16
+          pg_dump --version
+
+      - name: Dump the database
+        run: |
+          set -euo pipefail
+          STAMP=$(date -u +%Y%m%d-%H%M%S)
+          echo "FILE=du-$STAMP.sql.gz" >> "$GITHUB_ENV"
+          pg_dump "$DATABASE_URL" --no-owner --no-acl -Fp | gzip -9 > "du-$STAMP.sql.gz"
+          # a snapshot of the production row counts to check the restore against
+          psql "$DATABASE_URL" -Atc "select count(*) from core_ir" > source_ir_count.txt
+          psql "$DATABASE_URL" -Atc "select count(*) from information_schema.tables where table_schema='public' and table_type='BASE TABLE'" > source_table_count.txt
+
+      - name: Check the dump is complete
+        run: |
+          set -euo pipefail
+          gzip -t "$FILE"
+          gunzip -c "$FILE" | tail -n 5 | grep -q "PostgreSQL database dump complete"
+          size=$(stat -c %s "$FILE")
+          echo "backup size: $size bytes"
+          [ "$size" -gt 100000 ] || { echo "::error::backup is suspiciously small ($size bytes)"; exit 1; }
+
+      - name: Upload to R2
+        run: |
+          set -euo pipefail
+          aws s3 cp "$FILE" "s3://$R2_BUCKET/db-backups/$FILE" --endpoint-url "$R2_ENDPOINT" --only-show-errors
+          aws s3api head-object --bucket "$R2_BUCKET" --key "db-backups/$FILE" --endpoint-url "$R2_ENDPOINT" --query ContentLength --output text
+
+      - name: Keep only the newest ${{ env.KEEP_BACKUPS }} backups
+        run: |
+          set -euo pipefail
+          aws s3api list-objects-v2 --bucket "$R2_BUCKET" --prefix db-backups/ --endpoint-url "$R2_ENDPOINT" \
+            --query 'Contents[].Key' --output text | tr '\t' '\n' | grep -E '^db-backups/du-[0-9]{8}-[0-9]{6}\.sql\.gz$' | sort > all.txt
+          echo "backups stored: $(wc -l < all.txt)"
+          : > old.txt
+          excess=$(( $(wc -l < all.txt) - KEEP_BACKUPS ))
+          if [ "$excess" -gt 0 ]; then head -n "$excess" all.txt > old.txt; fi
+          while read -r key; do
+            [ -n "$key" ] || continue
+            echo "deleting $key"
+            aws s3 rm "s3://$R2_BUCKET/$key" --endpoint-url "$R2_ENDPOINT" --only-show-errors
+          done < old.txt
+
+      - name: Prove the backup restores
+        run: |
+          set -euo pipefail
+          gunzip -c "$FILE" | psql "$SCRATCH_URL" -q -o /dev/null -v ON_ERROR_STOP=1 --single-transaction
+          restored_tables=$(psql "$SCRATCH_URL" -Atc "select count(*) from information_schema.tables where table_schema='public' and table_type='BASE TABLE'")
+          restored_irs=$(psql "$SCRATCH_URL" -Atc "select count(*) from core_ir")
+          source_tables=$(cat source_table_count.txt)
+          source_irs=$(cat source_ir_count.txt)
+          echo "tables: restored=$restored_tables production=$source_tables"
+          echo "people: restored=$restored_irs production=$source_irs"
+          [ "$restored_tables" = "$source_tables" ] || { echo "::error::table count differs after restore"; exit 1; }
+          [ "$restored_irs" -gt 0 ] || { echo "::error::restored database has no people"; exit 1; }
+          # people can register while the job runs; allow a small difference, not a missing chunk
+          diff=$(( source_irs > restored_irs ? source_irs - restored_irs : restored_irs - source_irs ))
+          [ "$diff" -le 5 ] || { echo "::error::people count differs by $diff after restore"; exit 1; }
+          echo "Backup $FILE verified."

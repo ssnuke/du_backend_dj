@@ -123,6 +123,19 @@ class IrStatusManagementScopeTests(TestCase):
         self.assertIn(self.member.ir_id, ctc_ids)
         self.assertNotIn(self.outsider.ir_id, ctc_ids, "other branch must stay out")
 
+    def test_a_second_admin_sees_and_can_manage_everyone_like_the_first(self):
+        """Admin is a role, not a place in the tree: a new Admin has no downline of their own."""
+        admin2 = Ir.objects.create(ir_id="SADMIN2", ir_name="Second Admin", ir_email="a2@t.t", ir_password="x",
+                                   ir_access_level=AccessLevel.ADMIN, status=True, parent_ir=self.admin)
+        first = self.listed_ids(self.admin) - {admin2.ir_id}
+        second = self.listed_ids(admin2) - {self.admin.ir_id}
+        self.assertEqual(first, second)
+        self.assertIn(self.outsider.ir_id, second)
+        self.assertIn(self.member.ir_id, second)
+        self.assertIn(self.admin.ir_id, self.listed_ids(admin2), "the other Admin is listed too")
+        self.assertNotIn(admin2.ir_id, self.listed_ids(admin2))
+        self.assertEqual(self.toggle(admin2, self.outsider, False).status_code, 200)
+
     def test_search_still_narrows_the_list(self):
         r = self.listing(self.ctc, search="Team Member", limit=100)
         self.assertEqual(r.status_code, 200)

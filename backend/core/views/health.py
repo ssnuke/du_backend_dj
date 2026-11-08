@@ -1,4 +1,6 @@
+import socket
 import time
+from urllib.parse import urlparse
 
 from django.conf import settings
 from django.db import connection, transaction
@@ -59,6 +61,13 @@ def health_check(request):
         # of the deliberately small REDIS_CACHE_MAX_CONNECTIONS slots on a
         # periodic probe.
         redis_url = settings.CACHES["default"]["LOCATION"]
+        parsed = urlparse(redis_url)
+        # How long resolving the Redis host takes on its own; a slow resolver
+        # inflates every new connection, which the single "cache" figure hides.
+        t = time.perf_counter()
+        socket.getaddrinfo(parsed.hostname, parsed.port or 6379, type=socket.SOCK_STREAM)
+        timings["cache_dns"] = round((time.perf_counter() - t) * 1000)
+        started = time.perf_counter()
         client = redis.Redis.from_url(
             redis_url, socket_timeout=REDIS_TIMEOUT_S, socket_connect_timeout=REDIS_TIMEOUT_S
         )

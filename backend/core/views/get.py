@@ -3208,13 +3208,18 @@ def get_status_manageable_irs(requester):
       - LDC : everyone in any Team the LDC is a member of. Matches the LDC
               branch of GetDownlineData's System Count, so the list agrees
               with the count it feeds.
-      - CTC / ADMIN : their full hierarchical downline. LDCs do not own a Team
+      - ADMIN : everyone. Admin is a role, not a place in the tree: a second
+              Admin has no downline, so the downline rule below would show them
+              an empty list while the first Admin (the root) sees everybody.
+      - CTC : their full hierarchical downline. LDCs do not own a Team
               of their own, so team membership would return almost nobody for
-              these roles — the same reason GetReferrerCandidates splits this
+              this role — the same reason GetReferrerCandidates splits this
               way.
 
     Always excludes the requester: nobody deactivates themselves.
     """
+    if requester.ir_access_level == AccessLevel.ADMIN:
+        return Ir.objects.exclude(ir_id=requester.ir_id)
     if requester.ir_access_level == AccessLevel.LDC:
         team_ids = TeamMember.objects.filter(ir=requester).values_list("team_id", flat=True)
         member_ids = (
@@ -3281,7 +3286,9 @@ class GetReferrerCandidates(APIView):
     arbitrary IR elsewhere in the system as a referrer:
       - LDC: same roster as GetIrsForStatusManagement — everyone in any
         Team the LDC is a member of.
-      - ADMIN/CTC: LDCs don't own a Team of their own, so fall back to
+      - ADMIN: everyone (a role, not a place in the tree, so a second Admin
+        has the same reach as the first).
+      - CTC: LDCs don't own a Team of their own, so fall back to
         their full hierarchical downline instead.
     Only reachable by ADMIN/CTC/LDC, mirroring RequestRegisterIr's own gate
     (they're the only roles allowed to register a new IR at all).
@@ -3321,6 +3328,8 @@ class GetReferrerCandidates(APIView):
                 .distinct()
             )
             queryset = Ir.objects.filter(ir_id__in=member_ids) | self_qs
+        elif requester.ir_access_level == AccessLevel.ADMIN:
+            queryset = Ir.objects.all()
         else:
             queryset = requester.get_all_downlines() | self_qs
 

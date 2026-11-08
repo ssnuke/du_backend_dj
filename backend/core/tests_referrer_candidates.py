@@ -59,6 +59,13 @@ class ReferrerCandidatesIncludeSelfTests(TestCase):
         ids = self.search(self.admin, "Admin")
         self.assertIn(self.admin.ir_id, ids)
 
+    def test_a_second_admin_can_pick_anyone_as_referrer_like_the_first(self):
+        admin2 = Ir.objects.create(ir_id="RADMIN2", ir_name="Second Admin", ir_email="a2@t.t", ir_password="x",
+                                   ir_access_level=AccessLevel.ADMIN, status=True, parent_ir=self.admin)
+        self.assertEqual(self.search(admin2) | {admin2.ir_id}, self.search(self.admin) | {admin2.ir_id})
+        self.assertIn(self.outsider.ir_id, self.search(admin2))
+        self.assertIn(admin2.ir_id, self.search(admin2, "Second"))
+
     def test_ctc_still_cannot_reach_an_unrelated_branch(self):
         ids = self.search(self.ctc)
         self.assertNotIn(self.other_ctc.ir_id, ids)
