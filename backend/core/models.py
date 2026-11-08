@@ -93,6 +93,9 @@ class Ir(models.Model):
     # Partly inactive: signed in and active, but allowed into Chat and nothing
     # else (see core/permissions.py). Only meaningful while status is True.
     chat_only = models.BooleanField(default=False)
+    # A view-only account sees everything its role allows but changes nothing:
+    # every write is refused in core/permissions.py (HTTP) and the chat socket.
+    view_only = models.BooleanField(default=False)
 
     # ========== HIERARCHY FIELDS ==========
     parent_ir = models.ForeignKey(

@@ -14,6 +14,11 @@ A chat-only account (Ir.chat_only) is active but partly restricted: it may use
 Chat and nothing else. Any other request naming it as requester gets a 403
 with code "chat_only"; the app answers by re-reading the person's access and
 dropping to the chat-only layout.
+
+A view-only account (Ir.view_only) can read everything its role can and use
+Chat exactly like anyone else (messages, rooms, media, notifications, its own
+display name and avatar), but any request that would change something outside
+Chat is refused with code "view_only".
 """
 import logging
 
@@ -29,6 +34,8 @@ INACTIVE_MESSAGE = "Your account is inactive. Please contact your LDC to reactiv
 INACTIVE_CODE = "account_inactive"
 CHAT_ONLY_MESSAGE = "Your access is limited to Chat. Please contact your LDC."
 CHAT_ONLY_CODE = "chat_only"
+VIEW_ONLY_MESSAGE = "This account has view-only access, so it cannot make changes."
+VIEW_ONLY_CODE = "view_only"
 
 # What a chat-only account may still call, relative to /api/. Chat itself, its
 # helpers (candidates, stickers, GIFs, presence, search), push registration so
@@ -41,6 +48,7 @@ _CHAT_ONLY_PREFIXES = (
 )
 
 _KEY = "ir_inactive:{}"
+_VIEW_ONLY_KEY = "ir_view_only:{}"
 _CHAT_ONLY_KEY = "ir_chat_only:{}"
 # Short on purpose: it caps how long a change can go unnoticed if something
 # flips status without going through ToggleIrStatus (which clears it at once).
@@ -81,10 +89,27 @@ def is_chat_only(ir_id):
     return restricted
 
 
+def is_view_only(ir_id):
+    """True if this IR is active and view-only. Cached like is_inactive."""
+    key = _VIEW_ONLY_KEY.format(ir_id)
+    try:
+        cached = cache.get(key)
+    except Exception:
+        cached = None
+    if cached is not None:
+        return cached
+    restricted = Ir.objects.filter(ir_id=ir_id, status=True, view_only=True).exists()
+    try:
+        cache.set(key, restricted, _TTL_SECONDS)
+    except Exception:
+        logger.warning("could not cache view-only flag for %s", ir_id)
+    return restricted
+
+
 def forget_inactive(ir_id):
     """Drop the cached flags so a status change takes effect on the very next request."""
     try:
-        cache.delete_many([_KEY.format(ir_id), _CHAT_ONLY_KEY.format(ir_id)])
+        cache.delete_many([_KEY.format(ir_id), _CHAT_ONLY_KEY.format(ir_id), _VIEW_ONLY_KEY.format(ir_id)])
     except Exception:
         logger.warning("could not clear inactive flag for %s", ir_id)
 
@@ -96,6 +121,40 @@ def _chat_only_may_call(request, requester):
         return True
     # Their own record (GET /api/ir/<their id>/), nobody else's.
     return request.method == "GET" and rel == f"ir/{requester}/"
+
+
+def _view_only_may_write(request, actor):
+    """Chat, and the person's own chat profile; everything else is a change to the system."""
+    path = request.path
+    rel = path[len("/api/"):] if path.startswith("/api/") else path.lstrip("/")
+    if rel.startswith(_CHAT_ONLY_PREFIXES + ("notifications/",)):
+        return True   # notifications: reading/clearing their own bell
+    return rel in (f"ir/{actor}/display_name/", f"ir/{actor}/avatar/")
+
+
+def _acting_ir_id(request, view, requester):
+    """
+    Who is making a WRITE. The explicit actor wins (requester_ir_id, or
+    acting_ir_id as change_access_level names it); only when a request names
+    no actor at all is the IR in the URL taken to be the one acting, as with
+    the endpoints where a person edits their own record. The URL's IR is never
+    used when an actor is named: an Admin acting on a view-only person's
+    record is the Admin's action, not theirs.
+    """
+    if isinstance(requester, str) and requester:
+        return requester
+    try:
+        data = request.data
+    except (ParseError, UnsupportedMediaType):
+        data = None
+    acting = data.get("acting_ir_id") if hasattr(data, "get") else None
+    if isinstance(acting, str) and acting:
+        return acting
+    kwargs = getattr(view, "kwargs", None) or {}
+    for name in ("ir_id", "fetch_ir_id"):
+        if isinstance(kwargs.get(name), str):
+            return kwargs[name]
+    return None
 
 
 class ActiveRequesterPermission(BasePermission):
@@ -116,4 +175,8 @@ class ActiveRequesterPermission(BasePermission):
         if (isinstance(requester, str) and requester and is_chat_only(requester)
                 and not _chat_only_may_call(request, requester)):
             raise PermissionDenied(detail={"detail": CHAT_ONLY_MESSAGE, "code": CHAT_ONLY_CODE})
+        if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+            actor = _acting_ir_id(request, view, requester)
+            if actor and is_view_only(actor) and not _view_only_may_write(request, actor):
+                raise PermissionDenied(detail={"detail": VIEW_ONLY_MESSAGE, "code": VIEW_ONLY_CODE})
         return True
