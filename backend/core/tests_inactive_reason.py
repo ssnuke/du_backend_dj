@@ -30,37 +30,44 @@ class InactiveReasonTests(TestCase):
         return self.client.patch(f"/api/ir/{target}/status/", data=json.dumps({"requester_ir_id": "RAADMIN", **body}),
                                  content_type="application/json")
 
-    def test_a_reason_is_required_to_make_someone_inactive(self):
+    NOTE = "Joined for the income, expected quick results, got none and stopped replying."
+
+    def test_a_reason_and_a_few_words_are_required_to_make_someone_inactive(self):
         r = self.patch("RAMEM", status=False)
         self.assertEqual(r.status_code, 400)
         self.assertIn("reason", r.json()["detail"].lower())
-        self.assertTrue(Ir.objects.get(ir_id="RAMEM").status, "nothing must change without a reason")
-        self.assertEqual(self.patch("RAMEM", status=False, reason="made-up").status_code, 400)
+        self.assertEqual(self.patch("RAMEM", status=False, reason="made-up", reason_note=self.NOTE).status_code, 400)
+        # a reason alone is not enough: the note is how the leader explains it
+        for note in (None, "", "   ", "too short"):
+            body = {"status": False, "reason": "refund"}
+            if note is not None:
+                body["reason_note"] = note
+            r = self.patch("RAMEM", **body)
+            self.assertEqual(r.status_code, 400, note)
+            self.assertIn("few words", r.json()["detail"])
+        self.assertTrue(Ir.objects.get(ir_id="RAMEM").status, "nothing must change without both")
 
-    def test_each_listed_reason_is_accepted_and_saved(self):
-        for key, label in (("refund", "Refund"), ("negative", "Negative"), ("break", "Break"),
-                           ("not_responding", "Not responding")):
+    def test_each_listed_reason_is_accepted_and_saved_with_its_note(self):
+        for key in ("refund", "negative", "break", "not_responding", "other"):
             Ir.objects.filter(ir_id="RAMEM").update(status=True, inactive_reason=None)
-            r = self.patch("RAMEM", status=False, reason=key, reason_note="ignored for these")
+            r = self.patch("RAMEM", status=False, reason=key, reason_note=f"  {self.NOTE}  ")
             self.assertEqual(r.status_code, 200, (key, r.content))
             ir = Ir.objects.get(ir_id="RAMEM")
-            self.assertEqual((ir.status, ir.inactive_reason, ir.inactive_reason_note), (False, key, ""))
+            self.assertEqual((ir.status, ir.inactive_reason, ir.inactive_reason_note), (False, key, self.NOTE))
 
-    def test_other_needs_what_was_typed(self):
-        self.assertEqual(self.patch("RAMEM", status=False, reason="other").status_code, 400)
-        self.assertEqual(self.patch("RAMEM", status=False, reason="other", reason_note="   ").status_code, 400)
-        self.assertEqual(self.patch("RAMEM", status=False, reason="other", reason_note="x" * 201).status_code, 400)
-        r = self.patch("RAMEM", status=False, reason="other", reason_note="  Moved abroad  ")
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(Ir.objects.get(ir_id="RAMEM").inactive_reason_note, "Moved abroad")
+    def test_the_note_has_a_length_limit(self):
+        ok = self.patch("RAMEM", status=False, reason="other", reason_note="x" * 1000)
+        self.assertEqual(ok.status_code, 200)
+        Ir.objects.filter(ir_id="RAMEM").update(status=True)
+        self.assertEqual(self.patch("RAMEM", status=False, reason="other", reason_note="x" * 1001).status_code, 400)
 
     def test_the_reason_is_logged_with_the_change(self):
-        self.patch("RAMEM", status=False, reason="refund")
+        self.patch("RAMEM", status=False, reason="refund", reason_note=self.NOTE)
         log = IrStatusChange.objects.get(ir_id_text="RAMEM", is_active=False)
         self.assertEqual(log.reason, "refund")
 
     def test_reactivating_needs_no_reason_and_clears_it(self):
-        self.patch("RAMEM", status=False, reason="break")
+        self.patch("RAMEM", status=False, reason="break", reason_note=self.NOTE)
         r = self.patch("RAMEM", status=True)
         self.assertEqual(r.status_code, 200)
         ir = Ir.objects.get(ir_id="RAMEM")
@@ -71,8 +78,8 @@ class InactiveReasonTests(TestCase):
         self.assertEqual(self.patch("RAMEM", chat_only=True).status_code, 200)
 
     def test_correcting_the_reason_of_someone_already_inactive(self):
-        self.patch("RAMEM", status=False, reason="break")
-        r = self.patch("RAMEM", status=False, reason="refund")
+        self.patch("RAMEM", status=False, reason="break", reason_note=self.NOTE)
+        r = self.patch("RAMEM", status=False, reason="refund", reason_note=self.NOTE)
         self.assertEqual(r.status_code, 200)
         self.assertEqual(Ir.objects.get(ir_id="RAMEM").inactive_reason, "refund")
         self.assertEqual(IrStatusChange.objects.filter(ir_id_text="RAMEM", is_active=False).count(), 1,
@@ -82,14 +89,15 @@ class InactiveReasonTests(TestCase):
         self.assertEqual(Ir.objects.get(ir_id="RAMEM").inactive_reason, "refund")
 
     def test_the_status_list_shows_the_reason(self):
-        self.patch("RAMEM", status=False, reason="other", reason_note="Moved abroad")
+        self.patch("RAMEM", status=False, reason="other", reason_note="Moved abroad for work and could not continue")
         rows = {r["ir_id"]: r for r in self.client.get("/api/ir_status_management/RAADMIN/", {"limit": 50}).json()["results"]}
         self.assertEqual(rows["RAMEM"]["inactive_reason"], "other")
-        self.assertEqual(rows["RAMEM"]["inactive_reason_label"], "Other: Moved abroad")
+        self.assertEqual(rows["RAMEM"]["inactive_reason_label"], "Other")
+        self.assertEqual(rows["RAMEM"]["inactive_reason_note"], "Moved abroad for work and could not continue")
         self.assertIsNone(rows["RALS"]["inactive_reason_label"])
 
     def test_the_ir_record_shows_the_reason_only_to_leaders(self):
-        self.patch("RAMEM", status=False, reason="negative")
+        self.patch("RAMEM", status=False, reason="negative", reason_note=self.NOTE)
         as_admin = self.client.get("/api/ir/RAMEM/", {"requester_ir_id": "RAADMIN"}).json()
         self.assertEqual(as_admin["inactive_reason_label"], "Negative")
         as_peer = self.client.get("/api/ir/RAMEM/", {"requester_ir_id": "RALS"})
@@ -98,7 +106,7 @@ class InactiveReasonTests(TestCase):
 
     def test_the_overview_drilldown_names_the_reason(self):
         from django.utils import timezone
-        self.patch("RAMEM", status=False, reason="refund")
+        self.patch("RAMEM", status=False, reason="refund", reason_note=self.NOTE)
         now = timezone.now()
         rows = self.client.get("/api/admin/network_overview/names/", {
             "requester_ir_id": "RAADMIN", "kind": "deactivated", "year": now.year, "month": now.month}).json()["results"]

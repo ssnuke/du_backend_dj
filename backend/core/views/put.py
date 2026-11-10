@@ -13,6 +13,7 @@ from core.views.get import get_status_manageable_irs, invalidate_ldc_pocket_dash
 
 from core.models import (
     INACTIVE_NOTE_MAX,
+    INACTIVE_NOTE_MIN,
     INACTIVE_REASON_LABELS,
     IrId,
     Ir,
@@ -1270,15 +1271,14 @@ def _read_inactive_reason(data):
     reason = data.get("reason")
     if not isinstance(reason, str) or reason not in INACTIVE_REASON_LABELS:
         return None, "", "Please choose a reason for making this person inactive"
+    # Always with a few words of explanation in the leader's own words.
     note = data.get("reason_note")
     note = note.strip() if isinstance(note, str) else ""
-    if reason == "other":
-        if not note:
-            return None, "", "Please type the reason"
-        if len(note) > INACTIVE_NOTE_MAX:
-            return None, "", f"The reason must be {INACTIVE_NOTE_MAX} characters or fewer"
-        return reason, note, None
-    return reason, "", None
+    if len(note) < INACTIVE_NOTE_MIN:
+        return None, "", "Please write a few words about what happened"
+    if len(note) > INACTIVE_NOTE_MAX:
+        return None, "", f"Please keep it to {INACTIVE_NOTE_MAX} characters or fewer"
+    return reason, note, None
 
 
 class ToggleIrStatus(APIView):

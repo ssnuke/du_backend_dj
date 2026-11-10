@@ -43,7 +43,7 @@ class ViewOnlyAccountTests(TestCase):
 
     def test_writes_naming_them_as_requester_are_refused(self):
         self.assertRefused(self.post(f"/api/ir/{self.member.ir_id}/status/",
-                                     {"requester_ir_id": self.viewer.ir_id, "status": False, "reason": "break"}, "patch"))
+                                     {"requester_ir_id": self.viewer.ir_id, "status": False, "reason": "break", "reason_note": "Went quiet after two months and stopped replying"}, "patch"))
         self.assertRefused(self.post("/api/add_ir_id/", {"requester_ir_id": self.viewer.ir_id, "ir_id": "X1"}))
         self.assertFalse(Ir.objects.get(ir_id=self.member.ir_id).status is False)
 
@@ -58,12 +58,12 @@ class ViewOnlyAccountTests(TestCase):
     def test_another_admin_can_still_manage_the_view_only_account(self):
         """The URL's IR is the target, not the actor, when somebody else is named."""
         r = self.post(f"/api/ir/{self.viewer.ir_id}/status/",
-                      {"requester_ir_id": self.admin.ir_id, "status": False, "reason": "break"}, "patch")
+                      {"requester_ir_id": self.admin.ir_id, "status": False, "reason": "break", "reason_note": "Went quiet after two months and stopped replying"}, "patch")
         self.assertEqual(r.status_code, 200, r.content[:200])
 
     def test_other_accounts_are_untouched(self):
         r = self.post(f"/api/ir/{self.member.ir_id}/status/",
-                      {"requester_ir_id": self.admin.ir_id, "status": False, "reason": "break"}, "patch")
+                      {"requester_ir_id": self.admin.ir_id, "status": False, "reason": "break", "reason_note": "Went quiet after two months and stopped replying"}, "patch")
         self.assertEqual(r.status_code, 200, r.content[:200])
 
     def test_chat_and_own_chat_profile_are_not_blocked_by_this_rule(self):
@@ -88,7 +88,7 @@ class ViewOnlyAccountTests(TestCase):
         from core.permissions import forget_inactive
         forget_inactive(self.viewer.ir_id)
         r = self.post(f"/api/ir/{self.member.ir_id}/status/",
-                      {"requester_ir_id": self.viewer.ir_id, "status": False, "reason": "break"}, "patch")
+                      {"requester_ir_id": self.viewer.ir_id, "status": False, "reason": "break", "reason_note": "Went quiet after two months and stopped replying"}, "patch")
         self.assertEqual(r.status_code, 200, r.content[:200])
 
 

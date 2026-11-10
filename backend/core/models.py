@@ -19,8 +19,10 @@ class TeamRole(models.TextChoices):
 
 
 # Why somebody was made Inactive. Chosen when an LDC/CTC/Admin switches them
-# off; "other" needs a typed note. Kept in one place: the status endpoint, the
-# screens and the reports all read this list.
+# off, together with a short note in their own words (what happened: why they
+# joined, what they expected, what support they had, what could have been done
+# differently). Kept in one place: the status endpoint, the screens and the
+# reports all read this list.
 INACTIVE_REASONS = (
     ("refund", "Refund"),
     ("negative", "Negative"),
@@ -29,15 +31,16 @@ INACTIVE_REASONS = (
     ("other", "Other"),
 )
 INACTIVE_REASON_LABELS = dict(INACTIVE_REASONS)
-INACTIVE_NOTE_MAX = 200
+INACTIVE_NOTE_MIN = 10
+INACTIVE_NOTE_MAX = 1000
 
 
 def inactive_reason_text(reason, note=""):
-    """'Refund', or 'Other: <what was typed>'; None if no reason is on file."""
+    """The reason's label ('Refund', 'Not responding'…); None if no reason is on file.
+    The note is shown separately: it is the longer explanation."""
     if not reason:
         return None
-    label = INACTIVE_REASON_LABELS.get(reason, reason)
-    return f"{label}: {note}" if reason == "other" and note else label
+    return INACTIVE_REASON_LABELS.get(reason, reason)
 
 
 class AccessLevel:

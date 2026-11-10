@@ -65,7 +65,7 @@ class InactiveAccountTests(TestCase):
     # ── the moment it changes ───────────────────────────────────────────
     def toggle(self, target, active):
         return self.client.patch(f"/api/ir/{target}/status/",
-                                 data=json.dumps({"requester_ir_id": "IAADMIN", "status": active, "reason": "break"}),
+                                 data=json.dumps({"requester_ir_id": "IAADMIN", "status": active, "reason": "break", "reason_note": "Went quiet after two months and stopped replying"}),
                                  content_type="application/json")
 
     def test_deactivating_takes_effect_on_the_very_next_request(self):
