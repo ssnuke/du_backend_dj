@@ -1,6 +1,8 @@
 import asyncio
 import functools
 import json
+import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import parse_qs
 
@@ -29,6 +31,9 @@ def _spawn_background(coro):
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return task
+
+
+_timing_log = logging.getLogger("core.chat.timing")
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -137,11 +142,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return
 
         reply_to_id = payload.get("reply_to_id")
+        started = time.perf_counter()
         mentioned_ir_ids = await self._validate_mentioned_ir_ids(
             self.room_id, self.user_ir.ir_id, payload.get("mentioned_ir_ids")
         )
 
         message = await self._create_message(self.chat_room, self.user_ir, content, reply_to_id, mentioned_ir_ids)
+        saved_ms = (time.perf_counter() - started) * 1000
 
         async def _fanout_inbox_updates():
             # Push a lightweight room-preview update to every other member's
@@ -186,6 +193,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 },
             ),
             _fanout_inbox_updates(),
+        )
+
+        # How long this message took on the server, so a slow chat can be told apart
+        # from a slow phone: saving it, then telling the room and every member's
+        # inbox (each of those is several round trips to Redis). Logged as a warning
+        # when it is slow enough to be felt.
+        total_ms = (time.perf_counter() - started) * 1000
+        _timing_log.log(
+            logging.WARNING if total_ms > 250 else logging.INFO,
+            "chat send room=%s saved=%.0fms delivered=%.0fms total=%.0fms",
+            self.room_id, saved_ms, total_ms - saved_ms, total_ms,
         )
 
         # Cache invalidation doesn't need to block message delivery — fire it
