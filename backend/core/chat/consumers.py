@@ -547,6 +547,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "attachment_name": message.attachment_name,
             "attachment_size": message.attachment_size,
             "attachment_duration": message.attachment_duration,
+            "album_id": message.album_id,
             "created_at": message.created_at.isoformat(),
             "read_count": 0,
             "reply_to": reply_to_data,

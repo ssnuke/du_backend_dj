@@ -1,4 +1,5 @@
 import asyncio
+import re
 import logging
 import mimetypes
 import os
@@ -276,6 +277,14 @@ def _serialize_room(room, requester=None, *, precomputed=None):
     }
 
 
+_ALBUM_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,36}$")
+
+
+def _clean_album_id(value):
+    """The id a client gave a batch of photos, or None if it is missing or not a plain token."""
+    return value if isinstance(value, str) and _ALBUM_ID_RE.match(value) else None
+
+
 def _serialize_message(message, read_by_me=None):
     reply_to_data = None
     if message.reply_to_id:
@@ -326,6 +335,7 @@ def _serialize_message(message, read_by_me=None):
         "is_deleted": message.is_deleted,
         "edited_at": message.edited_at.isoformat() if message.edited_at else None,
         "forwarded_from": message.forwarded_from,
+        "album_id": message.album_id,
         "reactions": reactions,
     }
 
@@ -999,6 +1009,7 @@ class ChatRoomMessages(APIView):
             attachment_duration = None
 
         forwarded_from = (request.data.get("forwarded_from") or "").strip() or None
+        album_id = _clean_album_id(request.data.get("album_id")) if message_type == ChatMessageType.IMAGE else None
 
         from core.chat.notify import validate_mentioned_ir_ids
         mentioned_ir_ids = validate_mentioned_ir_ids(
@@ -1015,6 +1026,7 @@ class ChatRoomMessages(APIView):
             attachment_size=attachment_size,
             attachment_duration=attachment_duration,
             forwarded_from=forwarded_from,
+            album_id=album_id,
         )
         if mentioned_ir_ids:
             message.mentioned.set(mentioned_ir_ids)

@@ -896,6 +896,8 @@ class ChatMessage(models.Model):
         "self", on_delete=models.SET_NULL, null=True, blank=True, related_name="replies"
     )
     forwarded_from = models.CharField(max_length=100, blank=True, null=True)
+    # Photos sent together share one id, so every app shows them as a single album.
+    album_id = models.CharField(max_length=36, null=True, blank=True, db_index=True)
     is_deleted = models.BooleanField(default=False)
     edited_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
