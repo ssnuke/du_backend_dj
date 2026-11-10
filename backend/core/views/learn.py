@@ -193,6 +193,11 @@ class GetLearnVideos(APIView):
         blocked = _blocked_categories_for(ir)
         if blocked:
             videos = videos.exclude(category__in=blocked)
+        # Audio items are only sent to an app that asks for them with ?audio=1.
+        # An older app would try to play an audio lesson in its video player and
+        # show an error, so it simply does not get them.
+        if request.GET.get("audio") != "1":
+            videos = videos.exclude(media_type="audio")
 
         # The course layout (numbered lessons, locks, "Coming soon" slots) is only
         # sent to an app that asks for it with ?course=1. An older app does not

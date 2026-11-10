@@ -141,6 +141,14 @@ class LearnVideoAdmin(admin.ModelAdmin):
                 'To place several videos at once, use "Course outline" at the top of the video list.'
             ),
         }),
+        ('Audio', {
+            'fields': ('media_type', 'audio_key'),
+            'description': (
+                'For an audio training (Start Your Day): set media_type to Audio and audio_key to the file\'s key in the private '
+                'R2 bucket (e.g. learn-audio/morning.mp3), upload the file there first. Put the cover picture\'s public URL in '
+                'thumbnail_url below and the length in duration_seconds. Leave the Bunny ids empty. For a video leave media_type on Video.'
+            ),
+        }),
         ('Bunny.net Stream', {
             'fields': ('bunny_video_id', 'bunny_library_id', 'thumbnail_url', 'duration_seconds'),
             'description': (

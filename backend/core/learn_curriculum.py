@@ -22,6 +22,8 @@ LESSONS = [
     {"key": "oh1", "title": "OH1", "scripts": []},
     {"key": "info_part_1", "title": "Info Part 1", "scripts": ["info"]},
     {"key": "info_part_2", "title": "Info Part 2", "scripts": ["info"]},
+    # An audio lesson (see LearnVideo.media_type), placed straight after Info Part 2.
+    {"key": "five_plus_three", "title": "Five + Three", "scripts": []},
     {
         "key": "scripts", "title": "Scripts", "type": "reference",
         "scripts": ["info", "dkd", "drilling", "purpose-call"],

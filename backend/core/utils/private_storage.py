@@ -102,11 +102,24 @@ def presign_download(key, filename=None, expires=300):
     return _client().generate_presigned_url("get_object", Params=params, ExpiresIn=expires)
 
 
-def presign_stream(key, content_type="audio/mpeg", expires=6 * 3600):
+_AUDIO_TYPES = {".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".mp4": "audio/mp4", ".aac": "audio/aac",
+                ".ogg": "audio/ogg", ".opus": "audio/ogg", ".wav": "audio/wav", ".webm": "audio/webm"}
+
+
+def audio_content_type(key):
+    """The type to serve an audio file as, from its extension (Safari is strict about it)."""
+    for ext, kind in _AUDIO_TYPES.items():
+        if key.lower().endswith(ext):
+            return kind
+    return "audio/mpeg"
+
+
+def presign_stream(key, content_type=None, expires=6 * 3600):
     """
     A link a media element can stream from (plays inline, seeks by range request).
     Long enough for a long listen; short enough that a copied link soon dies.
     """
+    content_type = content_type or audio_content_type(key)
     params = {
         "Bucket": settings.R2_PRIVATE_BUCKET_NAME, "Key": key,
         "ResponseContentType": content_type,

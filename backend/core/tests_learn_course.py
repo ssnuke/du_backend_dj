@@ -52,19 +52,19 @@ class LearnCourseTests(TestCase):
         self.assertEqual([i["title"] for i in items][:4], ["Welcome", "Why NM", "Switch ON", "OH1"])
         self.assertTrue(items[2]["coming_soon"])
         self.assertIsNone(items[2]["id"])
-        self.assertEqual(len(items), 10)
+        self.assertEqual(len(items), 11)
 
-    def test_the_outline_is_the_agreed_ten_lessons_in_order_with_oh1_before_info(self):
+    def test_the_outline_is_the_agreed_eleven_lessons_in_order_with_oh1_before_info(self):
         from core.learn_curriculum import LESSONS
         self.assertEqual(
             [l["title"] for l in LESSONS],
             ["Welcome", "Why NM", "Switch ON", "OH1", "Info Part 1", "Info Part 2",
-             "Scripts", "Closings", "Prospecting", "Success Formula"],
+             "Five + Three", "Scripts", "Closings", "Prospecting", "Success Formula"],
         )
         # There is no OH2 any more.
         self.assertNotIn("oh2", [l["key"] for l in LESSONS])
         items = self.course(self.player)
-        self.assertEqual([i["lesson_number"] for i in items], list(range(1, 11)))
+        self.assertEqual([i["lesson_number"] for i in items], list(range(1, 12)))
 
     def test_scripts_lesson_is_a_reference_not_a_coming_soon_video(self):
         items = {i["lesson_key"]: i for i in self.course(self.player)}
