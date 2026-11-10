@@ -10,6 +10,7 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from core.learn_curriculum import LESSONS, is_reference
+from core.utils import private_storage
 from core.models import AccessLevel, Ir, LearnVideo, LearnVideoProgress, RESTRICTED_LEARN_CATEGORIES
 
 COURSE_CATEGORY = "basic_training"
@@ -63,6 +64,8 @@ def raw_thumbnail_url(video) -> str:
     """
     if video.thumbnail_url:
         return video.thumbnail_url
+    if getattr(video, "media_type", "video") == "audio":
+        return ""   # audio has no Bunny thumbnail to guess at
     cdn = settings.BUNNY_STREAM_CDN_HOSTNAME
     return f"https://{cdn}/{video.bunny_video_id}/thumbnail.jpg"
 
@@ -70,6 +73,8 @@ def raw_thumbnail_url(video) -> str:
 def _bunny_thumbnail_url(video: LearnVideo) -> str:
     """Return the Bunny Stream auto-generated thumbnail URL, falling back to any manually set URL."""
     url = raw_thumbnail_url(video)
+    if not url:
+        return ""
     return _with_cache_buster(url, video.updated_at.timestamp() if video.updated_at else 0)
 
 
@@ -82,6 +87,7 @@ def _video_list_item(video: LearnVideo) -> dict:
         "thumbnail_url": _bunny_thumbnail_url(video),
         "duration_seconds": video.duration_seconds,
         "category": video.category,
+        "media_type": video.media_type,
         "order": video.order,
     }
 
@@ -238,6 +244,17 @@ class GetLearnVideoStream(APIView):
                 {"message": "Finish the previous lesson to unlock this one."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+
+        # Audio plays from a signed link to the file itself, not from Bunny.
+        if video.media_type == "audio":
+            if not video.audio_key:
+                return Response({"message": "Audio file not set up"}, status=status.HTTP_404_NOT_FOUND)
+            try:
+                url = private_storage.presign_stream(video.audio_key)
+            except private_storage.StorageNotConfigured:
+                return Response({"message": "Audio storage is not set up yet"},
+                                status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            return Response({"stream_url": url, "expires_at": int(time.time()) + 6 * 3600, "media_type": "audio"})
 
         cdn_hostname = settings.BUNNY_STREAM_CDN_HOSTNAME
         if not cdn_hostname or not settings.BUNNY_STREAM_TOKEN_KEY:

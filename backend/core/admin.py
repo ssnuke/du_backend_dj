@@ -29,7 +29,7 @@ def refresh_thumbnail_cache(modeladmin, request, queryset):
     up in the app as a broken image (net::ERR_BLOCKED_BY_ORB).
     """
     purged, failed, resolved = 0, 0, 0
-    for obj in queryset:
+    for obj in queryset.exclude(media_type="audio"):   # audio has nothing on Bunny
         filename = get_bunny_thumbnail_filename(obj.bunny_library_id, obj.bunny_video_id)
         if filename:
             new_url = f"https://{settings.BUNNY_STREAM_CDN_HOSTNAME}/{obj.bunny_video_id}/{filename}"
@@ -58,12 +58,12 @@ refresh_thumbnail_cache.short_description = "Refresh thumbnail cache (after upda
 
 @admin.register(LearnVideo)
 class LearnVideoAdmin(admin.ModelAdmin):
-    list_display = ('title', 'category', 'lesson_key', 'order', 'duration_seconds', 'is_published', 'created_at')
+    list_display = ('title', 'media_type', 'category', 'lesson_key', 'order', 'duration_seconds', 'is_published', 'created_at')
     # lesson_key is shown but not editable inline: it is unique, so swapping two
     # videos' slots one row at a time would always collide. Use "Course outline".
     list_editable = ('category', 'order', 'duration_seconds', 'is_published')
-    list_filter = ('category', 'is_published')
-    search_fields = ('title', 'description', 'bunny_video_id')
+    list_filter = ('media_type', 'category', 'is_published')
+    search_fields = ('title', 'description', 'bunny_video_id', 'audio_key')
     ordering = ('category', 'order', 'created_at')
     actions = [refresh_thumbnail_cache]
     change_list_template = 'admin/core/learnvideo/change_list.html'

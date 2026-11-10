@@ -51,7 +51,7 @@ class IrStatusManagementScopeTests(TestCase):
     def toggle(self, requester, target, value=False):
         return self.client.patch(
             f"/api/ir/{target.ir_id}/status/",
-            data=json.dumps({"requester_ir_id": requester.ir_id, "status": value}),
+            data=json.dumps({"requester_ir_id": requester.ir_id, "status": value, "reason": "break"}),
             content_type="application/json",
         )
 

@@ -12,6 +12,8 @@ from django.utils import timezone
 from core.views.get import get_status_manageable_irs, invalidate_ldc_pocket_dashboard_cache
 
 from core.models import (
+    INACTIVE_NOTE_MAX,
+    INACTIVE_REASON_LABELS,
     IrId,
     Ir,
     Team,
@@ -1263,6 +1265,22 @@ def _push_account_deactivated(ir_id):
         logging.warning("could not push account_deactivated to %s", ir_id, exc_info=True)
 
 
+def _read_inactive_reason(data):
+    """(reason, note, error): the reason sent with a deactivation, checked."""
+    reason = data.get("reason")
+    if not isinstance(reason, str) or reason not in INACTIVE_REASON_LABELS:
+        return None, "", "Please choose a reason for making this person inactive"
+    note = data.get("reason_note")
+    note = note.strip() if isinstance(note, str) else ""
+    if reason == "other":
+        if not note:
+            return None, "", "Please type the reason"
+        if len(note) > INACTIVE_NOTE_MAX:
+            return None, "", f"The reason must be {INACTIVE_NOTE_MAX} characters or fewer"
+        return reason, note, None
+    return reason, "", None
+
+
 class ToggleIrStatus(APIView):
     """
     Set an IR's active/inactive status. Open to ADMIN, CTC and LDC.
@@ -1317,14 +1335,32 @@ class ToggleIrStatus(APIView):
         if chat_only and target.ir_access_level == AccessLevel.ADMIN:
             return Response({"detail": "An Admin cannot be limited to Chat"}, status=status.HTTP_403_FORBIDDEN)
 
+        # Making someone Inactive needs a reason, so it can be seen later on
+        # their record. (Active and Chat-only need none.) A reason sent for
+        # someone who is already inactive just corrects the one on file.
+        reason = reason_note = None
+        if new_status is False:
+            reason, reason_note, reason_error = _read_inactive_reason(request.data)
+            if reason_error and target.status:
+                return Response({"detail": reason_error}, status=status.HTTP_400_BAD_REQUEST)
+            if reason_error:
+                reason = None  # already inactive and nothing usable sent: leave what is on file
+
         status_changed = new_status is not None and target.status != new_status
         chat_only_changed = chat_only is not None and target.chat_only != chat_only
-        if status_changed or chat_only_changed:
+        reason_changed = bool(reason) and not status_changed and (
+            target.inactive_reason != reason or (target.inactive_reason_note or "") != reason_note)
+        if status_changed or chat_only_changed or reason_changed:
             fields = []
             with transaction.atomic():
                 if status_changed:
                     target.status = new_status
                     fields.append("status")
+                if status_changed or reason_changed:
+                    # Inactive: remember why. Active again: forget it.
+                    target.inactive_reason = reason if new_status is False else None
+                    target.inactive_reason_note = reason_note if new_status is False else ""
+                    fields += ["inactive_reason", "inactive_reason_note"]
                 if chat_only_changed:
                     target.chat_only = chat_only
                     fields.append("chat_only")
@@ -1335,6 +1371,8 @@ class ToggleIrStatus(APIView):
                     IrStatusChange.objects.create(
                         ir=target, ir_id_text=target.ir_id, ir_name=target.ir_name,
                         changed_by=requester, is_active=new_status,
+                        reason=reason if new_status is False else None,
+                        reason_note=reason_note if new_status is False else "",
                     )
             # Take effect on the very next request rather than when the
             # cached flag expires, and tell an open app straight away.
@@ -1349,5 +1387,7 @@ class ToggleIrStatus(APIView):
             "ir_name": target.ir_name,
             "status": target.status,
             "chat_only": target.chat_only,
+            "inactive_reason": target.inactive_reason,
+            "inactive_reason_note": target.inactive_reason_note,
         }, status=status.HTTP_200_OK)
 

@@ -3,6 +3,7 @@ from core.learn_curriculum import LESSON_CHOICES
 from core.promotion_docs import DOCUMENTS as PROMOTION_DOCUMENTS, KIND_CHOICES as PROMOTION_KIND_CHOICES
 from django.contrib.auth.hashers import make_password, check_password
 from django.utils import timezone
+import uuid
 import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -15,6 +16,28 @@ class TeamRole(models.TextChoices):
     LS = "LS"        # 4 - Can add data for team members
     GC = "GC"        # 5 - View own data only
     IR = "IR"        # 6 - View own data only
+
+
+# Why somebody was made Inactive. Chosen when an LDC/CTC/Admin switches them
+# off; "other" needs a typed note. Kept in one place: the status endpoint, the
+# screens and the reports all read this list.
+INACTIVE_REASONS = (
+    ("refund", "Refund"),
+    ("negative", "Negative"),
+    ("break", "Break"),
+    ("not_responding", "Not responding"),
+    ("other", "Other"),
+)
+INACTIVE_REASON_LABELS = dict(INACTIVE_REASONS)
+INACTIVE_NOTE_MAX = 200
+
+
+def inactive_reason_text(reason, note=""):
+    """'Refund', or 'Other: <what was typed>'; None if no reason is on file."""
+    if not reason:
+        return None
+    label = INACTIVE_REASON_LABELS.get(reason, reason)
+    return f"{label}: {note}" if reason == "other" and note else label
 
 
 class AccessLevel:
@@ -96,6 +119,10 @@ class Ir(models.Model):
     # A view-only account sees everything its role allows but changes nothing:
     # every write is refused in core/permissions.py (HTTP) and the chat socket.
     view_only = models.BooleanField(default=False)
+    # Why this account is Inactive (cleared when they become active again).
+    # Accounts made inactive before this existed simply have none recorded.
+    inactive_reason = models.CharField(max_length=20, choices=INACTIVE_REASONS, null=True, blank=True)
+    inactive_reason_note = models.CharField(max_length=INACTIVE_NOTE_MAX, blank=True, default="")
 
     # ========== HIERARCHY FIELDS ==========
     parent_ir = models.ForeignKey(
@@ -1344,6 +1371,9 @@ class IrStatusChange(models.Model):
     ir_name = models.CharField(max_length=45)
     changed_by = models.ForeignKey(Ir, on_delete=models.SET_NULL, null=True, blank=True, related_name='status_changes_made')
     is_active = models.BooleanField()  # the state the IR was switched TO
+    # The reason given when switched to inactive (history; Ir.inactive_reason is the current one).
+    reason = models.CharField(max_length=20, choices=INACTIVE_REASONS, null=True, blank=True)
+    reason_note = models.CharField(max_length=INACTIVE_NOTE_MAX, blank=True, default="")
     changed_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
 
@@ -1443,8 +1473,15 @@ class PipelineStats(models.Model):
         verbose_name_plural = "Pipeline Stats"
 
 
+LEARN_MEDIA_TYPE_CHOICES = [
+    ("video", "Video"),
+    ("audio", "Audio"),
+]
+
 LEARN_VIDEO_CATEGORY_CHOICES = [
     ("basic_training", "Basic Training Videos"),
+    # Audio to listen to at the start of the day. Open to every role.
+    ("start_your_day", "Start Your Day"),
     ("building_blocks", "Basic Building Blocks"),
     ("growth_bites", "Growth Bites"),
     ("master_networker", "Master Networker"),
@@ -1475,8 +1512,16 @@ class LearnVideo(models.Model):
         max_length=20, choices=LEARN_VIDEO_CATEGORY_CHOICES, default="basic_training"
     )
     description = models.TextField(blank=True)
-    bunny_video_id = models.CharField(max_length=100, unique=True)
-    bunny_library_id = models.CharField(max_length=100)
+    # Audio items have no Bunny video: save() fills bunny_video_id with a unique
+    # "audio-…" placeholder so the unique column stays valid.
+    bunny_video_id = models.CharField(max_length=100, unique=True, blank=True)
+    bunny_library_id = models.CharField(max_length=100, blank=True)
+    # "video" streams from Bunny; "audio" plays a file from the private R2 bucket.
+    media_type = models.CharField(max_length=10, choices=LEARN_MEDIA_TYPE_CHOICES, default="video")
+    audio_key = models.CharField(
+        max_length=300, blank=True,
+        help_text='Audio only: the file\'s key in the private R2 bucket, e.g. learn-audio/morning.mp3',
+    )
     thumbnail_url = models.URLField(blank=True)
     duration_seconds = models.IntegerField(default=0)
     order = models.IntegerField(default=0, help_text='Sort order in the list')
@@ -1498,6 +1543,11 @@ class LearnVideo(models.Model):
 
     def __str__(self):
         return self.title
+
+    def save(self, *args, **kwargs):
+        if self.media_type == "audio" and not self.bunny_video_id:
+            self.bunny_video_id = f"audio-{uuid.uuid4().hex[:12]}"
+        super().save(*args, **kwargs)
 
 
 DREAM_VIDEO_CATEGORY_CHOICES = [

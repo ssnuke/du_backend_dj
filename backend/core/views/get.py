@@ -8,6 +8,7 @@ from django.shortcuts import get_object_or_404
 from django.core.cache import cache
 
 from core.models import (
+    inactive_reason_text,
     IrId,
     Ir,
     Team,
@@ -144,6 +145,13 @@ class GetSingleIR(APIView):
                 )
         
         data = IrSerializer(ir).data
+        # Why someone is Inactive is for the leaders who manage them (LDC and
+        # above), not for peers or a request that names no requester.
+        if requester_ir_id and requester.ir_access_level <= AccessLevel.LDC and not ir.status:
+            data["inactive_reason_label"] = inactive_reason_text(ir.inactive_reason, ir.inactive_reason_note)
+        else:
+            data.pop("inactive_reason", None)
+            data.pop("inactive_reason_note", None)
         # Add hierarchy info
         data["hierarchy_level"] = ir.hierarchy_level
         data["parent_ir_id"] = ir.parent_ir.ir_id if ir.parent_ir else None
@@ -3267,10 +3275,16 @@ class GetIrsForStatusManagement(APIView):
 
         queryset = queryset.order_by("ir_name")
         total = queryset.count()
-        page = queryset[offset:offset + limit].values("ir_id", "ir_name", "ir_access_level", "status", "chat_only")
+        page = queryset[offset:offset + limit].values(
+            "ir_id", "ir_name", "ir_access_level", "status", "chat_only",
+            "inactive_reason", "inactive_reason_note",
+        )
+        results = list(page)
+        for row in results:
+            row["inactive_reason_label"] = inactive_reason_text(row["inactive_reason"], row["inactive_reason_note"])
 
         return Response({
-            "results": list(page),
+            "results": results,
             "total": total,
             "has_more": offset + limit < total,
         })

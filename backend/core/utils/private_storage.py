@@ -102,6 +102,19 @@ def presign_download(key, filename=None, expires=300):
     return _client().generate_presigned_url("get_object", Params=params, ExpiresIn=expires)
 
 
+def presign_stream(key, content_type="audio/mpeg", expires=6 * 3600):
+    """
+    A link a media element can stream from (plays inline, seeks by range request).
+    Long enough for a long listen; short enough that a copied link soon dies.
+    """
+    params = {
+        "Bucket": settings.R2_PRIVATE_BUCKET_NAME, "Key": key,
+        "ResponseContentType": content_type,
+        "ResponseContentDisposition": "inline",
+    }
+    return _client().generate_presigned_url("get_object", Params=params, ExpiresIn=expires)
+
+
 def head(key):
     """(size_bytes, content_type) of a stored object, or None if it is not there."""
     from botocore.exceptions import ClientError

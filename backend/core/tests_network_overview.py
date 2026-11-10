@@ -108,7 +108,7 @@ class NetworkOverviewTests(TestCase):
         def toggle(value):
             return self.client.patch(
                 f"/api/ir/{self.busy.ir_id}/status/",
-                data=json.dumps({"requester_ir_id": self.admin.ir_id, "status": value}),
+                data=json.dumps({"requester_ir_id": self.admin.ir_id, "status": value, "reason": "break"}),
                 content_type="application/json")
         self.assertEqual(toggle(False).status_code, 200)
         self.assertEqual(toggle(False).status_code, 200)  # repeat: no new row

@@ -27,6 +27,8 @@ class ChatOnlyTests(TestCase):
         TeamMember.objects.create(team=team, ir=cls.member, role=TeamRole.IR)
 
     def set(self, requester, target, **body):
+        if body.get("status") is False:
+            body.setdefault("reason", "break")
         return self.client.patch(f"/api/ir/{target}/status/",
                                  data=json.dumps({"requester_ir_id": requester, **body}),
                                  content_type="application/json")

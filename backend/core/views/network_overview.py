@@ -35,7 +35,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.models import (AccessLevel, InfoDetail, Ir, IrPendingRequest,
+from core.models import (inactive_reason_text, AccessLevel, InfoDetail, Ir, IrPendingRequest,
                          IrStatusChange, PlanDetail, UVDetail)
 from core.utils.dates import get_calendar_month_bounds
 from core.views.get import get_status_manageable_irs
@@ -204,7 +204,9 @@ class NetworkOverviewNames(APIView):
             ).select_related("changed_by").order_by("-changed_at")
             rows = [
                 {"ir_id": c.ir_id_text, "ir_name": c.ir_name,
-                 "detail": f"{c.changed_at.astimezone(IST):%d %b}" + (f" · by {c.changed_by.ir_name}" if c.changed_by else "")}
+                 "detail": f"{c.changed_at.astimezone(IST):%d %b}"
+                           + (f" · by {c.changed_by.ir_name}" if c.changed_by else "")
+                           + (f" · {inactive_reason_text(c.reason, c.reason_note)}" if c.reason else "")}
                 for c in qs[:DRILLDOWN_LIMIT]
             ]
             total = qs.count()
