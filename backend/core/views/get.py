@@ -908,8 +908,8 @@ def get_plan_visible_member_ids(ir, scope=None):
 
     - ADMIN: everyone.
     - LDC: self + members of teams they created (Team.created_by = this
-      LDC), or that another LDC created and they are a member of (two LDCs
-      on one team see the same numbers) — matches GetLDCs' own established convention for computing an
+      LDC), plus, on a team another LDC created that they are a member of, the
+      members in their own tree (a co-LDC never sees the other LDC's people) — matches GetLDCs' own established convention for computing an
       LDC's team totals (ldc_member_map, built from ldc_created_team_ids,
       not from mere TeamMember presence), and matches who they're actually
       authorized to add plan data for (can_add_data_for_ir). NOT their full
@@ -939,22 +939,27 @@ def get_plan_visible_member_ids(ir, scope=None):
         return set(Ir.objects.filter(status=True).values_list('ir_id', flat=True))
 
     if ir.ir_access_level == AccessLevel.LDC:
-        # Teams they created, plus teams another LDC created that they are in:
-        # two LDCs on one team are looking at the same team, so they see the
-        # same numbers. A team made by a CTC/Admin that an LDC was merely added
-        # to still does not count, for the reason in the docstring.
-        my_created_team_ids = set(Team.objects.filter(created_by=ir).values_list('id', flat=True))
-        my_created_team_ids |= set(
-            TeamMember.objects.filter(
-                ir=ir, team__created_by__ir_access_level=AccessLevel.LDC,
-            ).values_list('team_id', flat=True)
-        )
+        # Teams they created: every active member. Teams another LDC created
+        # that they are on: only the members who sit in their own tree, so a
+        # co-LDC sees the same team but never the other LDC's people.
+        # A team made by a CTC/Admin that an LDC was merely added to still does
+        # not count, for the reason in the docstring.
+        my_created_team_ids = Team.objects.filter(created_by=ir).values_list('id', flat=True)
         # ir__status=True to match the ADMIN branch above: without it an
         # LDC's monthly plans counted people who have left the org, so the
         # same month read differently depending on who opened it.
         member_ids = set(
             TeamMember.objects.filter(team_id__in=my_created_team_ids, ir__status=True)
             .values_list('ir_id', flat=True)
+        )
+        shared_team_ids = TeamMember.objects.filter(
+            ir=ir, team__created_by__ir_access_level=AccessLevel.LDC,
+        ).exclude(team__created_by=ir).values_list('team_id', flat=True)
+        member_ids |= set(
+            TeamMember.objects.filter(
+                team_id__in=shared_team_ids, ir__status=True,
+                ir__hierarchy_path__startswith=ir.hierarchy_path,
+            ).values_list('ir_id', flat=True)
         )
         member_ids.add(ir.ir_id)
         return member_ids
