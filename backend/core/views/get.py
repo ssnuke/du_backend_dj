@@ -908,13 +908,14 @@ def get_plan_visible_member_ids(ir, scope=None):
 
     - ADMIN: everyone.
     - LDC: self + members of teams they created (Team.created_by = this
-      LDC) — matches GetLDCs' own established convention for computing an
+      LDC), or that another LDC created and they are a member of (two LDCs
+      on one team see the same numbers) — matches GetLDCs' own established convention for computing an
       LDC's team totals (ldc_member_map, built from ldc_created_team_ids,
       not from mere TeamMember presence), and matches who they're actually
       authorized to add plan data for (can_add_data_for_ir). NOT their full
       hierarchy subtree, which can pull in people from other branches they
-      don't manage, and NOT teams they were merely added to (e.g. by their
-      own CTC) without having created/leading them.
+      don't manage, and NOT teams a CTC/Admin created that they were merely
+      added to.
     - Everyone else (CTC, LS, GC, IR): hierarchy subtree (self + downlines)
       — deliberately never "merely shares a team with", per the original
       GetTeamAggregatedPlans design.
@@ -938,7 +939,16 @@ def get_plan_visible_member_ids(ir, scope=None):
         return set(Ir.objects.filter(status=True).values_list('ir_id', flat=True))
 
     if ir.ir_access_level == AccessLevel.LDC:
-        my_created_team_ids = Team.objects.filter(created_by=ir).values_list('id', flat=True)
+        # Teams they created, plus teams another LDC created that they are in:
+        # two LDCs on one team are looking at the same team, so they see the
+        # same numbers. A team made by a CTC/Admin that an LDC was merely added
+        # to still does not count, for the reason in the docstring.
+        my_created_team_ids = set(Team.objects.filter(created_by=ir).values_list('id', flat=True))
+        my_created_team_ids |= set(
+            TeamMember.objects.filter(
+                ir=ir, team__created_by__ir_access_level=AccessLevel.LDC,
+            ).values_list('team_id', flat=True)
+        )
         # ir__status=True to match the ADMIN branch above: without it an
         # LDC's monthly plans counted people who have left the org, so the
         # same month read differently depending on who opened it.
