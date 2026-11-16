@@ -1640,7 +1640,12 @@ class InventoryFile(models.Model):
         # admin_upload.url/.size aren't valid until the base save() actually
         # commits the file to storage (assigns it a name/URL), so populate
         # file_url/file_size in a follow-up save rather than before the first.
-        needs_data_from_upload = bool(self.admin_upload) and not self.file_url
+        #
+        # A file that was just chosen (not yet committed to storage) always wins,
+        # so replacing the upload on an existing record points file_url at the
+        # new file instead of leaving the old link in place.
+        new_upload = bool(self.admin_upload) and not self.admin_upload._committed
+        needs_data_from_upload = bool(self.admin_upload) and (new_upload or not self.file_url)
         super().save(*args, **kwargs)
         if needs_data_from_upload:
             self.file_url = self.admin_upload.url
