@@ -141,6 +141,27 @@ def _can_moderate_room(room, ir):
     return room.created_by_id == ir.ir_id or ir.ir_access_level == AccessLevel.ADMIN
 
 
+def can_delete_chat_message(requester, message):
+    """
+    Whose messages `requester` may delete for everyone.
+
+    Your own, always. Beyond that, an LDC (and the CTC / Admin above them) may
+    remove a message from anyone *below* LDC — LS, GC, IR and Player — so a
+    leader can clean up a chat they sit in. Never another LDC's, and never a
+    CTC's or Admin's: the rule is about rank, not about who is in the room.
+    Callers must already have checked the requester is a member of the room.
+    """
+    sender = message.sender
+    if sender is None:
+        return False
+    if sender.ir_id == requester.ir_id:
+        return True
+    return (
+        requester.ir_access_level <= AccessLevel.LDC
+        and sender.ir_access_level > AccessLevel.LDC
+    )
+
+
 INACTIVE_ROOM_DETAIL = "This group is inactive — its owner was removed, so it is read-only."
 
 ROOM_LIST_CACHE_TTL = 30  # seconds — a safety net; correctness comes from explicit invalidation below
@@ -315,6 +336,7 @@ def _serialize_message(message, read_by_me=None):
         "id": message.id,
         "room_id": message.room_id,
         "sender_ir_id": message.sender.ir_id,
+        "sender_access_level": message.sender.ir_access_level,
         "sender_name": message.sender.chat_name,
         "sender_avatar_url": message.sender.avatar_url,
         "message_type": message.message_type,
@@ -1578,8 +1600,14 @@ class ChatMessageDelete(APIView):
 
         message = get_object_or_404(ChatMessage, id=message_id, room=room)
 
-        if message.sender != requester:
+        if not can_delete_chat_message(requester, message):
             return Response({"detail": "Not authorized to delete this message"}, status=status.HTTP_403_FORBIDDEN)
+
+        if message.sender_id != requester.ir_id:
+            logging.getLogger("core.chat").info(
+                "chat moderation: %s deleted message %s from %s in room %s",
+                requester.ir_id, message.id, message.sender_id, room.id,
+            )
 
         message.is_deleted = True
         message.content = ""

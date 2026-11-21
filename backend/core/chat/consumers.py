@@ -12,7 +12,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from core.models import AccessLevel, ChatMessage, ChatMessageReaction, ChatMessageReceipt, ChatRoom, ChatRoomMember, Ir
-from core.views.chat import invalidate_chat_rooms_cache, _room_member_ir_ids, _can_moderate_room, get_chat_reachable_ids, INACTIVE_ROOM_DETAIL
+from core.views.chat import can_delete_chat_message, invalidate_chat_rooms_cache, _room_member_ir_ids, _can_moderate_room, get_chat_reachable_ids, INACTIVE_ROOM_DETAIL
 
 # Dedicated executor for outbound FCM network calls, kept separate from
 # Django's shared thread-sensitive executor (the one `database_sync_to_async`
@@ -558,6 +558,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "id": message.id,
             "room_id": message.room_id,
             "sender_ir_id": sender.ir_id,
+            "sender_access_level": sender.ir_access_level,
             "sender_name": sender.chat_name,
             "message_type": message.message_type,
             "content": message.content,
@@ -616,7 +617,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
         except ChatMessage.DoesNotExist:
             return None, "Message not found"
 
-        if message.sender.ir_id != sender_ir_id:
+        # Rooms are per-connection, so the requester is a member of this
+        # message's room; the message must belong to it.
+        if str(message.room_id) != str(self.room_id):
+            return None, "Message not found"
+        requester = Ir.objects.filter(ir_id=sender_ir_id).first()
+        if requester is None or not can_delete_chat_message(requester, message):
             return None, "Not authorized to delete this message"
 
         message.is_deleted = True
